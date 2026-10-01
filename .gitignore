@@ -1,0 +1,6 @@
+/build*/
+!/build.cmd
+/library/
+*.log
+mmdx12.ini
+/captures/
