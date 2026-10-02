@@ -98,6 +98,10 @@ struct FrameView {
     bool studioFloor = false;       // draw the procedural studio floor at y = 0
     bool cameraCut = false;         // discard temporal history (seek, VMD camera cut)
     float focusDistance = 0.0f;     // DoF focus plane as view-space z (MMD units); <= 0: autofocus on the screen centre
+    // Offline renderer motion blur: the camera at shutter open (the pose at shutter open is the
+    // models' previous bone/morph ring entry). Ignored unless motionBlur.
+    CameraParams prevCamera;
+    bool motionBlur = false;
 };
 
 struct RenderStats {

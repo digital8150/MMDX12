@@ -1,8 +1,9 @@
 // Skinning for the ray-traced scene: current + previous bones/morphs into the RtVertex
-// raw buffer read by the BLAS builds and ray queries.
+// raw buffer read by the BLAS builds and ray queries. gTime < 1 places the position inside the
+// interval previous -> current (offline motion blur: blended bone matrices and morphs).
 #pragma pack_matrix(row_major)
 struct BoneMatrix { row_major float4x4 m; };
-cbuffer SkinCB : register(b0) { uint gVertexCount; uint3 _skpad; };
+cbuffer SkinCB : register(b0) { uint gVertexCount; float gTime; uint2 _skpad; };
 ByteAddressBuffer gVertices : register(t0);
 StructuredBuffer<BoneMatrix> gBones : register(t1);
 StructuredBuffer<BoneMatrix> gPrevBones : register(t2);
@@ -29,6 +30,10 @@ void CSSkin(uint3 id : SV_DispatchThreadID) {
     float4x4 pm = gPrevBones[bones[0]].m * weights.x + gPrevBones[bones[1]].m * weights.y
                 + gPrevBones[bones[2]].m * weights.z + gPrevBones[bones[3]].m * weights.w;
 
+    if (gTime < 1.0) {
+        m = lerp(pm, m, gTime);
+        morph = lerp(prevMorph, morph, gTime);
+    }
     float3 wp = mul(float4(pos + morph, 1.0), m).xyz;
     float3 pwp = mul(float4(pos + prevMorph, 1.0), pm).xyz;
     float3 wn = mul(nrm, (float3x3)m);

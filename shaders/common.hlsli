@@ -25,6 +25,7 @@ cbuffer SceneCB : register(b0) {
     float2 gViewportSize; float gEdgeScale; float gTransparentBg;
     float2 gJitterUv;    float2 gInvViewportSize;
     float gNearZ; float gFarZ; float gFrameIndex; float _cpad;
+    float4x4 gPrevInvView;   // offline renderer: camera-to-world at shutter open
 };
 
 static const float PI = 3.14159265;

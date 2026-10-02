@@ -36,6 +36,21 @@ Rendering features:
   ray march through height fog: sun via the shadow map, stage spotlight cones; 안개 밀도), FFT
   convolution bloom with a starburst kernel, and colour LUTs (six built-in looks plus any `.cube`
   file in `<exe>/luts` or `<library>/luts`, with an intensity slider).
+- **Offline GI renders** (play bar: 카메라 = 고품질 스크린샷 / P key, 필름 = 고품질 영상 렌더; needs DXR):
+  a non-real-time renderer independent of the graphics settings, always at maximum quality, built
+  like Cinema 4D's irradiance-cache GI. Prepass: six adaptive coarse-to-fine passes of screen-grid
+  indirect-irradiance samples (512 multi-bounce gather paths each, denser at geometric edges), shown
+  as the cache-lit scene with the sample points as white dots, then edge-aware smoothing. Render:
+  path tracing with adaptive sampling (256–4096 spp) that takes indirect diffuse from the cache (brute
+  force where the cache has no matching surface), with per-pixel direct light, soft shadows,
+  reflections, thin-lens depth of field focused on the character's head, motion blur (180° shutter:
+  geometry and camera rebuilt per iteration), skin subsurface scattering (diffused sun, warm
+  terminator, translucency of thin backlit parts), edge-aware denoise, bloom, aerial haze and a soft
+  grade. Characters keep the MMD toon key light and outlines (raster inverted hull re-drawn per
+  iteration with the same lens/shutter sample). The preview refines from noise.
+  Stills: 3840×2160 PNG in `Pictures\MMDX12` (~20 s on an RTX 3060 Laptop). Videos: the whole song
+  at 3840×2160 60 fps, H.264 (100 Mbps) + AAC (the song) MP4 via Media Foundation in
+  `Videos\MMDX12` (~10 s per frame, about a day for a full song); Esc stops and keeps the frames so far.
 - **Benchmark categories**: `dx12-rt-fhd`, `dx12-rt-4k`, `dx12-pt-fhd`, `dx12-pt-4k` alongside the
   raster ones.
 
@@ -55,6 +70,8 @@ Command line (also used for automated checks):
 --free-camera  --camera tx,ty,tz,yaw,pitch,dist  --paused  --lighting 0..3  --quality 0..3  --no-physics
 --render raster|rt|pt  --upscaler none|dlss|fsr|xess  --upscale-quality native|quality|balanced|performance|ultra
 --dof 0|1  --volumetric 0|1  --bloom-conv 0|1  --lut <name|none>
+--offline-still <out.png> | --offline-video <out.mp4> [--offline-range <a> <b>]   (offline GI render, then quit)
+--offline-spp <n>  --offline-size <w> <h>   (testing: cap samples / override the output size)
 --screen select|stages|songs|settings|bench   (UI capture testing)
 ```
 
@@ -82,11 +99,12 @@ src/render  Dx12Context (device, swap chain, frame pacing, descriptor heaps, upl
             chain or FFT convolution) -> Post (PBR Neutral tonemap, grade, LUT, vignette) -> UI
             backdrop blur -> Present
             GpuModel (GPU skinning via StructuredBuffer, morph delta stream), IUpscaler seam
-src/app     App state machine + ImGui screens, scene loader (worker thread), benchmark, leaderboard (WinHTTP)
+            OfflineRenderer (offline GI: irradiance cache prepass + path tracing, DoF, motion blur, SSS, outlines)
+src/app     App state machine + ImGui screens, VideoEncoder (Media Foundation MP4), scene loader (worker thread), benchmark, leaderboard (WinHTTP)
 src/audio   miniaudio playback; audio cursor is the master clock
 shaders     mmd.hlsl (MMD toon + shadows through the toon ramp, punctual lights, rim, sky, studio
             floor, shadow map), resolve/ssao/ssr/composite/taa/bloom/post/present.hlsl,
-            dof, volumetric(_apply), bloom_fft (compute FFT)
+            dof, volumetric(_apply), bloom_fft (compute FFT), offline_gi/offline_post/offline_edge
 tools       asset_probe, anim_probe, render_smoke (headless-ish self tests)
 ```
 

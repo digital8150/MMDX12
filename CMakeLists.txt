@@ -82,7 +82,7 @@ if(NOT APP_SRC)
 endif()
 add_library(mmdx_app STATIC ${APP_SRC})
 target_include_directories(mmdx_app PUBLIC ${EXT}/miniaudio)
-target_link_libraries(mmdx_app PUBLIC mmdx_core mmdx_anim mmdx_render imgui winhttp)
+target_link_libraries(mmdx_app PUBLIC mmdx_core mmdx_anim mmdx_render imgui winhttp mfplat mfreadwrite mfuuid)
 
 if(EXISTS ${CMAKE_SOURCE_DIR}/src/main.cpp)
   add_executable(MMDX12 WIN32 src/main.cpp)

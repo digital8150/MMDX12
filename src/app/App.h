@@ -6,6 +6,7 @@
 #include "app/SceneLoader.h"
 #include "app/Settings.h"
 #include "app/ThumbnailCache.h"
+#include "app/VideoEncoder.h"
 #include "asset/AssetLibrary.h"
 #include "audio/AudioPlayer.h"
 #include "render/ColorLut.h"
@@ -45,6 +46,12 @@ namespace mmdx {
 //   --no-physics           disable rigid-body physics for this run
 //   --dof <0|1>  --volumetric <0|1>  --bloom-conv <0|1>   post effects for this run
 //   --lut <substr|none>    colour LUT for this run (first LUT whose id or name contains substr)
+//   --offline-still <file.png>   with --autoplay: render the --seek frame with the offline GI renderer,
+//                                save it to the file and quit
+//   --offline-video <file.mp4>   with --autoplay: offline video render, then quit
+//   --offline-range <a> <b>      video range in song seconds (default: the whole song)
+//   --offline-spp <n>            testing: cap samples per pixel (min samples = min(min, n))
+//   --offline-size <w> <h>       testing: output size override for stills and videos
 struct AppOptions {
     std::filesystem::path libraryOverride;
     std::string character, stage, song;
@@ -68,6 +75,10 @@ struct AppOptions {
     bool noPhysics = false;    // --no-physics: override settings for this run
     int dof = -1, volumetric = -1, bloomConv = -1;  // --dof/--volumetric/--bloom-conv <0|1>: override for this run
     std::string lut;           // --lut <substr|none>: override for this run (resolved against the LUT list)
+    std::filesystem::path offlineStill, offlineVideo;  // --offline-still / --offline-video
+    double offlineRange[2] = {-1.0, -1.0};             // --offline-range (seconds; < 0 = unset)
+    int offlineSpp = 0;                                // --offline-spp (0 = default)
+    int offlineSize[2] = {0, 0};                       // --offline-size (0 = default)
     std::string startScreen;  // --screen select|bench: open that screen after the scan; --frames then counts every frame  // --free-camera: start in the orbit camera instead of the VMD camera
 };
 AppOptions ParseCommandLine(int argc, wchar_t** argv);  // unknown args are logged and ignored
@@ -80,7 +91,7 @@ public:
     LRESULT HandleMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
 
 private:
-    enum class Screen { Scanning, Select, Loading, Play, BenchLobby, BenchRun, BenchResult };
+    enum class Screen { Scanning, Select, Loading, Play, BenchLobby, BenchRun, BenchResult, Offline };
     enum class LoadTarget { Play, Benchmark };
 
     struct SceneRuntime {
@@ -145,6 +156,23 @@ private:
     // --- free camera helpers (UiPlay.cpp)
     void UpdateFreeCamera();
 
+    // --- offline GI render: stills and videos (UiOffline.cpp)
+    enum class OfflineMode { None, Still, Video };
+    void StartOfflineStill();   // Play -> Offline: pauses and renders the current frame
+    void StartOfflineVideo(double startSeconds, double endSeconds);  // Play -> Offline: frames of [start, end)
+    void UpdateOffline();       // per frame, before UI drawing: CLI triggers, cancel handling
+    // Instead of renderer_.Render while screen_ == Offline: poses the next image's frame and
+    // begins it, or continues the current one.
+    void RecordOfflineFrame(ID3D12GraphicsCommandList* cmd);
+    void AfterOfflineFrame();   // after ctx_.EndFrame: collects a finished image (save / encode), advances
+    void FinishOffline(bool cancelled);  // Offline -> Play (paused); closes the encoder; toast
+    void DrawOfflineOverlay();  // progress panel over the preview (screen_ == Offline)
+    void DrawOfflineConfirm();  // video render confirmation dialog (Play)
+    void DrawToast();           // completion / error toast (Play)
+    std::filesystem::path OfflineOutputDir(bool video) const;  // Pictures\MMDX12 or Videos\MMDX12
+    void SaveOfflinePose();                     // current scene pose -> offline_.prevPose (video motion blur)
+    void UploadOfflinePrevPose(uint64_t slot);  // offline_.prevPose -> the models' bone/morph ring entry `slot`
+
     AppOptions options_;
     AppSettings settings_;
     std::filesystem::path settingsPath_;
@@ -191,6 +219,40 @@ private:
     POINT lastMouse_{};
     double timeSeconds_ = 0;      // wall clock since start (QPC)
     int framesInScene_ = 0;       // frames rendered in Play/BenchRun (for --frames)
+
+    // offline render
+    struct OfflineJob {
+        OfflineMode mode = OfflineMode::None;
+        bool beginPending = false;     // the next frame poses and begins a new image
+        bool cancelRequested = false;
+        bool fromCli = false;          // quit the app when the job ends
+        std::filesystem::path output;  // .png (still) or .mp4 (video)
+        double startWall = 0;          // timeSeconds_ when the job started
+        double imageStartWall = 0;     // timeSeconds_ when the current image began
+        double startSeconds = 0;       // song time of image 0
+        int frame = 0, frameCount = 1; // images done / total (still: 1)
+        double avgImageSeconds = 0;    // wall time per finished image (ETA)
+        std::unique_ptr<VideoEncoder> encoder;
+        bool wasPlaying = false;       // still: started during playback (the last live frame opens the shutter)
+        // video motion blur: the previous video frame's pose (character, then stages) and camera
+        struct Pose {
+            std::vector<DirectX::XMFLOAT4X4> skin;
+            std::vector<DirectX::XMFLOAT3> morph;
+            uint64_t morphVersion = 0;
+        };
+        std::vector<Pose> prevPose;
+        CameraParams prevCamera;
+    } offline_;
+    CameraParams lastLiveCamera_;       // camera of the last real-time frame (still motion blur)
+    bool haveLastLiveCamera_ = false;
+    bool offlineConfirmOpen_ = false;
+    bool cliOfflineStarted_ = false;
+    struct Toast {
+        std::string title, detail;
+        std::filesystem::path path;   // file to reveal in Explorer (empty = none)
+        bool error = false;
+        double until = 0;             // timeSeconds_ when it disappears
+    } toast_;
 
     // benchmark
     int benchCategory_ = 0;       // index into kBenchCategories

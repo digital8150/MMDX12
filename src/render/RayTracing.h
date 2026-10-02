@@ -36,9 +36,11 @@ public:
     // `frame` selects the bone/morph ring entry (GpuModel::BoneBuffer(frame)), `slot` the
     // upload ring entry for instance descs and the geometry table (0..kSlots-1). Ends with the
     // RtVertex buffers in NON_PIXEL_SHADER_RESOURCE | PIXEL_SHADER_RESOURCE and a UAV barrier
-    // on the TLAS. Returns Ready().
+    // on the TLAS. Returns Ready(). `time` < 1 skins characters inside the previous -> current
+    // interval (offline motion blur); stage models keep their first build.
     static constexpr uint32_t kSlots = Dx12Context::kFramesInFlight + 1;
-    bool Build(ID3D12GraphicsCommandList* cmd, const std::vector<GpuModel*>& models, uint64_t frame, uint32_t slot);
+    bool Build(ID3D12GraphicsCommandList* cmd, const std::vector<GpuModel*>& models, uint64_t frame, uint32_t slot,
+               float time = 1.0f);
 
     bool Ready() const { return ready_; }
     D3D12_GPU_VIRTUAL_ADDRESS Tlas() const;        // RaytracingAccelerationStructure (t0 space1)

@@ -123,6 +123,13 @@ bool Renderer::Initialize(Dx12Context& ctx, const std::filesystem::path& shaderD
     rt_ = std::make_unique<RtScene>();
     rtSupported_ = rt_->Initialize(ctx, shaderDir);
     if (!rtSupported_) rt_.reset();
+    if (rtSupported_) {
+        offline_ = std::make_unique<OfflineRenderer>();
+        if (!offline_->Initialize(ctx, shaderDir)) {
+            LOG_WARN("offline renderer unavailable");
+            offline_.reset();
+        }
+    }
 
     CreateBuiltinTextures();
     if (!transient_.Create(ctx, kCbSlots)) return false;
@@ -363,16 +370,11 @@ void Renderer::FillSceneConstants(const FrameView& view, uint32_t w, uint32_t h,
     sc.frameIndex = (float)(temporalIndex_ % 64);
 }
 
-void Renderer::RecordScene(ID3D12GraphicsCommandList* cmd, const FrameView& view, uint32_t w, uint32_t h,
-                           uint32_t cbSlot, uint64_t frame, bool offscreen) {
-    SceneConstants sc{};
-    FillSceneConstants(view, w, h, offscreen, sc);
-    memcpy(sceneCbMapped_ + (size_t)cbSlot * kSceneCbSize, &sc, sizeof(sc));
-    GpuLight lights[kMaxPunctualLights] = {};
-    const size_t count = std::min<size_t>(view.light.punctual.size(), kMaxPunctualLights);
+uint32_t Renderer::FillGpuLights(const LightParams& light, GpuLight* out) {
+    const size_t count = std::min<size_t>(light.punctual.size(), kMaxPunctualLights);
     for (size_t i = 0; i < count; ++i) {
-        const PunctualLight& p = view.light.punctual[i];
-        GpuLight& g = lights[i];
+        const PunctualLight& p = light.punctual[i];
+        GpuLight& g = out[i];
         g.position = p.position;
         g.invRange = 1.0f / std::max(p.range, 0.01f);
         g.color = {p.color.x * p.intensity, p.color.y * p.intensity, p.color.z * p.intensity};
@@ -380,6 +382,16 @@ void Renderer::RecordScene(ID3D12GraphicsCommandList* cmd, const FrameView& view
         XMStoreFloat3(&g.direction, XMVector3Normalize(XMLoadFloat3(&p.direction)));
         g.spotCosInner = std::max(p.spotCosInner, p.spotCosOuter + 1e-3f);
     }
+    return (uint32_t)count;
+}
+
+void Renderer::RecordScene(ID3D12GraphicsCommandList* cmd, const FrameView& view, uint32_t w, uint32_t h,
+                           uint32_t cbSlot, uint64_t frame, bool offscreen) {
+    SceneConstants sc{};
+    FillSceneConstants(view, w, h, offscreen, sc);
+    memcpy(sceneCbMapped_ + (size_t)cbSlot * kSceneCbSize, &sc, sizeof(sc));
+    GpuLight lights[kMaxPunctualLights] = {};
+    FillGpuLights(view.light, lights);
     memcpy(lightBufMapped_ + (size_t)cbSlot * kLightBytes, lights, sizeof(lights));
 
     // Temporal history survives only consecutive on-screen frames without a camera cut.
@@ -647,6 +659,10 @@ void Renderer::SetColorLut(const ImageRGBA8* strip) {
 void Renderer::Shutdown() {
     if (!ctx_) return;
     ctx_->WaitForGpu();
+    if (offline_) {
+        offline_->Shutdown();
+        offline_.reset();
+    }
     if (rt_) {
         rt_->Shutdown();
         rt_.reset();

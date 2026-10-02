@@ -146,3 +146,69 @@ materials with the raster toon sun (`ToonSun` in pathtrace.hlsl) instead of Lamb
 - Sun-shaft test scene (or a stage with windows), temporal reuse for the volumetric march.
 - Expose DoF focus mode (head / centre / manual) and the bloom kernel shape; per-preset LUT defaults.
 - Investigate the XeSS hair artefact (reactive/transparency mask).
+
+## 2026-10-02/03 — Offline GI renderer: high-quality stills and 4K60 video
+
+**Goal**: a non-real-time, maximum-quality GI renderer (Cinema 4D / V-Ray style) independent of the
+graphics settings: 1) a high-quality screenshot button on the play bar, 2) a full render mode that renders
+every frame and encodes an MP4, 3) GI with a Pixar/Disney-like look while keeping the toon style.
+
+### Done
+- `OfflineRenderer` (render/OfflineRenderer.h/.cpp, RendererOffline.cpp): `Renderer::BeginOffline` builds the
+  TLAS, then `Renderer::RenderOffline` replaces `Render` each frame (GPU-time-budgeted iterations, preview
+  present, readback). Fixed formats, no quality settings: stills 3840×2160, videos 3840×2160 60 fps.
+- GI, Cinema 4D irradiance-cache style (`offline_gi.hlsl`): prepass = 6 adaptive coarse-to-fine screen-grid
+  levels of indirect irradiance (512 multi-bounce gather paths per sample, refined only at normal/depth
+  discontinuities or irradiance contrast), shown as the cache-lit scene with sample dots, then edge-aware
+  smoothing. `CSRender` takes indirect diffuse at camera hits from the cache (`IcLookup` projects the hit
+  into the frame camera, so lens/shutter samples work) and brute-forces hits it does not cover. Up to 12
+  bounces, NEE everywhere, one punctual shadow ray per vertex picked by unshadowed contribution.
+- Adaptive sampling (perceptual-luminance standard error < 0.004, 256–4096 spp), progressive preview
+  (1, 2, 3 … iterations per frame: V-Ray-like noise → clean), denoise / bloom / haze / soft grade
+  (`offline_post.hlsl`).
+- Toon look kept: raster ToonSun key light + GI fill (×0.6), faces take an even fill around the view
+  direction, MMD outlines from a raster inverted-hull layer (`offline_edge.hlsl`).
+- Camera effects: thin-lens DoF focused on the head bone (lens radius 0.7% of the focus distance), motion
+  blur with a 180° shutter: every iteration re-skins the character at its shutter time
+  (`RtScene::Build(..., time)`, `skin.hlsl` blends bones/morphs), the camera is interpolated
+  (`SceneConstants::prevInvView`, offline_common.hlsli), and outlines are re-drawn per iteration with the
+  same lens/shutter sample and averaged. Videos re-upload the previous video frame's pose into the
+  previous ring entry; a still taken during playback uses the last live frame.
+- Skin SSS: per-texel skin detection from colour (names are useless: `Material1..5` atlases), sun
+  visibility diffused over per-channel scatter radii (soft, red-fringed shadow edges), warm terminator,
+  translucency of thin backlit parts from a traced thickness.
+- `VideoEncoder` (Media Foundation sink writer): H.264 (100 Mbps at 4K) + AAC from the song (miniaudio
+  decode), CPU RGBA→NV12 BT.709; cancelled renders still produce a playable file.
+- App: play bar buttons (카메라 = 고품질 스크린샷 / P, 필름 = 영상 렌더 with a confirmation dialog and time
+  estimate), Offline screen with progress / ETA / cancel (Esc), toast with "폴더 열기", outputs in
+  Pictures\MMDX12 and Videos\MMDX12. CLI: `--offline-still`, `--offline-video`, `--offline-range`,
+  `--offline-spp`, `--offline-size` (the app quits when done).
+- Measured on the RTX 3060 Laptop: 4K still ~21 s, 4K60 video ~9.5 s per frame (a full song ≈ 1.1 days).
+- Way of working: Claude wrote the contracts and all shaders; three opencode (GLM) workers built the
+  render host, the encoder and the App/UI; Claude reviewed, fixed and later reworked the host itself.
+
+### Pitfalls found
+- `--autoplay` and `--seek` are consumed after loading; my first CLI trigger depended on them, so test runs
+  silently waited for a manual click (the user had to press the button). CLI triggers now use only the
+  `--offline-*` options, and `--offline-still` holds playback at the seek point.
+- One shadow ray per punctual light per sample made the Concert preset (16 spots) >10 min per still;
+  picking one light by unshadowed contribution fixed it (16 s).
+- A cache table reused across video frames got slower as it filled; the cache is now rebuilt per image.
+- `gTime` already exists in SceneCB (FXC "redefinition" in offline_edge.hlsl).
+- An inline `OfflineRenderer() = default` with a `unique_ptr<Impl>` member needs the out-of-line ctor.
+- The studio floor needs the raster cyclorama fade (stochastic coverage) and horizon-colour misses below
+  the horizon, otherwise a hard seam appears.
+
+### Not verified / not done
+- GI flicker over long videos (the cache is recomputed independently per frame); only 3–15 frame clips
+  were checked.
+- Only MikuProjectDIVA on theater / no stage was tested; colour-based skin detection may catch beige
+  clothes.
+- Stills taken while paused have no motion blur (no physics-consistent previous pose).
+- No render buckets (the render is progressive over the whole frame).
+- The offline renderer allocates ~1.5 GB at 4K (accumulators, outline MSAA, cache levels).
+
+### Next
+- Temporal stability for video GI (reuse / blend the cache between frames, flicker test on a long clip).
+- Test more characters and stages; tune the SSS / skin detection per rig.
+- Bucket overlay in the preview, optional.

@@ -198,7 +198,7 @@ bool RtScene::EnsureModelResources(GpuModel& model) {
 }
 
 bool RtScene::Build(ID3D12GraphicsCommandList* cmd, const std::vector<GpuModel*>& models, uint64_t frame,
-                    uint32_t slot) {
+                    uint32_t slot, float time) {
     ready_ = false;
     if (!device5_ || !skinPso_) return false;
     ComPtr<ID3D12GraphicsCommandList4> cmd4;
@@ -227,7 +227,8 @@ bool RtScene::Build(ID3D12GraphicsCommandList* cmd, const std::vector<GpuModel*>
     for (GpuModel* m : models) {
         if (!usable(m) || !needsSkin(m) || !EnsureModelResources(*m)) continue;
         const auto& rt = m->Rt();
-        const uint32_t c[4] = {m->VertexCount(), 0, 0, 0};
+        uint32_t c[4] = {m->VertexCount(), 0, 0, 0};
+        std::memcpy(&c[1], &time, sizeof(float));
         cmd->SetComputeRoot32BitConstants(0, 4, c, 0);
         cmd->SetComputeRootShaderResourceView(1, m->VertexBuffer()->GetGPUVirtualAddress());
         cmd->SetComputeRootShaderResourceView(2, m->BoneBuffer(frame));

@@ -94,6 +94,18 @@ AppOptions ParseCommandLine(int argc, wchar_t** argv) {
             opt.lut = WideToUtf8(next());
         } else if (arg == L"--no-physics") {
             opt.noPhysics = true;
+        } else if (arg == L"--offline-still") {
+            opt.offlineStill = next();
+        } else if (arg == L"--offline-video") {
+            opt.offlineVideo = next();
+        } else if (arg == L"--offline-range") {
+            opt.offlineRange[0] = _wtof(next().c_str());
+            opt.offlineRange[1] = _wtof(next().c_str());
+        } else if (arg == L"--offline-spp") {
+            opt.offlineSpp = _wtoi(next().c_str());
+        } else if (arg == L"--offline-size") {
+            opt.offlineSize[0] = _wtoi(next().c_str());
+            opt.offlineSize[1] = _wtoi(next().c_str());
         } else if (arg == L"--paused") {
             opt.paused = true;
         } else if (arg == L"--free-camera") {
@@ -388,7 +400,16 @@ void App::RenderFrame() {
     case Screen::Loading: DrawLoading(); break;
     case Screen::Play:
         UpdatePlay(dt);
-        DrawPlayOverlay();
+        UpdateOffline();          // CLI trigger (may switch to Screen::Offline)
+        if (screen_ == Screen::Play) {
+            DrawPlayOverlay();
+            DrawOfflineConfirm();
+            DrawToast();
+        }
+        break;
+    case Screen::Offline:
+        UpdateOffline();
+        DrawOfflineOverlay();
         break;
     case Screen::BenchLobby: DrawBenchLobby(); break;
     case Screen::BenchRun: DrawBenchRunOverlay(); break;
@@ -403,16 +424,22 @@ void App::RenderFrame() {
     ID3D12GraphicsCommandList* cmd = ctx_.BeginFrame();
     FrameView view;
     const bool inScene = scene_ && (screen_ == Screen::Play || screen_ == Screen::BenchRun);
-    if (inScene) {
-        const float frame = (float)(playTime_ * kMmdFps);
-        UpdateScene(frame);
-        BuildFrameView(frame, view);
+    if (screen_ == Screen::Offline && scene_) {
+        RecordOfflineFrame(cmd);
+    } else {
+        if (inScene) {
+            const float frame = (float)(playTime_ * kMmdFps);
+            UpdateScene(frame);
+            BuildFrameView(frame, view);
+            lastLiveCamera_ = view.camera;
+            haveLastLiveCamera_ = true;
+        }
+        renderer_.Render(cmd, view);
     }
-    renderer_.Render(cmd, view);
     ImGui_ImplDX12_RenderDrawData(ImGui::GetDrawData(), cmd);
 
     bool quit = false;
-    if (inScene || !options_.startScreen.empty()) {
+    if (inScene || screen_ == Screen::Offline || !options_.startScreen.empty()) {
         ++framesInScene_;
         if (options_.quitAfterFrames > 0 && framesInScene_ >= options_.quitAfterFrames) {
             if (!options_.capturePath.empty()) ctx_.RequestCapture(options_.capturePath);
@@ -420,6 +447,7 @@ void App::RenderFrame() {
         }
     }
     ctx_.EndFrame(renderer_.Settings().vsync);
+    if (screen_ == Screen::Offline) AfterOfflineFrame();
 
     if (quit) {
         ctx_.WaitForGpu();
@@ -740,6 +768,8 @@ void App::PollLoad() {
         }
         framesInScene_ = 0;
         screen_ = Screen::Play;
+        // --offline-still renders exactly the --seek frame: hold playback there.
+        if (!options_.offlineStill.empty() && !cliOfflineStarted_) options_.paused = true;
         if (options_.paused) {
             options_.paused = false;
             SetPlaying(false);
@@ -822,7 +852,13 @@ bool App::BuildSceneRuntime(ScenePackage& pkg) {
 
 void App::UnloadScene() {
     if (!scene_) return;
+    if (offline_.mode != OfflineMode::None) {
+        renderer_.CancelOffline();
+        offline_.encoder.reset();
+        offline_ = OfflineJob{};
+    }
     ctx_.WaitForGpu();
+    haveLastLiveCamera_ = false;
     scene_.reset();
     audio_.Unload();
     playing_ = false;

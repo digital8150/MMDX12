@@ -1,6 +1,7 @@
 #pragma once
 #include "render/Dx12Context.h"
 #include "render/GpuModel.h"
+#include "render/OfflineRenderer.h"
 #include "render/RayTracing.h"
 #include "render/RenderPass.h"
 #include "render/RenderTypes.h"
@@ -63,6 +64,22 @@ public:
     // Probed once in Initialize (DLL present, GPU supported). None is always available.
     bool UpscalerAvailable(UpscalerKind kind) const;
 
+    // ---- offline GI renderer (render/OfflineRenderer.h) ------------------------------------
+    // Available with ray tracing when the offline pipelines compiled.
+    bool OfflineSupported() const { return offline_ != nullptr; }
+    // Starts an offline image of `view` (the pose uploaded for ctx.FrameNumber()) and records its
+    // first share of work into `cmd` (from ctx.BeginFrame()), then presents the preview: call it
+    // instead of Render() for that frame (same back-buffer contract for the UI). Waits for the GPU
+    // first. False when unsupported or the acceleration structures could not be built.
+    bool BeginOffline(ID3D12GraphicsCommandList* cmd, const FrameView& view, const OfflineJobDesc& job);
+    // Instead of Render() on the following frames: records the next share of offline work and
+    // presents the current preview (or the final image once Done).
+    void RenderOffline(ID3D12GraphicsCommandList* cmd);
+    const OfflineProgress& OfflineStatus() const;
+    // Final image of a Done job (RGBA8, opaque). Waits for the GPU; call outside frame recording.
+    bool ReadOfflineImage(ImageRGBA8& out);
+    void CancelOffline();
+
 private:
     void EnsureTargets(uint32_t width, uint32_t height, uint32_t outWidth, uint32_t outHeight, uint32_t msaa);
     void EnsureShadowMap(uint32_t size);
@@ -75,6 +92,9 @@ private:
     void FillSceneConstants(const FrameView& view, uint32_t w, uint32_t h, bool offscreen, SceneConstants& sc);
     RenderPath EffectivePath() const;          // settings_.renderPath, or Raster without DXR support
     IUpscaler* EffectiveUpscaler() const;      // null for None or an unavailable upscaler
+    // Punctual lights -> GpuLight (premultiplied colour, normalized direction); returns the count
+    // written (<= kMaxPunctualLights).
+    static uint32_t FillGpuLights(const LightParams& light, GpuLight* out);
 
     Dx12Context* ctx_ = nullptr;
     std::filesystem::path shaderDir_;
@@ -87,6 +107,7 @@ private:
     std::unique_ptr<IUpscaler> upscalers_[4];  // indexed by UpscalerKind; [0] unused
     bool upscalerAvailable_[4] = {true, false, false, false};
     std::unique_ptr<RtScene> rt_;
+    std::unique_ptr<OfflineRenderer> offline_;   // null without ray tracing / offline pipelines
     bool rtSupported_ = false;
     float jitterPx_[2] = {};
     int64_t lastFrameQpc_ = 0;

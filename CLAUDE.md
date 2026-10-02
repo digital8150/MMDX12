@@ -16,6 +16,8 @@ progress.md is the session log. Read its latest entry first.
 - Visual verification without a human: render a frame headlessly, then Read the PNG.
   - Play scene: `MMDX12.exe --character <s> --stage <s|none> --song <s> --autoplay --seek <sec> --frames N --capture out.png`
   - Menu screens: `--screen select|bench --frames N --capture ui.png`
+  - Offline GI still/video: `--autoplay --seek <sec> --offline-still out.png` (or `--offline-video out.mp4 --offline-range a b`);
+    add `--offline-size 960 540 --offline-spp 256` for quick checks. The app quits by itself when done.
   - Benchmark: `--benchmark dx12-raster-fhd --bench-frames 600 --frames 100000` (result goes to `build/bin/mmdx12.log` as a `BENCHMARK` line)
 - Tools:
   - `asset_probe <library> [--full]`: scan, classify, and load everything
@@ -38,6 +40,15 @@ progress.md is the session log. Read its latest entry first.
   - Render resolution (`targets.width/height`) vs output resolution (`outWidth/outHeight`): the upscaler (DLSS/FSR/XeSS behind `IUpscaler`) runs after TAA/composite; bloom, post, backdrop and present work at output size. Jitter uses the FSR convention (`jitterPx`), motion vectors are uv(cur) − uv(prev) so SDK MV scale is −renderSize.
 - `app`: the `App` state machine, ImGui screens (`Ui*.cpp`) built on `UiKit` (tokens, fonts, widgets; see DESIGN.md), `ThumbnailCache`, `Lighting` presets, `SceneLoader` (worker thread), benchmark, WinHTTP leaderboard.
 - `audio`: miniaudio. The audio cursor is the master clock.
+- `OfflineRenderer` (render/OfflineRenderer.h) is independent of `RenderSettings`: `Renderer::BeginOffline` builds the TLAS,
+  then `Renderer::RenderOffline` replaces `Render` each frame (GPU-time-budgeted iterations, preview present) until Done.
+  Motion blur: each iteration re-skins the character at its shutter time (`RtScene::Build(..., time)`) from the models'
+  previous ring entry (the shutter-open pose; for videos the App re-uploads the previous video frame's pose there) and
+  interpolates the camera (`SceneConstants::prevInvView`, offline_common.hlsli).
+  GI: the prepass builds a screen-space irradiance cache (6 adaptive levels, 512 gather paths per sample, smoothed);
+  `CSRender` takes indirect diffuse at camera hits from it via `IcLookup` (projects the hit into the frame camera,
+  so lens/shutter samples work) and falls back to brute force where it has no matching surface.
+  Note `--autoplay` and `--seek` are consumed after loading (App.cpp), so CLI triggers must not depend on them.
 - Headers are the module contracts. Keep `App.h`, `Renderer.h` etc. authoritative when extending.
 
 ## Conventions / pitfalls

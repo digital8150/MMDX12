@@ -32,6 +32,7 @@ struct SceneConstants {               // b0, kSceneCbSize-byte slot per frame
     DirectX::XMFLOAT2 viewportSize; float edgeScale; float transparentBg;  // edgeScale = viewportHeight / 1080
     DirectX::XMFLOAT2 jitterUv;    DirectX::XMFLOAT2 invViewportSize;      // jitter in uv units
     float nearZ, farZ, frameIndex, _pad;
+    DirectX::XMFLOAT4X4 prevInvView;   // offline renderer: camera-to-world at shutter open (motion blur)
 };
 static_assert(sizeof(SceneConstants) <= kSceneCbSize, "SceneConstants layout");
 

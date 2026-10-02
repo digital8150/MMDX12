@@ -29,7 +29,7 @@ void App::UpdatePlay(double dt) {
         if (s->hasAudio) audio_.Seek(playTime_);
     };
 
-    if (!io.WantCaptureKeyboard) {
+    if (!io.WantCaptureKeyboard && !offlineConfirmOpen_) {
         if (ImGui::IsKeyPressed(ImGuiKey_Space)) SetPlaying(!playing_);
         if (ImGui::IsKeyPressed(ImGuiKey_L)) {
             settings_.lighting = (settings_.lighting + 1) % kLightingPresetCount;
@@ -63,6 +63,11 @@ void App::UpdatePlay(double dt) {
     }
 
     if (!useMotionCamera_ || !s->camera) UpdateFreeCamera();
+
+    // after the time step, so a still taken during playback has the last live frame as shutter open
+    if (!io.WantCaptureKeyboard && !offlineConfirmOpen_ && ImGui::IsKeyPressed(ImGuiKey_P) &&
+        renderer_.OfflineSupported())
+        StartOfflineStill();
 }
 
 void App::SetPlaying(bool play) {
@@ -171,7 +176,7 @@ void App::DrawPlayOverlay() {
     if (!s) return;
     const Palette& p = P();
 
-    const bool showBar = overlayVisible_ && (!playing_ || timeSeconds_ - lastMouseMoveTime_ < 3.0);
+    const bool showBar = overlayVisible_ && (!playing_ || offlineConfirmOpen_ || timeSeconds_ - lastMouseMoveTime_ < 3.0);
     const float show = Anim(ImGui::GetID("##overlayShow"), showBar, 7.0f);
     if (show < 0.005f) return;
 
@@ -288,8 +293,8 @@ void App::DrawPlayOverlay() {
         x += Dp(96.0f);
     }
 
-    // right cluster: volume icon + slider, camera, lighting, divider, exit
-    const float rightW = Dp(36.0f + 4.0f + 88.0f + 12.0f + 44.0f + 50.0f + 11.0f + 40.0f + 16.0f);
+    // right cluster: volume icon + slider, offline still / video, camera, lighting, divider, exit
+    const float rightW = Dp(36.0f + 4.0f + 88.0f + 12.0f + 44.0f + 44.0f + 44.0f + 50.0f + 11.0f + 40.0f + 16.0f);
     const float seekW = std::max(Dp(120.0f), bb.x - rightW - x - Dp(20.0f));
     ImGui::SetCursorScreenPos(ImVec2(x, cy - Dp(14.0f)));
     double t = playTime_;
@@ -330,6 +335,23 @@ void App::DrawPlayOverlay() {
         const float hv = Anim(ImGui::GetID("##volhv"), hovered || held);
         if (hv > 0.01f) dl->AddCircleFilled(ImVec2(x + vw * settings_.volume, cy), Dp(6.0f) * hv, p.ink, 24);
         x += vw + Dp(12.0f);
+    }
+
+    // offline renders: high-quality still, video
+    {
+        const bool ok = renderer_.OfflineSupported();
+        ImGui::SetCursorScreenPos(ImVec2(x, cy - Dp(20.0f)));
+        ImGui::BeginDisabled(!ok);
+        if (IconButton("##shot", icon::Camera, ok ? "고품질 스크린샷 (P)" : "고품질 렌더는 DXR 지원 GPU가 필요합니다",
+                       false, 40.0f))
+            StartOfflineStill();
+        x += Dp(44.0f);
+        ImGui::SetCursorScreenPos(ImVec2(x, cy - Dp(20.0f)));
+        if (IconButton("##film", icon::FilmStrip, ok ? "고품질 영상 렌더" : "고품질 렌더는 DXR 지원 GPU가 필요합니다",
+                       false, 40.0f))
+            offlineConfirmOpen_ = true;
+        x += Dp(44.0f);
+        ImGui::EndDisabled();
     }
 
     // camera, lighting
