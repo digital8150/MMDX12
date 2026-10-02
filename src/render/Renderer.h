@@ -32,6 +32,10 @@ public:
                                           ModelRole role = ModelRole::Character);
 
     void SetSettings(const RenderSettings& s) { settings_ = s; }
+    // Colour LUT for PostPass (strip layout in render/ColorLut.h); null or empty clears it.
+    // Uploads and waits for the GPU: call outside of frame recording.
+    void SetColorLut(const ImageRGBA8* strip);
+    bool HasColorLut() const { return targets_.lut != nullptr; }
     const RenderSettings& Settings() const { return settings_; }
 
     // Records the frame into `cmd` (from ctx.BeginFrame()). The caller must already have
@@ -77,6 +81,7 @@ private:
     RenderSettings settings_;
     RenderStats stats_;
     RenderTargets targets_;
+    Texture lut_;   // colour LUT strip (targets_.lut points here when set)
     BuiltinTextures builtin_;
     TransientDescriptors transient_;
     std::unique_ptr<IUpscaler> upscalers_[4];  // indexed by UpscalerKind; [0] unused

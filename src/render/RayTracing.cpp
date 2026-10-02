@@ -30,12 +30,20 @@ ComPtr<ID3D12Resource> CreateBuffer(ID3D12Device* device, uint64_t bytes, D3D12_
 
 uint64_t Align(uint64_t v, uint64_t a) { return (v + a - 1) / a * a; }
 
-// One geometry desc per drawable material (RtScene::EnsureModelResources filtered them).
-std::vector<D3D12_RAYTRACING_GEOMETRY_DESC> BuildGeometryDescs(GpuModel& model) {
+// Geometry range [first, end) of BLAS part `part` within Rt().geometryMaterials.
+std::pair<uint32_t, uint32_t> PartRange(const GpuModel::RtResources& rt, int part) {
+    return part == 0 ? std::make_pair(0u, rt.partSplit)
+                     : std::make_pair(rt.partSplit, (uint32_t)rt.geometryMaterials.size());
+}
+
+// One geometry desc per drawable material of one BLAS part (EnsureModelResources filtered them).
+std::vector<D3D12_RAYTRACING_GEOMETRY_DESC> BuildGeometryDescs(GpuModel& model, int part) {
     const auto& rt = model.Rt();
+    const auto [first, end] = PartRange(rt, part);
     std::vector<D3D12_RAYTRACING_GEOMETRY_DESC> descs;
-    descs.reserve(rt.geometryMaterials.size());
-    for (uint32_t i : rt.geometryMaterials) {
+    descs.reserve(end - first);
+    for (uint32_t k = first; k < end; ++k) {
+        const uint32_t i = rt.geometryMaterials[k];
         const GpuModel::Material& m = model.Materials()[i];
         const MaterialConstants& c = model.MaterialConstantsCpu()[i];
         D3D12_RAYTRACING_GEOMETRY_DESC& d = descs.emplace_back();
@@ -150,35 +158,43 @@ bool RtScene::EnsureModelResources(GpuModel& model) {
     srv.Buffer.NumElements = std::max(1u, model.IndexCount());
     device->CreateShaderResourceView(model.IndexBuffer(), &srv, ctx_->SrvHeap().Cpu(rt.srv + 1));
 
-    // One geometry per drawable material.
-    for (size_t i = 0; i < model.Materials().size(); ++i) {
-        const GpuModel::Material& m = model.Materials()[i];
-        const MaterialConstants& c = model.MaterialConstantsCpu()[i];
-        if (m.indexCount > 0 && c.diffuse.w > 0.001f) rt.geometryMaterials.push_back((uint32_t)i);
+    // One geometry per drawable material: single-sided ones first (part 0), then double-sided.
+    for (int part = 0; part < 2; ++part) {
+        if (part == 1) rt.partSplit = (uint32_t)rt.geometryMaterials.size();
+        for (size_t i = 0; i < model.Materials().size(); ++i) {
+            const GpuModel::Material& m = model.Materials()[i];
+            const MaterialConstants& c = model.MaterialConstantsCpu()[i];
+            if (m.indexCount > 0 && c.diffuse.w > 0.001f && m.doubleSided == (part == 1))
+                rt.geometryMaterials.push_back((uint32_t)i);
+        }
     }
-    if (rt.geometryMaterials.empty()) return true;  // the model is simply not in the TLAS
 
-    // BLAS prebuild: size the result and scratch buffers from the prebuild info.
-    const std::vector<D3D12_RAYTRACING_GEOMETRY_DESC> geoms = BuildGeometryDescs(model);
-    D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_INPUTS in{};
-    in.Type = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL;
-    in.Flags = model.Role() == ModelRole::Stage
-                   ? D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_PREFER_FAST_TRACE
-                   : D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_PREFER_FAST_BUILD;
-    in.NumDescs = (UINT)geoms.size();
-    in.DescsLayout = D3D12_ELEMENTS_LAYOUT_ARRAY;
-    in.pGeometryDescs = geoms.data();
-    D3D12_RAYTRACING_ACCELERATION_STRUCTURE_PREBUILD_INFO info{};
-    device5_->GetRaytracingAccelerationStructurePrebuildInfo(&in, &info);
-    rt.blasBytes = Align(info.ResultDataMaxSizeInBytes, 256);
-    rt.scratchBytes = Align(info.ScratchDataSizeInBytes, 256);
-    rt.blas = CreateBuffer(device, rt.blasBytes, D3D12_HEAP_TYPE_DEFAULT,
-                           D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS,
-                           D3D12_RESOURCE_STATE_RAYTRACING_ACCELERATION_STRUCTURE, L"rt.blas");
-    rt.scratch = CreateBuffer(device, rt.scratchBytes, D3D12_HEAP_TYPE_DEFAULT,
-                              D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS,
-                              D3D12_RESOURCE_STATE_UNORDERED_ACCESS, L"rt.blas.scratch");
-    return rt.blas && rt.scratch;
+    // BLAS prebuild per non-empty part (a model with neither is simply not in the TLAS).
+    for (int part = 0; part < 2; ++part) {
+        const std::vector<D3D12_RAYTRACING_GEOMETRY_DESC> geoms = BuildGeometryDescs(model, part);
+        if (geoms.empty()) continue;
+        D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_INPUTS in{};
+        in.Type = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL;
+        in.Flags = model.Role() == ModelRole::Stage
+                       ? D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_PREFER_FAST_TRACE
+                       : D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_PREFER_FAST_BUILD;
+        in.NumDescs = (UINT)geoms.size();
+        in.DescsLayout = D3D12_ELEMENTS_LAYOUT_ARRAY;
+        in.pGeometryDescs = geoms.data();
+        D3D12_RAYTRACING_ACCELERATION_STRUCTURE_PREBUILD_INFO info{};
+        device5_->GetRaytracingAccelerationStructurePrebuildInfo(&in, &info);
+        auto& bp = rt.parts[part];
+        bp.blasBytes = Align(info.ResultDataMaxSizeInBytes, 256);
+        bp.scratchBytes = Align(info.ScratchDataSizeInBytes, 256);
+        bp.blas = CreateBuffer(device, bp.blasBytes, D3D12_HEAP_TYPE_DEFAULT,
+                               D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS,
+                               D3D12_RESOURCE_STATE_RAYTRACING_ACCELERATION_STRUCTURE, L"rt.blas");
+        bp.scratch = CreateBuffer(device, bp.scratchBytes, D3D12_HEAP_TYPE_DEFAULT,
+                                  D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS,
+                                  D3D12_RESOURCE_STATE_UNORDERED_ACCESS, L"rt.blas.scratch");
+        if (!bp.blas || !bp.scratch) return false;
+    }
+    return true;
 }
 
 bool RtScene::Build(ID3D12GraphicsCommandList* cmd, const std::vector<GpuModel*>& models, uint64_t frame,
@@ -238,19 +254,23 @@ bool RtScene::Build(ID3D12GraphicsCommandList* cmd, const std::vector<GpuModel*>
     for (GpuModel* m : models) {
         if (!usable(m) || !EnsureModelResources(*m)) continue;
         auto& rt = m->Rt();
-        if (!rt.blas || !(m->Role() == ModelRole::Character || !rt.blasBuilt)) continue;
-        const auto geoms = BuildGeometryDescs(*m);
-        D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_DESC d{};
-        d.Inputs.Type = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL;
-        d.Inputs.Flags = m->Role() == ModelRole::Stage
-                             ? D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_PREFER_FAST_TRACE
-                             : D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_PREFER_FAST_BUILD;
-        d.Inputs.NumDescs = (UINT)geoms.size();
-        d.Inputs.DescsLayout = D3D12_ELEMENTS_LAYOUT_ARRAY;
-        d.Inputs.pGeometryDescs = geoms.data();
-        d.DestAccelerationStructureData = rt.blas->GetGPUVirtualAddress();
-        d.ScratchAccelerationStructureData = rt.scratch->GetGPUVirtualAddress();
-        cmd4->BuildRaytracingAccelerationStructure(&d, 0, nullptr);
+        if (!(m->Role() == ModelRole::Character || !rt.blasBuilt)) continue;
+        for (int part = 0; part < 2; ++part) {
+            const auto& bp = rt.parts[part];
+            if (!bp.blas) continue;
+            const auto geoms = BuildGeometryDescs(*m, part);
+            D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_DESC d{};
+            d.Inputs.Type = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL;
+            d.Inputs.Flags = m->Role() == ModelRole::Stage
+                                 ? D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_PREFER_FAST_TRACE
+                                 : D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_PREFER_FAST_BUILD;
+            d.Inputs.NumDescs = (UINT)geoms.size();
+            d.Inputs.DescsLayout = D3D12_ELEMENTS_LAYOUT_ARRAY;
+            d.Inputs.pGeometryDescs = geoms.data();
+            d.DestAccelerationStructureData = bp.blas->GetGPUVirtualAddress();
+            d.ScratchAccelerationStructureData = bp.scratch->GetGPUVirtualAddress();
+            cmd4->BuildRaytracingAccelerationStructure(&d, 0, nullptr);
+        }
         rt.blasBuilt = true;
     }
     D3D12_RESOURCE_BARRIER uavBarrier = CD3DX12_RESOURCE_BARRIER::UAV(nullptr);
@@ -259,8 +279,9 @@ bool RtScene::Build(ID3D12GraphicsCommandList* cmd, const std::vector<GpuModel*>
     // ---- 3. instance descs + geometry table for `slot` -------------------
     uint32_t n = 0, g = 0;
     for (GpuModel* m : models) {
-        if (usable(m) && m->Rt().blas) ++n;
-        if (usable(m) && m->Rt().blas) g += (uint32_t)m->Rt().geometryMaterials.size();
+        if (!usable(m)) continue;
+        for (const auto& bp : m->Rt().parts) n += bp.blas ? 1 : 0;
+        g += (uint32_t)m->Rt().geometryMaterials.size();
     }
     if (n == 0) return false;
     if (n > instanceCapacity_ || g > geometryCapacity_) {
@@ -299,15 +320,21 @@ bool RtScene::Build(ID3D12GraphicsCommandList* cmd, const std::vector<GpuModel*>
     for (GpuModel* m : models) {
         if (!usable(m) || !EnsureModelResources(*m)) continue;
         auto& rt = m->Rt();
-        if (!rt.blas) continue;
-        D3D12_RAYTRACING_INSTANCE_DESC id{};
-        id.Transform[0][0] = id.Transform[1][1] = id.Transform[2][2] = 1;
-        id.InstanceID = base;
-        id.InstanceMask = 0xFF;
-        id.InstanceContributionToHitGroupIndex = 0;
-        id.Flags = D3D12_RAYTRACING_INSTANCE_FLAG_TRIANGLE_CULL_DISABLE;
-        id.AccelerationStructure = rt.blas->GetGPUVirtualAddress();
-        *inst++ = id;
+        for (int part = 0; part < 2; ++part) {
+            if (!rt.parts[part].blas) continue;
+            D3D12_RAYTRACING_INSTANCE_DESC id{};
+            id.Transform[0][0] = id.Transform[1][1] = id.Transform[2][2] = 1;
+            id.InstanceID = base + PartRange(rt, part).first;
+            // 0x01 stage, 0x02 character (punctual-light shadow rays trace characters only)
+            id.InstanceMask = m->Role() == ModelRole::Character ? 0x02 : 0x01;
+            id.InstanceContributionToHitGroupIndex = 0;
+            // MMD front faces are clockwise, the DXR default. Single-sided parts keep culling
+            // for rays that ask for it (RAY_FLAG_CULL_BACK_FACING_TRIANGLES).
+            id.Flags = part == 1 ? D3D12_RAYTRACING_INSTANCE_FLAG_TRIANGLE_CULL_DISABLE
+                                 : D3D12_RAYTRACING_INSTANCE_FLAG_NONE;
+            id.AccelerationStructure = rt.parts[part].blas->GetGPUVirtualAddress();
+            *inst++ = id;
+        }
         for (uint32_t mi : rt.geometryMaterials) {
             const GpuModel::Material& m2 = m->Materials()[mi];
             const MaterialConstants& c = m->MaterialConstantsCpu()[mi];

@@ -84,6 +84,14 @@ AppOptions ParseCommandLine(int argc, wchar_t** argv) {
             else if (v == "performance") opt.upscalerQuality = 3;
             else if (v == "ultra") opt.upscalerQuality = 4;
             else LOG_WARN("unknown --upscale-quality value: %s (want native|quality|balanced|performance|ultra)", v.c_str());
+        } else if (arg == L"--dof") {
+            opt.dof = _wtoi(next().c_str()) != 0 ? 1 : 0;
+        } else if (arg == L"--volumetric") {
+            opt.volumetric = _wtoi(next().c_str()) != 0 ? 1 : 0;
+        } else if (arg == L"--bloom-conv") {
+            opt.bloomConv = _wtoi(next().c_str()) != 0 ? 1 : 0;
+        } else if (arg == L"--lut") {
+            opt.lut = WideToUtf8(next());
         } else if (arg == L"--no-physics") {
             opt.noPhysics = true;
         } else if (arg == L"--paused") {
@@ -118,6 +126,9 @@ int App::Run(HINSTANCE instance, const AppOptions& options) {
     if (options_.renderPath >= 0) settings_.renderPath = std::clamp(options_.renderPath, 0, 2);
     if (options_.upscaler >= 0) settings_.upscaler = std::clamp(options_.upscaler, 0, 3);
     if (options_.upscalerQuality >= 0) settings_.upscalerQuality = std::clamp(options_.upscalerQuality, 0, 4);
+    if (options_.dof >= 0) settings_.dof = options_.dof != 0;
+    if (options_.volumetric >= 0) settings_.volumetric = options_.volumetric != 0;
+    if (options_.bloomConv >= 0) settings_.bloomConvolution = options_.bloomConv != 0;
 
     ImGui_ImplWin32_EnableDpiAwareness();
 
@@ -157,6 +168,7 @@ int App::Run(HINSTANCE instance, const AppOptions& options) {
     std::strncpy(nicknameEdit_, settings_.nickname.c_str(), sizeof(nicknameEdit_) - 1);
     nicknameEdit_[sizeof(nicknameEdit_) - 1] = '\0';
     std::filesystem::path libPath = ResolveLibraryPath();
+    RefreshColorLuts();
     std::string libUtf8 = PathToUtf8(libPath);
     std::strncpy(libraryPathEdit_, libUtf8.c_str(), sizeof(libraryPathEdit_) - 1);
     libraryPathEdit_[sizeof(libraryPathEdit_) - 1] = '\0';
@@ -195,6 +207,10 @@ int App::Run(HINSTANCE instance, const AppOptions& options) {
     if (options_.renderPath >= 0) settings_.renderPath = persisted.renderPath;
     if (options_.upscaler >= 0) settings_.upscaler = persisted.upscaler;
     if (options_.upscalerQuality >= 0) settings_.upscalerQuality = persisted.upscalerQuality;
+    if (options_.dof >= 0) settings_.dof = persisted.dof;
+    if (options_.volumetric >= 0) settings_.volumetric = persisted.volumetric;
+    if (options_.bloomConv >= 0) settings_.bloomConvolution = persisted.bloomConvolution;
+    if (!options_.lut.empty()) settings_.colorLut = persisted.colorLut;
     settings_.Save(settingsPath_);
 
     ctx_.Shutdown();
@@ -383,6 +399,7 @@ void App::RenderFrame() {
 
     if (!running_) return;
 
+    ApplyColorLut();
     ID3D12GraphicsCommandList* cmd = ctx_.BeginFrame();
     FrameView view;
     const bool inScene = scene_ && (screen_ == Screen::Play || screen_ == Screen::BenchRun);
@@ -599,8 +616,69 @@ void App::ApplyRenderSettings() {
     rs.upscalerQuality = (UpscalerQuality)settings_.upscalerQuality;
     rs.ptSamples = (uint32_t)settings_.ptSamples;
     rs.ptBounces = (uint32_t)settings_.ptBounces;
+    rs.dof = settings_.dof;
+    rs.dofAperture = settings_.dofAperture;
+    rs.volumetric = settings_.volumetric;
+    rs.volumetricDensity = settings_.volumetricDensity;
+    rs.bloomConvolution = settings_.bloomConvolution;
+    rs.lutIntensity = settings_.lutIntensity;
     rs.fixedResolution = false;
     renderer_.SetSettings(rs);
+}
+
+void App::RefreshColorLuts() {
+    luts_ = ListColorLuts({ExecutableDir() / L"luts", ResolveLibraryPath() / L"luts"});
+    if (!options_.lut.empty()) {
+        if (ToLowerAscii(options_.lut) == "none") {
+            settings_.colorLut.clear();
+        } else {
+            settings_.colorLut.clear();
+            const std::string needle = ToLowerAscii(options_.lut);
+            for (const ColorLutEntry& e : luts_) {
+                if (ToLowerAscii(e.id).find(needle) != std::string::npos ||
+                    ToLowerAscii(e.displayName).find(needle) != std::string::npos) {
+                    settings_.colorLut = e.id;
+                    break;
+                }
+            }
+            if (settings_.colorLut.empty()) LOG_WARN("unknown --lut value: %s", options_.lut.c_str());
+        }
+    }
+    if (!settings_.colorLut.empty()) {
+        bool found = false;
+        for (const ColorLutEntry& e : luts_) {
+            if (e.id == settings_.colorLut) {
+                found = true;
+                break;
+            }
+        }
+        if (!found) {
+            LOG_WARN("unknown color LUT in settings: %s", settings_.colorLut.c_str());
+            settings_.colorLut.clear();
+        }
+    }
+    LOG_INFO("color LUTs: %zu", luts_.size());
+}
+
+void App::ApplyColorLut() {
+    if (settings_.colorLut == appliedLut_) return;
+    appliedLut_ = settings_.colorLut;
+    const ColorLutEntry* entry = nullptr;
+    for (const ColorLutEntry& e : luts_) {
+        if (e.id == settings_.colorLut) {
+            entry = &e;
+            break;
+        }
+    }
+    if (settings_.colorLut.empty() || !entry) {
+        renderer_.SetColorLut(nullptr);
+        return;
+    }
+    ImageRGBA8 strip;
+    if (BuildColorLut(*entry, strip))
+        renderer_.SetColorLut(&strip);
+    else
+        renderer_.SetColorLut(nullptr);
 }
 
 // ---------------------------------------------------------------------------
@@ -700,6 +778,10 @@ void App::PollLoad() {
     rs.bloom = true;
     rs.taa = false;
     rs.exposure = 1.0f;
+    rs.dof = false;
+    rs.volumetric = false;
+    rs.bloomConvolution = false;
+    rs.lutIntensity = 0.0f;
     renderer_.SetSettings(rs);
 
     benchStartTime_ = timeSeconds_;
@@ -808,6 +890,19 @@ void App::BuildFrameView(float frame, FrameView& view) {
     }
     const LightingPreset preset = screen_ == Screen::BenchRun ? LightingPreset::Studio : (LightingPreset)settings_.lighting;
     BuildLighting(preset, playTime_, focus, view.light);
+
+    // DoF focus plane: the character's head (center bone + 8 without one), as view-space z.
+    if (scene_->character) {
+        const int head = scene_->character->Model().FindBone("\xE9\xA0\xAD");
+        DirectX::XMFLOAT3 target = focus;
+        if (head >= 0)
+            target = scene_->character->BoneWorldPosition(head);
+        else
+            target.y += 8.0f;
+        const DirectX::XMMATRIX viewMat = DirectX::XMLoadFloat4x4(&view.camera.view);
+        const float z = DirectX::XMVectorGetZ(DirectX::XMVector3TransformCoord(DirectX::XMLoadFloat3(&target), viewMat));
+        view.focusDistance = z > view.camera.nearZ ? z : 0.0f;
+    }
 
     // Seeking (or a restart) breaks temporal history.
     const double step = std::fabs(playTime_ - lastRenderedTime_);

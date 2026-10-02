@@ -5,11 +5,13 @@
 // Per frame (Build):
 //   1. skin.hlsl skins every model into its RtVertex buffer (GpuModel::Rt().vertices):
 //      current and previous pose, world space. Stage models are skinned once.
-//   2. One BLAS per model, one geometry per drawable material (indexCount > 0 and
-//      diffuse.a > 0.001). Characters: full rebuild every frame (PREFER_FAST_BUILD).
-//      Stages: built once (PREFER_FAST_TRACE).
-//   3. TLAS over all models (identity transforms; vertices are already in world space),
-//      rebuilt every frame, plus the RtGeometry table for this frame slot.
+//   2. Up to two BLASes per model (single-sided / double-sided materials), one geometry per
+//      drawable material (indexCount > 0 and diffuse.a > 0.001). Characters: full rebuild
+//      every frame (PREFER_FAST_BUILD). Stages: built once (PREFER_FAST_TRACE).
+//   3. TLAS over all BLASes (identity transforms; vertices are already in world space), rebuilt
+//      every frame, plus the RtGeometry table for this frame slot. Double-sided instances set
+//      TRIANGLE_CULL_DISABLE, so RAY_FLAG_CULL_BACK_FACING_TRIANGLES culls like the raster
+//      pass. Instance masks: 0x01 stage, 0x02 character.
 #include "render/Dx12Context.h"
 #include <filesystem>
 #include <vector>

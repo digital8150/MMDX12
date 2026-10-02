@@ -635,6 +635,33 @@ void App::DrawSelect() {
                 changed |= SliderRow("##exposure", "노출", &settings_.exposure, 0.5f, 2.0f, "%.2f");
                 Gap(10.0f);
                 if (Switch("##physics", "물리 연산", &settings_.physics, "머리카락과 옷의 흔들림")) settings_.Save(settingsPath_);
+                Gap(14.0f);
+                SectionLabel("효과");
+                bool fx = false;
+                fx |= Switch("##dof", "피사계 심도", &settings_.dof, "캐릭터에 초점을 맞추고 배경을 흐림");
+                if (settings_.dof) { Gap(6.0f); fx |= SliderRow("##dofap", "조리개", &settings_.dofAperture, 0.2f, 3.0f, "%.2f"); Gap(6.0f); }
+                fx |= Switch("##vol", "볼류메트릭 라이트", &settings_.volumetric, "빛줄기와 조명 산란");
+                if (settings_.volumetric) { Gap(6.0f); fx |= SliderRow("##vold", "안개 밀도", &settings_.volumetricDensity, 0.25f, 4.0f, "%.2f"); Gap(6.0f); }
+                fx |= Switch("##bloomconv", "컨볼루션 블룸", &settings_.bloomConvolution, "FFT 스타버스트 블룸");
+                Gap(10.0f);
+                SectionLabel("컬러 LUT");
+                int lutCount = 1 + (int)luts_.size();
+                for (int i = 0; i < lutCount; ++i) {
+                    if (i % 2) ImGui::SameLine(0, Dp(8.0f));
+                    ImGui::PushID(i);
+                    const ColorLutEntry* e = i > 0 ? &luts_[(size_t)i - 1] : nullptr;
+                    if (Chip("##lut", e ? e->displayName.c_str() : "없음", icon::Image,
+                             settings_.colorLut == (e ? e->id : std::string()), chipW)) {
+                        settings_.colorLut = e ? e->id : std::string();
+                        fx = true;
+                    }
+                    ImGui::PopID();
+                }
+                if (!settings_.colorLut.empty()) fx |= SliderRow("##lutint", "LUT 강도", &settings_.lutIntensity, 0.0f, 1.0f, "%.2f");
+                if (fx) {
+                    ApplyRenderSettings();
+                    settings_.Save(settingsPath_);
+                }
                 if (changed) {
                     // touching an effect toggle leaves the named presets
                     settings_.graphicsPreset = 4;

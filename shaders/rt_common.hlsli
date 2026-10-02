@@ -117,15 +117,19 @@ float3 MaterialLit(RtGeometry g, float3 tex) {
     return saturate(g.ambient + g.diffuse.rgb * gLightColor) * tex;
 }
 
+#define RT_MASK_STAGE     0x01u
+#define RT_MASK_CHARACTER 0x02u
+
 // 1 = unoccluded. Honours RTG_CAST_SHADOW and alpha (>= 0.5) on non-opaque geometry.
-float TraceShadowRay(float3 origin, float3 dir, float tMax) {
+// `mask` selects instances (RT_MASK_*).
+float TraceShadowRayMasked(float3 origin, float3 dir, float tMax, uint mask) {
     RayQuery<RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH | RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES> q;
     RayDesc r;
     r.Origin = origin;
     r.Direction = dir;
     r.TMin = 0.0;
     r.TMax = tMax;
-    q.TraceRayInline(gTlas, RAY_FLAG_NONE, 0xFF, r);
+    q.TraceRayInline(gTlas, RAY_FLAG_NONE, mask, r);
     while (q.Proceed()) {
         if (q.CandidateType() == CANDIDATE_NON_OPAQUE_TRIANGLE) {
             RtGeometry g = LoadGeometry(q.CandidateInstanceID(), q.CandidateGeometryIndex());
@@ -137,6 +141,10 @@ float TraceShadowRay(float3 origin, float3 dir, float tMax) {
     return q.CommittedStatus() == COMMITTED_TRIANGLE_HIT ? 0.0 : 1.0;
 }
 
+float TraceShadowRay(float3 origin, float3 dir, float tMax) {
+    return TraceShadowRayMasked(origin, dir, tMax, 0xFFu);
+}
+
 struct RtHit {
     uint instanceId, geometryIndex, prim;
     float2 bary;
@@ -146,8 +154,12 @@ struct RtHit {
 
 // Closest hit. Non-opaque candidates are accepted when their alpha >= alphaThreshold
 // (0.5 for a binary alpha test, a random number in (0,1] for stochastic transparency).
+// Back faces of single-sided materials are culled like the raster pass does (stages are often
+// closed rooms whose ceiling or walls the camera looks through from outside, and some layer a
+// back-facing copy under a visible surface). Double-sided materials live in instances with
+// TRIANGLE_CULL_DISABLE (RtScene), so the ray flag only affects single-sided ones.
 bool TraceClosest(float3 origin, float3 dir, float tMin, float tMax, float alphaThreshold, out RtHit hit) {
-    RayQuery<RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES> q;
+    RayQuery<RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES | RAY_FLAG_CULL_BACK_FACING_TRIANGLES> q;
     RayDesc r;
     r.Origin = origin;
     r.Direction = dir;

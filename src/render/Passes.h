@@ -1,5 +1,6 @@
 // The frame's pass list, in execution order (pc.path decides which ones do work):
-//   ShadowPass    cascaded shadow map (depth only, skinned)                       Raster only
+//   ShadowPass    cascaded shadow map (depth only, skinned)                       Raster, or any path
+//                 with volumetrics on (the volumetric march samples it)
 //   ScenePass     sky, studio floor, MMD materials + edges -> MSAA colour/normal/velocity/depth
 //                 (RayTraced: ray-query sun shadows instead of the shadow map)    not PathTraced
 //   ResolvePass   MSAA -> single sample (colour, normal, velocity, closest depth) not PathTraced
@@ -8,10 +9,13 @@
 //   SsaoPass      half-res AO (RayTraced: ray-traced AO) + depth-aware blur       not PathTraced
 //   SsrPass       half-res reflections (RayTraced: ray-traced)                    not PathTraced
 //   CompositePass colour * AO + reflections + haze -> lit
+//   VolumetricPass half-res ray-marched in-scattering (sun via the shadow map, spot/point lights),
+//                 added into lit                                                  optional
 //   TaaPass       temporal AA (optional, skipped when an upscaler runs) -> hdrFinal
 //   UpscalePass   DLSS / FSR / XeSS: lit -> output resolution -> hdrFinal
-//   BloomPass     downsample/upsample chain (output resolution)
-//   PostPass      exposure, grade, tonemap, vignette -> ldr (output resolution)
+//   DofPass       depth of field: CoC + half-res bokeh gather + composite -> hdrFinal (output res)
+//   BloomPass     downsample/upsample chain, or FFT convolution with a starburst kernel (output res)
+//   PostPass      exposure, grade, tonemap, colour LUT, vignette -> ldr (output resolution)
 //   BackdropPass  blurred copy of ldr for frosted UI panels (on screen only)
 //   PresentPass   letterboxed stretch to the back buffer (on screen only)
 #pragma once
@@ -145,6 +149,7 @@ private:
 class BloomPass final : public IRenderPass {
 public:
     static constexpr uint32_t kMips = 6;
+    static constexpr uint32_t kFftSize = 512;   // convolution grid (power of two; bloom_fft.hlsl FFT_N)
     const char* Name() const override { return "Bloom"; }
     bool CreatePipelines(Dx12Context& ctx, const std::filesystem::path& shaderDir, uint32_t msaa) override;
     void OnResize(Dx12Context& ctx, RenderTargets& targets) override;
@@ -152,8 +157,53 @@ public:
     void Execute(PassContext& pc) override;
 
 private:
+    void ExecuteConvolution(PassContext& pc);   // settings.bloomConvolution && fft pipelines exist
+
     FullscreenPipeline prefilter_, down_, up_;
     Texture mips_[kMips];
+    // FFT convolution (bloom_fft.hlsl, ComputePipeline; all null when compute is unavailable)
+    ComputePipeline fftInput_, fftRows_, fftCols_, fftKernel_;
+    FullscreenPipeline fftOutput_;              // writes mips_[0] from the convolved grid
+    Texture gridA_, gridB_;                     // kFftSize^2 RGBA32F (R+iG, B+i0), UAV + SRV
+    Texture kernelSpec_;                        // kFftSize^2 RGBA32F kernel spectrum (rg used), UAV + SRV
+    bool kernelReady_ = false;
+};
+
+// Half-res ray-marched participating medium (height fog) lit by the sun (shadowed through the
+// cascaded shadow map when shadows are on) and the punctual lights. Additive into targets.lit.
+// Needs the compute path (cs_6_5); does nothing without it, offscreen, or when settings.volumetric is off.
+class VolumetricPass final : public IRenderPass {
+public:
+    const char* Name() const override { return "Volumetric"; }
+    bool CreatePipelines(Dx12Context& ctx, const std::filesystem::path& shaderDir, uint32_t msaa) override;
+    void OnResize(Dx12Context& ctx, RenderTargets& targets) override;
+    void ReleaseTargets(Dx12Context& ctx) override;
+    void Execute(PassContext& pc) override;
+
+private:
+    ComputePipeline march_;       // volumetric.hlsl CSMarch -> raw_ (UAV)
+    ComputePipeline blur_;        // volumetric.hlsl CSBlur  -> depth-aware separable blur raw_ <-> temp_
+    FullscreenPipeline apply_;    // volumetric.hlsl PSApply, additive into lit (depth-aware upsample)
+    Texture raw_, temp_;          // half render res RGBA16F, rgb = in-scattered radiance
+};
+
+// Depth of field at output resolution on hdrFinal: CoC from depth (render res, sampled by uv),
+// half-res golden-angle bokeh gather, then a full-res blend. Sets hdrFinal = out_.
+// Does nothing offscreen or when settings.dof is off.
+class DofPass final : public IRenderPass {
+public:
+    const char* Name() const override { return "DoF"; }
+    bool CreatePipelines(Dx12Context& ctx, const std::filesystem::path& shaderDir, uint32_t msaa) override;
+    void OnResize(Dx12Context& ctx, RenderTargets& targets) override;
+    void ReleaseTargets(Dx12Context& ctx) override;
+    void Execute(PassContext& pc) override;
+
+private:
+    FullscreenPipeline prepare_, gather_, tent_, combine_;
+    Texture half_;      // half output res RGBA16F: colour, a = signed CoC (half-res pixels)
+    Texture blurA_;     // half output res RGBA16F: gathered colour, a = effective blend radius
+    Texture blurB_;     // half output res RGBA16F: tent-filtered blurA_
+    Texture out_;       // output res RGBA16F (kColorFormat), the new hdrFinal
 };
 
 class PostPass final : public IRenderPass {

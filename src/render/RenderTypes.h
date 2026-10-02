@@ -44,6 +44,13 @@ struct RenderSettings {
     bool bloom = true;
     float bloomIntensity = 0.35f;
     float bloomThreshold = 1.1f;    // linear HDR luminance where bloom starts
+    bool bloomConvolution = false;  // FFT convolution bloom with a starburst kernel (falls back to the mip chain)
+    bool dof = false;               // depth of field (bokeh gather), focus from FrameView::focusDistance
+    float dofAperture = 1.0f;       // 0..3, scales the circle of confusion (1 = f/2-ish look)
+    float dofMaxRadius = 14.0f;     // max CoC radius in output pixels at 1080p (scaled with output height)
+    bool volumetric = false;        // ray-marched sun shafts + spotlight cones (height fog medium)
+    float volumetricDensity = 1.0f; // 0..4, scales the medium density
+    float lutIntensity = 1.0f;      // 0..1 blend toward the colour LUT (Renderer::SetColorLut); no LUT = off
     float exposure = 1.0f;
     float contrast = 1.06f;
     float saturation = 1.06f;
@@ -90,6 +97,7 @@ struct FrameView {
     std::vector<GpuModel*> models;  // drawn in this order (stage parts first, then characters)
     bool studioFloor = false;       // draw the procedural studio floor at y = 0
     bool cameraCut = false;         // discard temporal history (seek, VMD camera cut)
+    float focusDistance = 0.0f;     // DoF focus plane as view-space z (MMD units); <= 0: autofocus on the screen centre
 };
 
 struct RenderStats {

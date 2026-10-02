@@ -87,10 +87,17 @@ public:
     struct RtResources {
         ComPtr<ID3D12Resource> vertices;      // DEFAULT heap, RtVertex[VertexCount()], UAV-capable
         D3D12_RESOURCE_STATES verticesState = D3D12_RESOURCE_STATE_COMMON;
-        ComPtr<ID3D12Resource> blas, scratch; // BLAS result (RAYTRACING_ACCELERATION_STRUCTURE) + scratch (UAV)
-        uint64_t blasBytes = 0, scratchBytes = 0;
+        // Two BLAS parts so closest-hit rays can cull back faces like the raster pass:
+        // [0] single-sided materials (culling on), [1] double-sided (instance TRIANGLE_CULL_DISABLE).
+        struct BlasPart {
+            ComPtr<ID3D12Resource> blas, scratch; // result (RAYTRACING_ACCELERATION_STRUCTURE) + scratch (UAV)
+            uint64_t blasBytes = 0, scratchBytes = 0;
+        };
+        BlasPart parts[2];
         uint32_t srv = DescriptorHeap::kInvalid;  // 2 SrvHeap descriptors: +0 raw RtVertex SRV, +1 raw index SRV
-        std::vector<uint32_t> geometryMaterials;  // material index of each BLAS geometry, in order
+        // Material index of each BLAS geometry: part 0's, then part 1's starting at partSplit.
+        std::vector<uint32_t> geometryMaterials;
+        uint32_t partSplit = 0;
         bool blasBuilt = false;
     };
     RtResources& Rt() { return rt_; }

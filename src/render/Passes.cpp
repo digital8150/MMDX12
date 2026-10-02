@@ -1,5 +1,6 @@
 // Pass implementations (see Passes.h for the order and data flow).
 #include "render/Passes.h"
+#include "render/PassCommon.h"
 #include "render/GpuModel.h"
 #include "render/RayTracing.h"
 #include "render/Upscaler.h"
@@ -11,17 +12,6 @@
 namespace mmdx {
 
 namespace {
-
-constexpr D3D12_RESOURCE_STATES kSrv = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
-constexpr D3D12_RESOURCE_STATES kRt = D3D12_RESOURCE_STATE_RENDER_TARGET;
-constexpr D3D12_RESOURCE_STATES kUav = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
-constexpr D3D12_RESOURCE_STATES kSrvAll = D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE;  // NON_PIXEL | PIXEL
-
-bool RtPipelinesSupported(Dx12Context& ctx) {
-    return ctx.Caps().raytracingTier >= D3D12_RAYTRACING_TIER_1_1 && ctx.Caps().shaderModel >= D3D_SHADER_MODEL_6_5;
-}
-
-uint32_t Groups(uint32_t n) { return (n + 7) / 8; }
 
 const D3D12_INPUT_ELEMENT_DESC kMmdLayout[] = {
     {"POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
@@ -53,8 +43,6 @@ void BindModelBuffers(ID3D12GraphicsCommandList* cmd, const GpuModel& model, uin
     cmd->IASetVertexBuffers(0, 3, vbs);
     cmd->IASetIndexBuffer(&model.IndexBufferView());
 }
-
-uint32_t Half(uint32_t v) { return std::max(1u, v / 2); }
 
 } // namespace
 
@@ -104,7 +92,7 @@ void ShadowPass::Execute(PassContext& pc) {
     Texture& sm = pc.targets.shadowMap;
     if (!sm) return;
     ID3D12GraphicsCommandList* cmd = pc.cmd;
-    if (pc.path != RenderPath::Raster) {
+    if (pc.path != RenderPath::Raster && !(pc.settings.volumetric && !pc.offscreen)) {
         sm.Transition(cmd, kSrv);
         return;
     }
@@ -715,55 +703,6 @@ void TaaPass::Execute(PassContext& pc) {
     current_ ^= 1;
 }
 
-// ---- BloomPass -------------------------------------------------------------------------------
-
-bool BloomPass::CreatePipelines(Dx12Context& ctx, const std::filesystem::path& shaderDir, uint32_t) {
-    const std::filesystem::path f = shaderDir / L"bloom.hlsl";
-    return prefilter_.Create(ctx, f, "PSPrefilter", {DXGI_FORMAT_R11G11B10_FLOAT}) &&
-           down_.Create(ctx, f, "PSDown", {DXGI_FORMAT_R11G11B10_FLOAT}) &&
-           up_.Create(ctx, f, "PSUp", {DXGI_FORMAT_R11G11B10_FLOAT}, {}, FullscreenPipeline::Blend::Additive);
-}
-
-void BloomPass::OnResize(Dx12Context& ctx, RenderTargets& targets) {
-    uint32_t w = Half(targets.outWidth), h = Half(targets.outHeight);
-    for (uint32_t i = 0; i < kMips; ++i) {
-        mips_[i].Create(ctx, w, h, DXGI_FORMAT_R11G11B10_FLOAT, D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET, kSrv,
-                        L"bloom.mip");
-        w = Half(w);
-        h = Half(h);
-    }
-}
-
-void BloomPass::ReleaseTargets(Dx12Context& ctx) {
-    for (Texture& m : mips_) m.Release(ctx);
-}
-
-void BloomPass::Execute(PassContext& pc) {
-    RenderTargets& t = pc.targets;
-    t.bloom = nullptr;
-    if (!pc.settings.bloom || !mips_[0] || !t.hdrFinal) return;
-    ID3D12GraphicsCommandList* cmd = pc.cmd;
-    {
-        const float c[4] = {1.0f / t.hdrFinal->width, 1.0f / t.hdrFinal->height, pc.settings.bloomThreshold, 1};
-        mips_[0].Transition(cmd, kRt);
-        prefilter_.Draw(pc, {&mips_[0]}, pc.transient.SrvTable(pc.ctx, {t.hdrFinal}), c, 4);
-        mips_[0].Transition(cmd, kSrv);
-    }
-    for (uint32_t i = 1; i < kMips; ++i) {
-        const float c[4] = {1.0f / mips_[i - 1].width, 1.0f / mips_[i - 1].height, 0, 1};
-        mips_[i].Transition(cmd, kRt);
-        down_.Draw(pc, {&mips_[i]}, pc.transient.SrvTable(pc.ctx, {&mips_[i - 1]}), c, 4);
-        mips_[i].Transition(cmd, kSrv);
-    }
-    for (uint32_t i = kMips - 1; i > 0; --i) {
-        const float c[4] = {1.0f / mips_[i].width, 1.0f / mips_[i].height, 0, 1.0f};
-        mips_[i - 1].Transition(cmd, kRt);
-        up_.Draw(pc, {&mips_[i - 1]}, pc.transient.SrvTable(pc.ctx, {&mips_[i]}), c, 4);
-        mips_[i - 1].Transition(cmd, kSrv);
-    }
-    t.bloom = &mips_[0];
-}
-
 // ---- PostPass ----------------------------------------------------------------------------------
 
 bool PostPass::CreatePipelines(Dx12Context& ctx, const std::filesystem::path& shaderDir, uint32_t) {
@@ -773,11 +712,13 @@ bool PostPass::CreatePipelines(Dx12Context& ctx, const std::filesystem::path& sh
 void PostPass::Execute(PassContext& pc) {
     RenderTargets& t = pc.targets;
     const RenderSettings& s = pc.settings;
-    const float c[8] = {s.exposure, s.bloomIntensity / (float)BloomPass::kMips, s.contrast, s.saturation,
-                        s.vignette, s.transparentBackground ? 1.0f : 0.0f,
-                        (float)t.ldr.width / (float)t.ldr.height, t.bloom ? 1.0f : 0.0f};
+    const bool lutOn = t.lut && !pc.offscreen && s.lutIntensity > 0.0f;
+    const float c[12] = {s.exposure, s.bloomIntensity / (float)BloomPass::kMips, s.contrast, s.saturation,
+                         s.vignette, s.transparentBackground ? 1.0f : 0.0f,
+                         (float)t.ldr.width / (float)t.ldr.height, t.bloom ? 1.0f : 0.0f,
+                         lutOn ? s.lutIntensity : 0.0f, 0, 0, 0};
     t.ldr.Transition(pc.cmd, kRt);
-    pipe_.Draw(pc, {&t.ldr}, pc.transient.SrvTable(pc.ctx, {t.hdrFinal ? t.hdrFinal : &t.lit, t.bloom}), c, 8);
+    pipe_.Draw(pc, {&t.ldr}, pc.transient.SrvTable(pc.ctx, {t.hdrFinal ? t.hdrFinal : &t.lit, t.bloom, lutOn ? t.lut : nullptr}), c, 12);
     t.ldr.Transition(pc.cmd, kSrv);
 }
 

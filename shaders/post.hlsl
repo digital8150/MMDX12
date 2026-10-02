@@ -1,11 +1,13 @@
 // Final grade: bloom, exposure, contrast/saturation, Khronos PBR Neutral tonemap (keeps
 // MMD albedo colours intact below ~0.8), vignette, sRGB encode with dithering.
-//   t0 HDR, t1 bloom (may be null).
+//   t0 HDR, t1 bloom (may be null), t2 colour LUT strip (may be null).
 //   gP0 = (exposure, bloomIntensity, contrast, saturation), gP1 = (vignette, transparentBg, aspect, bloomOn)
+//   gP2.x = LUT intensity (0 = off)
 #include "fullscreen.hlsli"
 
 Texture2D<float4> gHdr : register(t0);
 Texture2D<float4> gBloomTex : register(t1);
+Texture2D<float4> gLut : register(t2);
 
 float3 PbrNeutral(float3 color) {
     const float startCompression = 0.8 - 0.04;
@@ -20,6 +22,19 @@ float3 PbrNeutral(float3 color) {
     color *= newPeak / peak;
     float g = 1.0 - 1.0 / (desaturation * (peak - newPeak) + 1.0);
     return lerp(color, newPeak.xxx, g);
+}
+
+// 32^3 LUT as a (32*32) x 32 strip: x = b * 32 + r, y = g (display-referred sRGB in and out).
+float3 SampleLut(float3 c) {
+    const float N = 32.0;
+    c = saturate(c);
+    float b = c.b * (N - 1.0);
+    float b0 = floor(b);
+    float b1 = min(b0 + 1.0, N - 1.0);
+    float2 uv = float2((c.r * (N - 1.0) + 0.5) / (N * N), (c.g * (N - 1.0) + 0.5) / N);
+    float3 s0 = gLut.SampleLevel(gLinear, uv + float2(b0 / N, 0.0), 0).rgb;
+    float3 s1 = gLut.SampleLevel(gLinear, uv + float2(b1 / N, 0.0), 0).rgb;
+    return lerp(s0, s1, b - b0);
 }
 
 float4 PSPost(FsOut i) : SV_Target {
@@ -37,6 +52,7 @@ float4 PSPost(FsOut i) : SV_Target {
     float2 v = (i.uv - 0.5) * float2(gP1.z, 1.0);
     c *= 1.0 - gP1.x * smoothstep(0.35, 1.05, length(v));
     c = LinearToSrgb(saturate(c));
+    if (gP2.x > 0.0) c = lerp(c, SampleLut(c), gP2.x);
     c += (Ign(i.pos.xy) - 0.5) / 255.0;
     float a = gP1.y > 0.5 ? saturate(src.a) : 1.0;
     return float4(c, a);

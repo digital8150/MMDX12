@@ -93,3 +93,56 @@ This commit also contains earlier uncommitted work that never got a progress ent
 - A temporal pass for RT effects (glossy reflections, soft RT shadows without noise) and reuse of PT history across slow camera moves.
 - Retune benchmark tiers per category; test one leaderboard submission (with consent).
 - A scrollable benchmark lobby for small windows.
+
+## 2026-10-02 — Post FX: depth of field, volumetric light, colour LUTs, FFT convolution bloom
+
+**Goal**: stronger graphics/post: 1) DoF 2) volumetrics 3) LUT 4) convolution bloom.
+
+This commit also contains earlier uncommitted RT work that never got a progress entry: two BLASes per model
+(single-/double-sided materials, `TRIANGLE_CULL_DISABLE` on the double-sided instance) so RT rays cull back faces
+like the raster pass, instance masks (stage 0x01, character 0x02), and the path tracer shading character
+materials with the raster toon sun (`ToonSun` in pathtrace.hlsl) instead of Lambert NEE.
+
+### Done
+- Pass order is now Composite → **Volumetric** → TAA → Upscale → **DoF** → Bloom (**mip chain or FFT**) → Post (**LUT**).
+  Pass code split: `PassCommon.h` (shared helpers), `PassBloom.cpp`, `PassDof.cpp`, `PassVolumetric.cpp`.
+- DoF (`dof.hlsl`, output res): signed CoC `aperture * (z - F) / z * maxRadius`, half-res Gustafsson golden-angle
+  gather (~64 taps, near field bleeds over the background), tent filter, full-res blend. Focus = view z of the
+  character's head bone (`FrameView::focusDistance`), otherwise autofocus on the screen centre.
+- Volumetric (`volumetric.hlsl` compute + `volumetric_apply.hlsl`): half render res, 32-step jittered march through
+  height fog; sun via the cascaded shadow map (ShadowPass now renders it on RT/PT too while volumetrics are on),
+  spot lights as cones (omni fills at 15% to avoid a uniform veil); depth-aware blur and additive upsample into lit.
+- Colour LUTs (`ColorLut.h/.cpp`): 32³ RGBA8 strip, six built-in looks (시네마틱, 따뜻한 필름, 차가운 밤, 애니 비비드,
+  빈티지, 흑백) + `.cube` files from `<exe>/luts` and `<library>/luts` (trilinear resample, DOMAIN_MIN/MAX).
+  `Renderer::SetColorLut` uploads; PostPass applies it after the sRGB encode with an intensity.
+- FFT convolution bloom (`bloom_fft.hlsl`): 512² grid, R+iG / B+i0 packing, radix-2 Stockham FFT in groupshared
+  (rows → columns × kernel spectrum → inverse columns → inverse rows), procedural kernel (core + halo + 3 spike lines
+  = 6-ray starburst) normalised by K(0,0), cached spectrum. Output written into the bloom mip 0, so PostPass is unchanged.
+- App: settings + ini (`dof`, `dofAperture`, `volumetric`, `volumetricDensity`, `bloomConvolution`, `colorLut`,
+  `lutIntensity`), 세부 설정 → 효과 / 컬러 LUT UI (independent of the quality presets), CLI `--dof`, `--volumetric`,
+  `--bloom-conv`, `--lut <name|none>` (restored on exit). The benchmark forces all four off.
+- Way of working: Claude wrote the contracts (headers, stubs, settings/CLI plumbing); five opencode (GLM) workers
+  implemented DoF, volumetric, FFT bloom, LUT and UI in parallel; Claude reviewed, fixed and tuned.
+
+### Pitfalls found
+- `line` is a reserved word in HLSL: DXC failed on `bloom_fft.hlsl`, and the bloom silently fell back to the mip chain.
+  The worker reported it as working. Grep `mmdx12.log` for `[E]`/`[W]` (not "ERROR") after every capture.
+- Worker bugs fixed: the kernel-generation dispatch had an empty UAV table (kernel never written → 0/0); the FFT grid
+  was read as an SRV while still in UAV state; the `.cube` loader kept `PathToUtf8(...).c_str()` of a temporary.
+- Validating the FFT: replace `CSInput` with a single bright texel at the grid centre (bin shader copy) — the output
+  must show the kernel centred on screen.
+- First volumetric constants washed the image out (strong height falloff left the overhead spot cones empty while the
+  omni fill lit the whole volume). Now sigma0 0.005, falloff 0.02, spot boost 3.
+
+### Not verified / not done
+- No visible sun shafts in the test stages (nothing occludes the sun); only checked as an even atmospheric haze.
+- Starburst spikes are subtle on these scenes (no point-like HDR highlights). Kernel parameters are constants in
+  `PassBloom.cpp`, not user settings.
+- The new UI section was not captured (the advanced panel is collapsed by default); only built and run.
+- No performance measurement of the new passes.
+- XeSS shows dotted stair-stepping on hair silhouettes, also with every new effect off (pre-existing).
+
+### Next
+- Sun-shaft test scene (or a stage with windows), temporal reuse for the volumetric march.
+- Expose DoF focus mode (head / centre / manual) and the bloom kernel shape; per-preset LUT defaults.
+- Investigate the XeSS hair artefact (reactive/transparency mask).

@@ -135,8 +135,10 @@ bool Renderer::Initialize(Dx12Context& ctx, const std::filesystem::path& shaderD
     passes_.push_back(std::make_unique<SsaoPass>());
     passes_.push_back(std::make_unique<SsrPass>());
     passes_.push_back(std::make_unique<CompositePass>());
+    passes_.push_back(std::make_unique<VolumetricPass>());
     passes_.push_back(std::make_unique<TaaPass>());
     passes_.push_back(std::make_unique<UpscalePass>());
+    passes_.push_back(std::make_unique<DofPass>());
     passes_.push_back(std::make_unique<BloomPass>());
     passes_.push_back(std::make_unique<PostPass>());
     passes_.push_back(std::make_unique<BackdropPass>());
@@ -626,6 +628,22 @@ bool Renderer::UpscalerAvailable(UpscalerKind kind) const {
     return k < 4 && upscalerAvailable_[k];
 }
 
+void Renderer::SetColorLut(const ImageRGBA8* strip) {
+    if (!ctx_) return;
+    lut_.Release(*ctx_);  // deferred: frames in flight may still sample it
+    targets_.lut = nullptr;
+    if (!strip || strip->Empty()) return;
+    UploadBatch batch(*ctx_);
+    lut_.res = batch.CreateTexture(*strip, L"color.lut");
+    batch.Submit();
+    if (!lut_.res) return;
+    lut_.state = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+    lut_.format = lut_.srvFormat = DXGI_FORMAT_R8G8B8A8_UNORM;
+    lut_.width = strip->Width();
+    lut_.height = strip->Height();
+    targets_.lut = &lut_;
+}
+
 void Renderer::Shutdown() {
     if (!ctx_) return;
     ctx_->WaitForGpu();
@@ -643,6 +661,8 @@ void Renderer::Shutdown() {
     }
     ReleaseTargets();
     targets_.shadowMap.Release(*ctx_);
+    lut_.Release(*ctx_);
+    targets_.lut = nullptr;
     passes_.clear();
     pipelineMsaa_ = 0;
     transient_.Release(*ctx_);

@@ -85,6 +85,13 @@ bool AppSettings::Load(const std::filesystem::path& file) {
         else if (key == "upscalerQuality" && ParseInt(value, i)) upscalerQuality = i;
         else if (key == "ptSamples" && ParseInt(value, i)) ptSamples = i;
         else if (key == "ptBounces" && ParseInt(value, i)) ptBounces = i;
+        else if (key == "dof" && ParseBool(value, b)) dof = b;
+        else if (key == "dofAperture" && ParseFloat(value, f)) dofAperture = f;
+        else if (key == "volumetric" && ParseBool(value, b)) volumetric = b;
+        else if (key == "volumetricDensity" && ParseFloat(value, f)) volumetricDensity = f;
+        else if (key == "bloomConvolution" && ParseBool(value, b)) bloomConvolution = b;
+        else if (key == "colorLut") colorLut = value;
+        else if (key == "lutIntensity" && ParseFloat(value, f)) lutIntensity = f;
         else if (key == "leaderboardUrl") leaderboardUrl = value;
         else if (key == "lastCharacter") lastCharacter = value;
         else if (key == "lastStage") lastStage = value;
@@ -105,6 +112,9 @@ bool AppSettings::Load(const std::filesystem::path& file) {
     upscalerQuality = std::clamp(upscalerQuality, 0, 4);
     ptSamples = std::clamp(ptSamples, 1, 4);
     ptBounces = std::clamp(ptBounces, 1, 6);
+    dofAperture = std::clamp(dofAperture, 0.2f, 3.0f);
+    volumetricDensity = std::clamp(volumetricDensity, 0.25f, 4.0f);
+    lutIntensity = std::clamp(lutIntensity, 0.0f, 1.0f);
     volume = std::clamp(volume, 0.0f, 1.0f);
     windowWidth = std::clamp(windowWidth, 640, 7680);
     windowHeight = std::clamp(windowHeight, 360, 4320);
@@ -134,6 +144,10 @@ bool AppSettings::Save(const std::filesystem::path& file) const {
     std::fprintf(f, "upscalerQuality=%d\n", upscalerQuality);
     std::fprintf(f, "ptSamples=%d\n", ptSamples);
     std::fprintf(f, "ptBounces=%d\n", ptBounces);
+    std::fprintf(f, "dof=%d\ndofAperture=%.3f\n", dof ? 1 : 0, dofAperture);
+    std::fprintf(f, "volumetric=%d\nvolumetricDensity=%.3f\n", volumetric ? 1 : 0, volumetricDensity);
+    std::fprintf(f, "bloomConvolution=%d\n", bloomConvolution ? 1 : 0);
+    std::fprintf(f, "colorLut=%s\nlutIntensity=%.3f\n", colorLut.c_str(), lutIntensity);
     std::fprintf(f, "leaderboardUrl=%s\n", leaderboardUrl.c_str());
     std::fprintf(f, "lastCharacter=%s\n", lastCharacter.c_str());
     std::fprintf(f, "lastStage=%s\n", lastStage.c_str());

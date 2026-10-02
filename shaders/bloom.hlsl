@@ -1,6 +1,7 @@
 // Physically based bloom (Jimenez 2014): 13-tap downsample chain with a Karis-averaged,
 // soft-thresholded first step, then 3x3 tent upsampling added back up the chain.
 //   t0 source.  gP0.xy = source texel size, gP0.z = threshold, gP0.w = upsample radius scale.
+// PSFftOutput: convolution bloom output (bloom_fft.hlsl), reads the convolved grid from the SRV table.
 #include "fullscreen.hlsli"
 
 Texture2D<float4> gSrc : register(t0);
@@ -55,4 +56,12 @@ float4 PSUp(FsOut i) : SV_Target {
     s += gSrc.SampleLevel(gLinear, i.uv + t * float2(-1, -1), 0).rgb + gSrc.SampleLevel(gLinear, i.uv + t * float2(1, -1), 0).rgb +
          gSrc.SampleLevel(gLinear, i.uv + t * float2(-1, 1), 0).rgb + gSrc.SampleLevel(gLinear, i.uv + t * float2(1, 1), 0).rgb;
     return float4(s / 16.0, 1.0);
+}
+
+// Convolution bloom output: t0 = convolved FFT grid (RGBA32F). gP0.xy = content offset / N, gP0.zw = content size / N,
+// gP1.x = gain.
+float4 PSFftOutput(FsOut i) : SV_Target {
+    float2 g = gP0.xy + i.uv * gP0.zw;
+    float3 c = gSrc.SampleLevel(gLinear, g, 0).xyz;
+    return float4(max(c, 0.0) * gP1.x, 1.0);
 }

@@ -8,6 +8,7 @@
 #include "app/ThumbnailCache.h"
 #include "asset/AssetLibrary.h"
 #include "audio/AudioPlayer.h"
+#include "render/ColorLut.h"
 #include "render/Dx12Context.h"
 #include "render/Renderer.h"
 #include <Windows.h>
@@ -42,6 +43,8 @@ namespace mmdx {
 //   --upscaler <none|dlss|fsr|xess>    upscaler for this run (override settings)
 //   --upscale-quality <native|quality|balanced|performance|ultra>  upscaler quality for this run
 //   --no-physics           disable rigid-body physics for this run
+//   --dof <0|1>  --volumetric <0|1>  --bloom-conv <0|1>   post effects for this run
+//   --lut <substr|none>    colour LUT for this run (first LUT whose id or name contains substr)
 struct AppOptions {
     std::filesystem::path libraryOverride;
     std::string character, stage, song;
@@ -63,6 +66,8 @@ struct AppOptions {
     int upscaler = -1;         // --upscaler <none|dlss|fsr|xess>: override settings for this run
     int upscalerQuality = -1;  // --upscale-quality <native|quality|balanced|performance|ultra>: override settings for this run
     bool noPhysics = false;    // --no-physics: override settings for this run
+    int dof = -1, volumetric = -1, bloomConv = -1;  // --dof/--volumetric/--bloom-conv <0|1>: override for this run
+    std::string lut;           // --lut <substr|none>: override for this run (resolved against the LUT list)
     std::string startScreen;  // --screen select|bench: open that screen after the scan; --frames then counts every frame  // --free-camera: start in the orbit camera instead of the VMD camera
 };
 AppOptions ParseCommandLine(int argc, wchar_t** argv);  // unknown args are logged and ignored
@@ -102,6 +107,8 @@ private:
     void ApplyCommandLinePreselection();
     void ApplyRenderSettings();
     void ApplyGraphicsPreset(int preset);  // sets the effect toggles of AppSettings
+    void RefreshColorLuts();            // rescans luts_, resolves options_.lut
+    void ApplyColorLut();               // uploads settings_.colorLut when it differs from appliedLut_
 
     // --- scene (App.cpp)
     void StartLoad(LoadTarget target, const CharacterAsset* ch, const StageAsset* st, const SongAsset* song);
@@ -162,6 +169,8 @@ private:
     int libraryTab_ = 0;          // 0 characters, 1 stages, 2 songs
     bool advancedOpen_ = false;
     std::filesystem::path assetsDir_;
+    std::vector<ColorLutEntry> luts_;   // built-in looks + .cube files (ListColorLuts)
+    std::string appliedLut_ = "\x01";   // id currently uploaded to the renderer ("\x01" = nothing applied yet)
 
     // loading
     LoadTarget loadTarget_ = LoadTarget::Play;

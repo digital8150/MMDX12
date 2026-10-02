@@ -86,6 +86,7 @@ struct RenderTargets {
     Texture* hdrFinal = nullptr;  // input of PostPass: &lit, the TAA output, or the upscaler output (output res)
     Texture* bloom = nullptr;     // half output res, BloomPass
     Texture* uiBackdrop = nullptr;  // RGBA8, blurred final image for frosted UI panels
+    Texture* lut = nullptr;         // colour LUT strip (kColorLutSize^2 x kColorLutSize RGBA8), Renderer::SetColorLut; null = none
 };
 
 class RtScene;

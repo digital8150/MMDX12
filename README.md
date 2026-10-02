@@ -31,6 +31,11 @@ Rendering features:
 - **Path tracing**: 1–4 samples per pixel with a temporal + à-trous denoiser (패스 트레이싱).
 - **Upscalers**: DLSS, FSR and XeSS (품질/균형/성능/울트라); the DLLs are fetched with
   `tools/fetch_sdks.ps1`.
+- **Post effects** (세부 설정 → 효과, independent of the quality presets, off in the benchmark):
+  depth of field focused on the character's head (bokeh gather, 조리개), volumetric light (half-res
+  ray march through height fog: sun via the shadow map, stage spotlight cones; 안개 밀도), FFT
+  convolution bloom with a starburst kernel, and colour LUTs (six built-in looks plus any `.cube`
+  file in `<exe>/luts` or `<library>/luts`, with an intensity slider).
 - **Benchmark categories**: `dx12-rt-fhd`, `dx12-rt-4k`, `dx12-pt-fhd`, `dx12-pt-4k` alongside the
   raster ones.
 
@@ -49,6 +54,7 @@ Command line (also used for automated checks):
 --frames <n>  --capture <out.png>  --width <w> --height <h>  --debug
 --free-camera  --camera tx,ty,tz,yaw,pitch,dist  --paused  --lighting 0..3  --quality 0..3  --no-physics
 --render raster|rt|pt  --upscaler none|dlss|fsr|xess  --upscale-quality native|quality|balanced|performance|ultra
+--dof 0|1  --volumetric 0|1  --bloom-conv 0|1  --lut <name|none>
 --screen select|stages|songs|settings|bench   (UI capture testing)
 ```
 
@@ -72,13 +78,15 @@ src/anim    ModelInstance (bone hierarchy, append bones, CCD IK with limits, ver
 src/render  Dx12Context (device, swap chain, frame pacing, descriptor heaps, uploads, capture)
             Renderer = ordered IRenderPass list (Passes.h): Shadow (3 cascades) -> Scene (MSAA MRT:
             HDR colour, view normal + reflectivity, velocity) -> Resolve -> SSAO -> SSR -> Composite
-            (AO, reflections, haze) -> TAA (optional) -> Bloom -> Post (PBR Neutral tonemap, grade,
-            vignette) -> UI backdrop blur -> Present
+            (AO, reflections, haze) -> Volumetric -> TAA (optional) -> Upscale -> DoF -> Bloom (mip
+            chain or FFT convolution) -> Post (PBR Neutral tonemap, grade, LUT, vignette) -> UI
+            backdrop blur -> Present
             GpuModel (GPU skinning via StructuredBuffer, morph delta stream), IUpscaler seam
 src/app     App state machine + ImGui screens, scene loader (worker thread), benchmark, leaderboard (WinHTTP)
 src/audio   miniaudio playback; audio cursor is the master clock
 shaders     mmd.hlsl (MMD toon + shadows through the toon ramp, punctual lights, rim, sky, studio
-            floor, shadow map), resolve/ssao/ssr/composite/taa/bloom/post/present.hlsl
+            floor, shadow map), resolve/ssao/ssr/composite/taa/bloom/post/present.hlsl,
+            dof, volumetric(_apply), bloom_fft (compute FFT)
 tools       asset_probe, anim_probe, render_smoke (headless-ish self tests)
 ```
 

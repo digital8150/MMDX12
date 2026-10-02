@@ -26,6 +26,14 @@ struct AppSettings {
     int upscalerQuality = 1;   // UpscalerQuality: 0 native AA, 1 quality, 2 balanced, 3 performance, 4 ultra performance
     int ptSamples = 1;         // 1, 2, 4
     int ptBounces = 3;         // 1..6
+    // Post effects (independent of graphicsPreset; the benchmark turns them all off).
+    bool dof = false;
+    float dofAperture = 1.0f;        // 0.2 .. 3.0
+    bool volumetric = false;
+    float volumetricDensity = 1.0f;  // 0.25 .. 4.0
+    bool bloomConvolution = false;
+    std::string colorLut;            // ColorLutEntry::id, empty = none
+    float lutIntensity = 1.0f;       // 0 .. 1
     std::string leaderboardUrl = "https://home.codingbot.kr/api/benchmark";
     std::string lastCharacter, lastStage, lastSong;  // asset ids
     int windowWidth = 1600, windowHeight = 900;

@@ -25,6 +25,46 @@ static const float kAmbientEmission = 0.5;
 
 float3 SunIrradiance() { return SrgbToLinear(gLightColor) * (PI * 3.0) * gSunIntensity; }
 
+// Character materials keep the raster toon model (mmd.hlsl PSMain) for the sun: a physical
+// Lambert term models faces into 3D shading, which MMD rigs are not authored for. The sun
+// visibility `sh` comes from a traced shadow ray instead of the shadow map. Linear output.
+float3 ToonSun(RtGeometry g, float4 tex, float2 uv, float3 n, float3 V, float sh) {
+    float3 L = -gLightDir;
+    float3 lit = saturate(g.ambient + g.diffuse.rgb * gLightColor) * tex.rgb;
+    if (g.flags & (MAT_SPHERE_MUL | MAT_SPHERE_ADD)) {
+        float3 nv = normalize(mul(n, (float3x3)gView));
+        float2 suv = nv.xy * float2(0.5, -0.5) + 0.5;
+        float3 sp = gBindlessTex[NonUniformResourceIndex(g.sphereSrv)].SampleLevel(gLinear, suv, 0).rgb;
+        if (g.flags & MAT_SPHERE_MUL) lit *= sp; else lit += sp;
+    }
+    float ndl = dot(n, L);
+    float flat = (g.flags & MAT_FLAT) ? 1.0 : 0.0;
+    float3 c;
+    if (g.flags & MAT_TOON_MAP) {
+        // Project Sekai layout: the "toon" is the painted shadow colour at the same UV.
+        float3 shadowTex = gBindlessTex[NonUniformResourceIndex(g.toonSrv)].SampleLevel(gRtWrap, uv, 0).rgb;
+        float term = sh * lerp(smoothstep(-0.03, 0.06, ndl), 1.0, flat);
+        c = lerp(saturate(g.ambient + g.diffuse.rgb * gLightColor) * shadowTex, lit, term);
+    } else if (g.flags & MAT_HAS_TOON) {
+        float v = lerp(1.0, saturate(0.5 - 0.5 * ndl), sh);
+        c = lit * gBindlessTex[NonUniformResourceIndex(g.toonSrv)].SampleLevel(gLinear, float2(0.5, v), 0).rgb;
+    } else {
+        c = lit;
+    }
+    if (!(g.flags & MAT_TOON_MAP)) {
+        float term = lerp(sh * smoothstep(-0.12, 0.22, ndl), lerp(1.0, sh, 0.8), flat);
+        float3 shade = c * lerp(1.0, saturate(c), 0.55) * float3(0.90, 0.90, 0.96);
+        c = lerp(shade, c, term);
+    }
+    if (g.specularPower > 0.0)
+        c += pow(saturate(dot(normalize(L + V), n)), g.specularPower) * g.specular * gLightColor * sh;
+    float3 color = SrgbToLinear(saturate(c)) * gSunIntensity;
+    float rim = pow(1.0 - saturate(dot(n, V)), 4.0);
+    float side = smoothstep(-0.2, 0.5, ndl + 0.25);
+    color += gRimColor * rim * side * sh * gRimStrength * gSunIntensity * (1.0 - 0.6 * flat);
+    return color;
+}
+
 [numthreads(8, 8, 1)]
 void CSPathTrace(uint3 id : SV_DispatchThreadID) {
     uint w, h;
@@ -82,6 +122,8 @@ void CSPathTrace(uint3 id : SV_DispatchThreadID) {
             float3 pos, prevPos, n, faceN, albedo;
             float refl, rough;
             bool receive;
+            bool toon = false;    // character material: raster toon sun, no Lambert NEE
+            float flat = 0.0;     // MAT_FLAT (faces): even fill instead of traced indirect
             if (hitMesh) {
                 RtGeometry g = LoadGeometry(hit.instanceId, hit.geometryIndex);
                 RtSurface sf = FetchSurface(g, hit.prim, hit.bary);
@@ -95,8 +137,24 @@ void CSPathTrace(uint3 id : SV_DispatchThreadID) {
                 refl = r;
                 rough = clamp(sqrt(2.0 / (g.specularPower + 2.0)), 0.03, 0.6);
                 receive = (g.flags & MAT_RECEIVE) != 0;
-                radiance += throughput * SrgbToLinear(saturate(g.ambient * tex.rgb)) * gSunIntensity * kAmbientEmission;
                 pos = sf.pos; prevPos = sf.prevPos; n = sf.normal; faceN = sf.faceNormal;
+                if (g.flags & MAT_STAGE) {
+                    radiance += throughput * SrgbToLinear(saturate(g.ambient * tex.rgb)) * gSunIntensity * kAmbientEmission;
+                } else {
+                    toon = true;
+                    flat = (g.flags & MAT_FLAT) ? 1.0 : 0.0;
+                    float sh = 1.0;
+                    if (receive) {
+                        float3 sd = SampleCone(float2(Rand(rng), Rand(rng)), -gLightDir, kSunCosMax);
+                        sh = TraceShadowRay(OffsetRayOrigin(pos, faceN), sd, 1e5);
+                    }
+                    radiance += throughput * ToonSun(g, tex, sf.uv, n, -dir, sh);
+                    if (flat > 0.5) {
+                        // raster flat fill: no sky/ground gradient and no occlusion modelling the face
+                        float3 fill = lerp(gGroundColor, gSkyZenith, 0.65) * gSunIntensity * gHemiStrength;
+                        radiance += throughput * albedo * fill;
+                    }
+                }
             } else {
                 pos = origin + dir * tp;
                 prevPos = pos;
@@ -125,7 +183,7 @@ void CSPathTrace(uint3 id : SV_DispatchThreadID) {
             // sun next-event estimation (diffuse lobe)
             float3 L = -gLightDir;
             float ndl = dot(n, L);
-            if (ndl > 0.0 && dot(faceN, L) > 0.0) {
+            if (!toon && ndl > 0.0 && dot(faceN, L) > 0.0) {
                 float3 sd = SampleCone(float2(Rand(rng), Rand(rng)), L, kSunCosMax);
                 float vis = receive ? TraceShadowRay(OffsetRayOrigin(pos, faceN), sd, 1e5) : 1.0;
                 radiance += throughput * (1.0 - pSpec) * albedo / PI * SunIrradiance() * ndl * vis;
@@ -142,13 +200,18 @@ void CSPathTrace(uint3 id : SV_DispatchThreadID) {
                 float atten = x * x / (1.0 + dist * dist * 0.0004);
                 if (l.cosOuter > -1.0) atten *= smoothstep(l.cosOuter, l.cosInner, dot(-ld, l.dir));
                 float ndlp = dot(n, ld);
-                if (atten > 0.0 && ndlp > 0.0) {
-                    float vis = TraceShadowRay(OffsetRayOrigin(pos, faceN), ld, max(dist - 0.05, 0.0));
-                    radiance += throughput * (1.0 - pSpec) * albedo * l.color * atten * ndlp * vis * (float)nl;
+                // characters: the raster soft toon terminator (flat: almost no N.L)
+                float diff = toon ? lerp(smoothstep(-0.05, 0.25, ndlp), saturate(ndlp * 0.3 + 0.7), flat) : ndlp;
+                if (atten > 0.0 && diff > 0.0) {
+                    // Preset lights hang on a virtual truss that is not part of the stage (often above
+                    // its ceiling) and are unshadowed in raster: only characters occlude them.
+                    float vis = TraceShadowRayMasked(OffsetRayOrigin(pos, faceN), ld, max(dist - 0.05, 0.0),
+                                                     RT_MASK_CHARACTER);
+                    radiance += throughput * (1.0 - pSpec) * albedo * l.color * atten * diff * vis * (float)nl;
                 }
             }
 
-            if (bounce == bounces) break;
+            if (bounce == bounces || flat > 0.5) break;
 
             // next direction: Fresnel-weighted specular vs cosine diffuse
             float3 nextDir;
