@@ -40,6 +40,7 @@ private:
 struct DeviceCaps {
     std::string adapterName;           // UTF-8, from DXGI_ADAPTER_DESC1::Description
     uint64_t dedicatedVideoMemory = 0; // bytes
+    uint32_t vendorId = 0;             // PCI vendor: 0x10DE NVIDIA, 0x1002 AMD, 0x8086 Intel
     D3D_FEATURE_LEVEL featureLevel = D3D_FEATURE_LEVEL_11_0;
     D3D_SHADER_MODEL shaderModel = D3D_SHADER_MODEL_5_1;
     D3D12_RAYTRACING_TIER raytracingTier = D3D12_RAYTRACING_TIER_NOT_SUPPORTED;

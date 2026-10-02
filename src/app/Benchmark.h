@@ -3,21 +3,33 @@
 #include <string>
 #include <vector>
 
+#include "render/RenderTypes.h"
+
 namespace mmdx {
 
 struct BenchmarkCategory {
-    const char* id;      // leaderboard category id (server whitelist)
-    const char* label;   // UI label
+    const char* id;        // leaderboard category id (server whitelist)
+    const char* label;     // UI label
     uint32_t width, height;
+    RenderPath path;
+    const char* resLabel;  // "FHD" / "4K"
+    const char* pathLabel; // "Raster" / "RT" / "PT" (short, Latin)
 };
 
 inline constexpr BenchmarkCategory kBenchCategories[] = {
-    {"dx12-raster-fhd", "DX12 Raster · FHD (1920x1080)", 1920, 1080},
-    {"dx12-raster-4k",  "DX12 Raster · 4K (3840x2160)",  3840, 2160},
+    {"dx12-raster-fhd", "DX12 Raster · FHD (1920x1080)", 1920, 1080, RenderPath::Raster, "FHD", "Raster"},
+    {"dx12-raster-4k",  "DX12 Raster · 4K (3840x2160)",  3840, 2160, RenderPath::Raster, "4K", "Raster"},
+    {"dx12-rt-fhd",     "DX12 Ray Tracing · FHD (1920x1080)", 1920, 1080, RenderPath::RayTraced, "FHD", "RT"},
+    {"dx12-rt-4k",      "DX12 Ray Tracing · 4K (3840x2160)",  3840, 2160, RenderPath::RayTraced, "4K", "RT"},
+    {"dx12-pt-fhd",     "DX12 Path Tracing · FHD (1920x1080)", 1920, 1080, RenderPath::PathTraced, "FHD", "PT"},
+    {"dx12-pt-4k",      "DX12 Path Tracing · 4K (3840x2160)",  3840, 2160, RenderPath::PathTraced, "4K", "PT"},
 };
+// Index helpers: category = pathIndex * 2 + resIndex (pathIndex 0 raster, 1 RT, 2 PT; resIndex 0 FHD, 1 4K).
+inline constexpr int kBenchPathCount = 3;
 
 // Fixed workload: the animation advances exactly kBenchSimStep MMD-seconds per rendered
-// frame (independent of wall time), audio muted, vsync off. The first kBenchWarmupFrames
+// frame (independent of wall time), audio muted, vsync off, no upscaler, TAA off.
+// Raster and RT use MSAA 4x; PT uses 1 sample per pixel, 3 bounces. The first kBenchWarmupFrames
 // are not measured, then kBenchMeasuredFrames are timed.
 inline constexpr int kBenchWarmupFrames = 120;
 inline constexpr int kBenchMeasuredFrames = 3600;

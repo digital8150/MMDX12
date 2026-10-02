@@ -1,5 +1,6 @@
 // anim_probe <model.pmx> <motion.vmd> [camera.vmd]
-// Binds a motion, evaluates a few frames and checks IK convergence (effector vs IK goal distance).
+// Binds a motion, evaluates a few frames and checks IK convergence (effector vs IK goal distance),
+// then plays the motion with physics and flags exploding rigs. PHYS_DUMP=1 lists bodies + joints.
 #include "anim/ModelInstance.h"
 #include "anim/Motion.h"
 #include "asset/PmxModel.h"
@@ -24,6 +25,27 @@ int wmain(int argc, wchar_t** argv) {
            pmx->name.c_str(), pmx->bones.size(), pmx->morphs.size(), vmd.boneKeys.size(),
            motion->BoundBoneCount(), motion->BoundMorphCount(), motion->EndFrame());
 
+    if (getenv("PHYS_DUMP")) {  // list rigid bodies and joints, then exit
+        for (size_t i = 0; i < pmx->rigidBodies.size(); ++i) {
+            const auto& r = pmx->rigidBodies[i];
+            printf("RB %zu %s bone=%d(%s) mode=%d shape=%d size=%.2f %.2f %.2f pos=%.2f %.2f %.2f rot=%.2f %.2f %.2f "
+                   "mass=%.3f damp=%.2f %.2f rest=%.2f fr=%.2f grp=%d mask=%04x\n",
+                   i, r.name.c_str(), r.boneIndex, r.boneIndex >= 0 ? pmx->bones[r.boneIndex].name.c_str() : "-",
+                   r.physicsMode, r.shape, r.size.x, r.size.y, r.size.z, r.position.x, r.position.y, r.position.z,
+                   r.rotation.x, r.rotation.y, r.rotation.z, r.mass, r.linearDamping, r.angularDamping, r.restitution,
+                   r.friction, r.group, r.collisionMask);
+        }
+        for (size_t i = 0; i < pmx->joints.size(); ++i) {
+            const auto& j = pmx->joints[i];
+            printf("J %zu %s %d-%d lin %.2f..%.2f %.2f..%.2f %.2f..%.2f ang %.2f..%.2f %.2f..%.2f %.2f..%.2f "
+                   "sl %.1f %.1f %.1f sa %.1f %.1f %.1f\n",
+                   i, j.name.c_str(), j.rigidBodyA, j.rigidBodyB, j.linearMin.x, j.linearMax.x, j.linearMin.y,
+                   j.linearMax.y, j.linearMin.z, j.linearMax.z, j.angularMin.x, j.angularMax.x, j.angularMin.y,
+                   j.angularMax.y, j.angularMin.z, j.angularMax.z, j.springLinear.x, j.springLinear.y,
+                   j.springLinear.z, j.springAngular.x, j.springAngular.y, j.springAngular.z);
+        }
+        return 0;
+    }
     ModelInstance inst(pmx);
     const char* watch[] = {"センター", "頭", "左足首", "右足首", "左つま先", "右つま先"};
     for (float f : {0.0f, 300.0f, 900.0f, 1800.0f}) {
@@ -87,6 +109,41 @@ int wmain(int argc, wchar_t** argv) {
     for (int i = 0; i < iters; ++i) { motion->Evaluate((float)i * 0.5f, inst); inst.UpdatePose(); }
     const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count() / iters;
     printf("evaluate+UpdatePose: %.3f ms/frame\n", ms);
+
+    if (!pmx->rigidBodies.empty()) {
+        // Play the whole motion at 60 fps with physics; flag non-finite matrices and bodies that
+        // fly away (a simulated bone farther than 40 units from the center bone = an exploded rig).
+        inst.EnablePhysics(true);
+        inst.ResetPhysics();
+        int center = pmx->FindBone("センター");
+        if (center < 0) center = 0;
+        int bad = 0;
+        float worst = 0;
+        std::vector<bool> simulated(pmx->bones.size(), false);
+        for (const PmxRigidBody& r : pmx->rigidBodies)
+            if (r.physicsMode != 0 && r.boneIndex >= 0 && r.boneIndex < (int)simulated.size()) simulated[r.boneIndex] = true;
+        auto p0 = std::chrono::steady_clock::now();
+        int steps = 0;
+        for (float f = 0; f <= motion->EndFrame() && bad < 5; f += 0.5f, ++steps) {
+            motion->Evaluate(f, inst);
+            inst.UpdatePose(1.0f / 60.0f);
+            const auto c = inst.BoneWorldPosition(center);
+            for (size_t b = 0; b < pmx->bones.size(); ++b) {
+                if (!simulated[b]) continue;
+                const auto p = inst.BoneWorldPosition((int)b);
+                const float d = std::sqrt((p.x - c.x) * (p.x - c.x) + (p.y - c.y) * (p.y - c.y) + (p.z - c.z) * (p.z - c.z));
+                worst = std::isfinite(d) ? std::max(worst, d) : 1e30f;
+                if (!std::isfinite(d) || d > 40.0f) {
+                    printf("PHYSICS BAD frame %.1f bone %zu '%s' dist %.1f\n", f, b, pmx->bones[b].name.c_str(), d);
+                    ++bad;
+                    break;
+                }
+            }
+        }
+        const double pms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - p0).count() / std::max(steps, 1);
+        printf("physics scan: %d bad frames, max simulated-bone distance from center %.1f, %.3f ms/frame (evaluate+pose+physics)\n",
+               bad, worst, pms);
+    }
 
     if (argc >= 4) {
         VmdMotion cam;

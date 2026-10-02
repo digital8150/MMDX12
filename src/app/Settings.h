@@ -14,6 +14,18 @@ struct AppSettings {
     float renderScale = 1.0f;  // 0.5 .. 2.0
     float volume = 0.8f;       // 0 .. 1
     bool drawEdges = true;
+    bool physics = true;       // rigid-body physics (hair, skirts) on the character
+    // Graphics quality: 0 low, 1 medium, 2 high, 3 ultra, 4 custom (toggles below as set).
+    int graphicsPreset = 2;
+    bool shadows = true, ssao = true, ssr = true, bloom = true, taa = false;
+    int shadowMapSize = 2048;
+    int lighting = 0;          // LightingPreset (app/Lighting.h)
+    float exposure = 1.0f;     // 0.5 .. 2.0
+    int renderPath = 0;        // RenderPath: 0 raster, 1 ray traced, 2 path traced
+    int upscaler = 0;          // UpscalerKind: 0 none, 1 DLSS, 2 FSR, 3 XeSS
+    int upscalerQuality = 1;   // UpscalerQuality: 0 native AA, 1 quality, 2 balanced, 3 performance, 4 ultra performance
+    int ptSamples = 1;         // 1, 2, 4
+    int ptBounces = 3;         // 1..6
     std::string leaderboardUrl = "https://home.codingbot.kr/api/benchmark";
     std::string lastCharacter, lastStage, lastSong;  // asset ids
     int windowWidth = 1600, windowHeight = 900;

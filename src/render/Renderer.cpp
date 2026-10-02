@@ -1,15 +1,75 @@
-// Frame orchestration: ScenePass -> ResolvePass -> PresentPass.
+// Frame orchestration (see Passes.h for the pass list).
 #include "render/Renderer.h"
 #include "render/Passes.h"
-#include "render/ShaderInterop.h"
 #include "asset/ImageLoader.h"
 #include "asset/PmxModel.h"
 #include "core/Log.h"
 #include <directx/d3dx12.h>
 #include <algorithm>
+#include <cmath>
 #include <cstring>
 
 namespace mmdx {
+
+using namespace DirectX;
+
+namespace {
+
+constexpr uint32_t kCbSlots = Dx12Context::kFramesInFlight + 1;  // + RenderToImage
+constexpr uint32_t kOffscreenSlot = Dx12Context::kFramesInFlight;
+constexpr uint32_t kLightBytes = Renderer::kMaxPunctualLights * sizeof(GpuLight);
+
+// Cache: same requested value -> same result.
+uint32_t g_cachedRequestedMsaa = 0;
+uint32_t g_cachedMsaaResult = 0;
+
+uint32_t SupportedMsaa(Dx12Context& ctx, uint32_t requested) {
+    if (requested == g_cachedRequestedMsaa && g_cachedMsaaResult != 0) return g_cachedMsaaResult;
+    ID3D12Device* device = ctx.Device();
+    uint32_t n = requested;
+    const DXGI_FORMAT formats[] = {RenderTargets::kColorFormat, RenderTargets::kNormalFormat,
+                                   RenderTargets::kVelocityFormat, DXGI_FORMAT_D32_FLOAT};
+    while (n > 1) {
+        bool ok = true;
+        for (DXGI_FORMAT f : formats) {
+            D3D12_FEATURE_DATA_MULTISAMPLE_QUALITY_LEVELS q{};
+            q.Format = f;
+            q.SampleCount = n;
+            ok = ok && SUCCEEDED(device->CheckFeatureSupport(D3D12_FEATURE_MULTISAMPLE_QUALITY_LEVELS, &q, sizeof(q))) &&
+                 q.NumQualityLevels > 0;
+        }
+        if (ok) break;
+        n /= 2;
+    }
+    g_cachedRequestedMsaa = requested;
+    g_cachedMsaaResult = std::max(1u, n);
+    return g_cachedMsaaResult;
+}
+
+float Halton(uint32_t index, uint32_t base) {
+    float f = 1.0f, r = 0.0f;
+    while (index > 0) {
+        f /= (float)base;
+        r += f * (float)(index % base);
+        index /= base;
+    }
+    return r;
+}
+
+ComPtr<ID3D12Resource> CreateMappedUpload(ID3D12Device* device, uint64_t bytes, uint8_t** mapped, const wchar_t* name) {
+    D3D12_HEAP_PROPERTIES upload{D3D12_HEAP_TYPE_UPLOAD};
+    CD3DX12_RESOURCE_DESC desc = CD3DX12_RESOURCE_DESC::Buffer(bytes);
+    ComPtr<ID3D12Resource> res;
+    if (!CheckHr(device->CreateCommittedResource(&upload, D3D12_HEAP_FLAG_NONE, &desc,
+                                                 D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&res)),
+                 "CreateCommittedResource(upload)"))
+        return {};
+    res->SetName(name);
+    if (FAILED(res->Map(0, nullptr, (void**)mapped))) return {};
+    return res;
+}
+
+} // namespace
 
 void Renderer::CreateBuiltinTextures() {
     UploadBatch batch(*ctx_);
@@ -51,48 +111,35 @@ void Renderer::CreateBuiltinTextures() {
     batch.Submit();
 }
 
-namespace {
-
-// Cache: same requested value -> same result.
-uint32_t g_cachedRequestedMsaa = 0;
-uint32_t g_cachedMsaaResult = 0;
-
-uint32_t SupportedMsaa(Dx12Context& ctx, uint32_t requested) {
-    if (requested == g_cachedRequestedMsaa && g_cachedMsaaResult != 0) return g_cachedMsaaResult;
-
-    ID3D12Device* device = ctx.Device();
-    uint32_t n = requested;
-    while (n > 1) {
-        D3D12_FEATURE_DATA_MULTISAMPLE_QUALITY_LEVELS q{};
-        q.Format = RenderTargets::kColorFormat;
-        q.SampleCount = n;
-        BOOL okColor = SUCCEEDED(device->CheckFeatureSupport(D3D12_FEATURE_MULTISAMPLE_QUALITY_LEVELS, &q, sizeof(q))) &&
-                       q.NumQualityLevels > 0;
-        D3D12_FEATURE_DATA_MULTISAMPLE_QUALITY_LEVELS qd{};
-        qd.Format = RenderTargets::kDepthFormat;
-        qd.SampleCount = n;
-        BOOL okDepth = SUCCEEDED(device->CheckFeatureSupport(D3D12_FEATURE_MULTISAMPLE_QUALITY_LEVELS, &qd, sizeof(qd))) &&
-                       qd.NumQualityLevels > 0;
-        if (okColor && okDepth) break;
-        n /= 2;
-    }
-    g_cachedRequestedMsaa = requested;
-    g_cachedMsaaResult = n;
-    return n;
-}
-
-} // namespace
-
 bool Renderer::Initialize(Dx12Context& ctx, const std::filesystem::path& shaderDir) {
     ctx_ = &ctx;
     shaderDir_ = shaderDir;
-    upscaler_ = CreateUpscaler(settings_.upscaler);
+    for (UpscalerKind k : {UpscalerKind::DLSS, UpscalerKind::FSR, UpscalerKind::XeSS}) {
+        const size_t i = (size_t)k;
+        upscalers_[i] = CreateUpscaler(k);
+        upscalerAvailable_[i] = upscalers_[i]->Initialize(ctx);
+        LOG_INFO("upscaler %s: %s", upscalers_[i]->DisplayName(), upscalerAvailable_[i] ? "available" : "unavailable");
+    }
+    rt_ = std::make_unique<RtScene>();
+    rtSupported_ = rt_->Initialize(ctx, shaderDir);
+    if (!rtSupported_) rt_.reset();
 
     CreateBuiltinTextures();
+    if (!transient_.Create(ctx, kCbSlots)) return false;
 
     passes_.clear();
+    passes_.push_back(std::make_unique<ShadowPass>());
     passes_.push_back(std::make_unique<ScenePass>());
     passes_.push_back(std::make_unique<ResolvePass>());
+    passes_.push_back(std::make_unique<PathTracePass>());
+    passes_.push_back(std::make_unique<SsaoPass>());
+    passes_.push_back(std::make_unique<SsrPass>());
+    passes_.push_back(std::make_unique<CompositePass>());
+    passes_.push_back(std::make_unique<TaaPass>());
+    passes_.push_back(std::make_unique<UpscalePass>());
+    passes_.push_back(std::make_unique<BloomPass>());
+    passes_.push_back(std::make_unique<PostPass>());
+    passes_.push_back(std::make_unique<BackdropPass>());
     passes_.push_back(std::make_unique<PresentPass>());
 
     uint32_t msaa = SupportedMsaa(ctx, settings_.msaaSamples);
@@ -104,18 +151,12 @@ bool Renderer::Initialize(Dx12Context& ctx, const std::filesystem::path& shaderD
     }
     pipelineMsaa_ = msaa;
 
-    // Per-frame scene constants.
-    D3D12_HEAP_PROPERTIES upload{D3D12_HEAP_TYPE_UPLOAD};
-    CD3DX12_RESOURCE_DESC cbDesc = CD3DX12_RESOURCE_DESC::Buffer(256 * Dx12Context::kFramesInFlight);
-    if (!CheckHr(ctx.Device()->CreateCommittedResource(&upload, D3D12_HEAP_FLAG_NONE, &cbDesc,
-                                                       D3D12_RESOURCE_STATE_GENERIC_READ, nullptr,
-                                                       IID_PPV_ARGS(&sceneCb_)),
-                 "CreateCommittedResource(scene constants)"))
-        return false;
-    if (FAILED(sceneCb_->Map(0, nullptr, (void**)&sceneCbMapped_))) {
-        LOG_ERROR("failed to map scene constant buffer");
-        return false;
-    }
+    sceneCb_ = CreateMappedUpload(ctx.Device(), (uint64_t)kSceneCbSize * kCbSlots, &sceneCbMapped_, L"scene.cb");
+    lightBuf_ = CreateMappedUpload(ctx.Device(), (uint64_t)kLightBytes * kCbSlots, &lightBufMapped_, L"scene.lights");
+    if (!sceneCb_ || !lightBuf_) return false;
+
+    backdropSrv_ = ctx.SrvHeap().Allocate(1);
+
     // GPU timing.
     D3D12_QUERY_HEAP_DESC qh{};
     qh.Type = D3D12_QUERY_HEAP_TYPE_TIMESTAMP;
@@ -134,140 +175,306 @@ bool Renderer::Initialize(Dx12Context& ctx, const std::filesystem::path& shaderD
 }
 
 std::unique_ptr<GpuModel> Renderer::CreateModel(UploadBatch& batch, const PmxModel& pmx,
-                                                const std::vector<ImageRGBA8>& textures) {
+                                                const std::vector<ImageRGBA8>& textures, ModelRole role) {
     auto model = std::make_unique<GpuModel>();
-    if (!model->Create(*ctx_, batch, pmx, textures, builtin_)) return nullptr;
+    if (!model->Create(*ctx_, batch, pmx, textures, builtin_, role)) return nullptr;
     return model;
 }
 
 void Renderer::ReadGpuTimer() {
     if (!timestampReadback_ || timestampFrequency_ == 0) return;
     uint32_t slot = ctx_->FrameSlot();
-    const uint64_t* data = nullptr;
     D3D12_RANGE range{slot * 16, slot * 16 + 16};
     void* mapped = nullptr;
     if (FAILED(timestampReadback_->Map(0, &range, &mapped))) return;
-    data = (const uint64_t*)mapped;
-    if (data) {
-        uint64_t begin = data[0];
-        uint64_t end = data[1];
-        if (end > begin) stats_.gpuFrameMs = (float)((double)(end - begin) * 1000.0 / (double)timestampFrequency_);
-    }
+    const uint64_t* data = (const uint64_t*)mapped + slot * 2;
+    if (data[1] > data[0]) stats_.gpuFrameMs = (float)((double)(data[1] - data[0]) * 1000.0 / (double)timestampFrequency_);
     D3D12_RANGE readRange{0, 0};
     timestampReadback_->Unmap(0, &readRange);
 }
 
-void Renderer::EnsureTargets(uint32_t width, uint32_t height, uint32_t msaa) {
+void Renderer::EnsureShadowMap(uint32_t size) {
+    size = std::clamp(size, 512u, 4096u);
+    if (targets_.shadowMap && targets_.shadowMap.width == size) return;
+    ctx_->WaitForGpu();
+    targets_.shadowMap.Create(*ctx_, size, size, RenderTargets::kDepthFormat, D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL,
+                              D3D12_RESOURCE_STATE_DEPTH_WRITE, L"shadow.cascades", 1, kShadowCascades);
+}
+
+void Renderer::EnsureTargets(uint32_t width, uint32_t height, uint32_t outWidth, uint32_t outHeight, uint32_t msaa) {
     if (targets_.width == width && targets_.height == height && targets_.msaa == msaa && targets_.colorMsaa &&
-        targets_.colorResolved && targets_.colorMsaaRtv != DescriptorHeap::kInvalid &&
-        targets_.depthMsaaDsv != DescriptorHeap::kInvalid && targets_.colorResolvedSrv != DescriptorHeap::kInvalid)
+        targets_.outWidth == outWidth && targets_.outHeight == outHeight)
         return;
     ctx_->WaitForGpu();
     ReleaseTargets();
-
-    ID3D12Device* device = ctx_->Device();
-    UINT msaaCount = msaa > 1 ? msaa : 1;
-
-    // colorMsaa
-    {
-        CD3DX12_RESOURCE_DESC desc = CD3DX12_RESOURCE_DESC::Tex2D(
-            RenderTargets::kColorFormat, width, height, 1, 1, msaaCount, 0,
-            D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET);
-        D3D12_CLEAR_VALUE clearValue{RenderTargets::kColorFormat, {}};
-        memcpy(clearValue.Color, &settings_.clearColor, sizeof(float) * 4);
-        D3D12_HEAP_PROPERTIES def{D3D12_HEAP_TYPE_DEFAULT};
-        if (!CheckHr(device->CreateCommittedResource(&def, D3D12_HEAP_FLAG_NONE, &desc,
-                                                     D3D12_RESOURCE_STATE_RENDER_TARGET, &clearValue,
-                                                     IID_PPV_ARGS(&targets_.colorMsaa)),
-                     "CreateCommittedResource(colorMsaa)"))
-            return;
-        targets_.colorMsaaRtv = ctx_->RtvHeap().Allocate(1);
-        D3D12_RENDER_TARGET_VIEW_DESC rtv{};
-        rtv.Format = RenderTargets::kColorFormat;
-        rtv.ViewDimension = msaa > 1 ? D3D12_RTV_DIMENSION_TEXTURE2DMS : D3D12_RTV_DIMENSION_TEXTURE2D;
-        device->CreateRenderTargetView(targets_.colorMsaa.Get(), &rtv, ctx_->RtvHeap().Cpu(targets_.colorMsaaRtv));
-    }
-    // depthMsaa
-    {
-        CD3DX12_RESOURCE_DESC desc = CD3DX12_RESOURCE_DESC::Tex2D(
-            RenderTargets::kDepthFormat, width, height, 1, 1, msaaCount, 0,
-            D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL);
-        D3D12_CLEAR_VALUE clearValue{RenderTargets::kDepthFormat};
-        clearValue.DepthStencil.Depth = 1.0f;
-        clearValue.DepthStencil.Stencil = 0;
-        D3D12_HEAP_PROPERTIES def{D3D12_HEAP_TYPE_DEFAULT};
-        if (!CheckHr(device->CreateCommittedResource(&def, D3D12_HEAP_FLAG_NONE, &desc,
-                                                     D3D12_RESOURCE_STATE_DEPTH_WRITE, &clearValue,
-                                                     IID_PPV_ARGS(&targets_.depthMsaa)),
-                     "CreateCommittedResource(depthMsaa)"))
-            return;
-        targets_.depthMsaaDsv = ctx_->DsvHeap().Allocate(1);
-        D3D12_DEPTH_STENCIL_VIEW_DESC dsv{};
-        dsv.Format = RenderTargets::kDepthFormat;
-        dsv.ViewDimension = msaa > 1 ? D3D12_DSV_DIMENSION_TEXTURE2DMS : D3D12_DSV_DIMENSION_TEXTURE2D;
-        device->CreateDepthStencilView(targets_.depthMsaa.Get(), &dsv, ctx_->DsvHeap().Cpu(targets_.depthMsaaDsv));
-    }
-    // colorResolved
-    {
-        CD3DX12_RESOURCE_DESC desc =
-            CD3DX12_RESOURCE_DESC::Tex2D(RenderTargets::kColorFormat, width, height, 1, 1, 1, 0,
-                                         D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET);
-        D3D12_HEAP_PROPERTIES def{D3D12_HEAP_TYPE_DEFAULT};
-        if (!CheckHr(device->CreateCommittedResource(&def, D3D12_HEAP_FLAG_NONE, &desc,
-                                                     D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, nullptr,
-                                                     IID_PPV_ARGS(&targets_.colorResolved)),
-                     "CreateCommittedResource(colorResolved)"))
-            return;
-        targets_.colorResolvedSrv = ctx_->SrvHeap().Allocate(1);
-        D3D12_SHADER_RESOURCE_VIEW_DESC srv{};
-        srv.Format = RenderTargets::kColorFormat;
-        srv.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
-        srv.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
-        srv.Texture2D.MipLevels = 1;
-        device->CreateShaderResourceView(targets_.colorResolved.Get(), &srv,
-                                         ctx_->SrvHeap().Cpu(targets_.colorResolvedSrv));
+    Dx12Context& c = *ctx_;
+    const auto rt = D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET;
+    const auto srv = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+    const auto rtUav = D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET | D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
+    const float zero[4] = {0, 0, 0, 0};
+    bool ok = true;
+    ok &= targets_.colorMsaa.Create(c, width, height, RenderTargets::kColorFormat, rt, D3D12_RESOURCE_STATE_RENDER_TARGET,
+                                    L"scene.color.msaa", msaa, 1, zero);
+    ok &= targets_.normalMsaa.Create(c, width, height, RenderTargets::kNormalFormat, rt, D3D12_RESOURCE_STATE_RENDER_TARGET,
+                                     L"scene.normal.msaa", msaa, 1, zero);
+    ok &= targets_.velocityMsaa.Create(c, width, height, RenderTargets::kVelocityFormat, rt,
+                                       D3D12_RESOURCE_STATE_RENDER_TARGET, L"scene.velocity.msaa", msaa, 1, zero);
+    ok &= targets_.depthMsaa.Create(c, width, height, RenderTargets::kDepthFormat, D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL,
+                                    D3D12_RESOURCE_STATE_DEPTH_WRITE, L"scene.depth.msaa", msaa);
+    ok &= targets_.color.Create(c, width, height, RenderTargets::kColorFormat, rtUav, srv, L"scene.color");
+    ok &= targets_.normal.Create(c, width, height, RenderTargets::kNormalFormat, rtUav, srv, L"scene.normal");
+    ok &= targets_.velocity.Create(c, width, height, RenderTargets::kVelocityFormat, rtUav, srv, L"scene.velocity");
+    ok &= targets_.depth.Create(c, width, height, DXGI_FORMAT_R32_FLOAT, rtUav, srv, L"scene.depth");
+    ok &= targets_.lit.Create(c, width, height, RenderTargets::kColorFormat, rtUav, srv, L"scene.lit");
+    ok &= targets_.ldr.Create(c, outWidth, outHeight, RenderTargets::kLdrFormat, rt, srv, L"scene.ldr");
+    if (!ok) {
+        LOG_ERROR("render target creation failed (%ux%u -> %ux%u msaa=%u)", width, height, outWidth, outHeight, msaa);
+        ReleaseTargets();
+        return;
     }
     targets_.width = width;
     targets_.height = height;
+    targets_.outWidth = outWidth;
+    targets_.outHeight = outHeight;
     targets_.msaa = msaa;
-    LOG_INFO("render targets %ux%u msaa=%u", width, height, msaa);
+    for (auto& pass : passes_) pass->OnResize(c, targets_);
+    havePrev_ = false;
+    LOG_INFO("render targets %ux%u -> %ux%u msaa=%u", width, height, outWidth, outHeight, msaa);
 }
 
 void Renderer::ReleaseTargets() {
-    if (targets_.colorMsaaRtv != DescriptorHeap::kInvalid) {
-        ctx_->RtvHeap().Free(targets_.colorMsaaRtv, 1);
-        targets_.colorMsaaRtv = DescriptorHeap::kInvalid;
-    }
-    if (targets_.depthMsaaDsv != DescriptorHeap::kInvalid) {
-        ctx_->DsvHeap().Free(targets_.depthMsaaDsv, 1);
-        targets_.depthMsaaDsv = DescriptorHeap::kInvalid;
-    }
-    if (targets_.colorResolvedSrv != DescriptorHeap::kInvalid) {
-        ctx_->SrvHeap().Free(targets_.colorResolvedSrv, 1);
-        targets_.colorResolvedSrv = DescriptorHeap::kInvalid;
-    }
-    targets_.colorMsaa.Reset();
-    targets_.depthMsaa.Reset();
-    targets_.colorResolved.Reset();
-    targets_.width = targets_.height = 0;
+    for (auto& pass : passes_) pass->ReleaseTargets(*ctx_);
+    for (Texture* t : {&targets_.colorMsaa, &targets_.normalMsaa, &targets_.velocityMsaa, &targets_.depthMsaa,
+                       &targets_.color, &targets_.normal, &targets_.velocity, &targets_.depth, &targets_.lit,
+                       &targets_.ldr})
+        t->Release(*ctx_);
+    targets_.ao = targets_.ssr = targets_.hdrFinal = targets_.bloom = targets_.uiBackdrop = nullptr;
+    targets_.width = targets_.height = targets_.outWidth = targets_.outHeight = 0;
     targets_.msaa = 1;
+}
+
+void Renderer::FillSceneConstants(const FrameView& view, uint32_t w, uint32_t h, bool offscreen, SceneConstants& sc) {
+    const CameraParams& cam = view.camera;
+    const float aspect = (float)w / (float)h;
+    XMMATRIX proj = XMMatrixPerspectiveFovLH(cam.fovYRadians, aspect, cam.nearZ, cam.farZ);
+    XMMATRIX viewM = XMLoadFloat4x4(&cam.view);
+    XMMATRIX vpNoJitter = viewM * proj;
+
+    IUpscaler* upscaler = offscreen ? nullptr : EffectiveUpscaler();
+    const bool jitter = !offscreen && (settings_.taa || upscaler || EffectivePath() == RenderPath::PathTraced);
+    float jxPx = 0, jyPx = 0;
+    if (jitter) {
+        const uint32_t phases = upscaler ? IUpscaler::JitterPhaseCount(w, targets_.outWidth) : 8u;
+        const uint32_t idx = temporalIndex_ % phases + 1;
+        jxPx = Halton(idx, 2) - 0.5f;
+        jyPx = Halton(idx, 3) - 0.5f;
+    }
+    jitterPx_[0] = jxPx;
+    jitterPx_[1] = jyPx;
+    const float jx = 2.0f * jxPx / (float)w;   // FSR convention
+    const float jy = -2.0f * jyPx / (float)h;
+    XMMATRIX projJ = proj;
+    projJ.r[2] = XMVectorAdd(projJ.r[2], XMVectorSet(jx, jy, 0, 0));
+    XMMATRIX viewProj = viewM * projJ;
+
+    XMStoreFloat4x4(&sc.view, viewM);
+    XMStoreFloat4x4(&sc.proj, projJ);
+    XMStoreFloat4x4(&sc.viewProj, viewProj);
+    XMStoreFloat4x4(&sc.invProj, XMMatrixInverse(nullptr, projJ));
+    XMMATRIX invView = XMMatrixInverse(nullptr, viewM);
+    XMStoreFloat4x4(&sc.invView, invView);
+    XMStoreFloat4x4(&sc.viewProjNoJitter, vpNoJitter);
+    const bool usePrev = !offscreen && havePrev_ && !view.cameraCut;
+    if (usePrev)
+        sc.prevViewProjNoJitter = prevViewProj_;
+    else
+        XMStoreFloat4x4(&sc.prevViewProjNoJitter, vpNoJitter);
+
+    // --- cascaded shadow maps
+    XMVECTOR L = XMVector3Normalize(XMLoadFloat3(&view.light.direction));
+    const uint32_t mapSize = targets_.shadowMap ? targets_.shadowMap.width : 2048;
+    const float n = cam.nearZ;
+    const float f = std::max(n + 1.0f, std::min(settings_.shadowDistance, cam.farZ));
+    float splits[kShadowCascades + 1];
+    for (uint32_t i = 0; i <= kShadowCascades; ++i) {
+        const float p = (float)i / kShadowCascades;
+        const float lin = n + (f - n) * p;
+        const float lg = n * std::pow(f / n, p);
+        splits[i] = 0.72f * lg + 0.28f * lin;
+    }
+    const float tanY = std::tan(cam.fovYRadians * 0.5f), tanX = tanY * aspect;
+    const XMVECTOR up = std::fabs(view.light.direction.y) > 0.99f * XMVectorGetX(XMVector3Length(XMLoadFloat3(&view.light.direction)))
+                            ? XMVectorSet(0, 0, 1, 0)
+                            : XMVectorSet(0, 1, 0, 0);
+    const float back = 250.0f;  // reach toward the light for casters outside the view
+    float texel[4] = {};
+    for (uint32_t c = 0; c < kShadowCascades; ++c) {
+        XMVECTOR corners[8];
+        int k = 0;
+        for (float z : {splits[c], splits[c + 1]})
+            for (float sy : {-1.0f, 1.0f})
+                for (float sx : {-1.0f, 1.0f})
+                    corners[k++] = XMVector3TransformCoord(XMVectorSet(sx * tanX * z, sy * tanY * z, z, 1), invView);
+        XMVECTOR center = XMVectorZero();
+        for (XMVECTOR v : corners) center = XMVectorAdd(center, v);
+        center = XMVectorScale(center, 1.0f / 8.0f);
+        float radius = 0;
+        for (XMVECTOR v : corners) radius = std::max(radius, XMVectorGetX(XMVector3Length(XMVectorSubtract(v, center))));
+        radius = std::ceil(radius * 16.0f) / 16.0f;
+        XMVECTOR eye = XMVectorSubtract(center, XMVectorScale(L, radius + back));
+        XMMATRIX lightView = XMMatrixLookAtLH(eye, center, up);
+        XMMATRIX ortho = XMMatrixOrthographicOffCenterLH(-radius, radius, -radius, radius, 0.0f, 2.0f * radius + back);
+        // snap the projection to whole texels so the shadow does not shimmer while the camera moves
+        XMMATRIX vp = lightView * ortho;
+        XMVECTOR origin = XMVectorScale(XMVector3TransformCoord(XMVectorZero(), vp), mapSize * 0.5f);
+        XMVECTOR offset = XMVectorScale(XMVectorSubtract(XMVectorRound(origin), origin), 2.0f / mapSize);
+        ortho.r[3] = XMVectorAdd(ortho.r[3], XMVectorSet(XMVectorGetX(offset), XMVectorGetY(offset), 0, 0));
+        XMStoreFloat4x4(&sc.shadowViewProj[c], lightView * ortho);
+        texel[c] = 2.0f * radius / mapSize;
+    }
+    sc.cascadeSplits = {splits[1], splits[2], splits[3], settings_.shadows ? 1.0f : 0.0f};
+    sc.shadowParams = {1.0f / mapSize, 1.2f, 1.6f, 0};
+    sc.cascadeTexel = {texel[0], texel[1], texel[2], 0};
+
+    const LightParams& lp = view.light;
+    sc.eyePos = cam.eye;
+    sc.time = (float)temporalIndex_ / 60.0f;
+    XMStoreFloat3(&sc.lightDir, L);
+    sc.sunIntensity = lp.sunIntensity;
+    sc.lightColor = lp.color;
+    sc.hemiStrength = lp.hemiStrength;
+    sc.skyZenith = lp.skyZenith;
+    sc.rimStrength = lp.rimStrength;
+    sc.skyHorizon = lp.skyHorizon;
+    sc.numLights = (float)std::min<size_t>(lp.punctual.size(), kMaxPunctualLights);
+    sc.groundColor = lp.groundColor;
+    sc.floorGloss = (settings_.ssr || EffectivePath() == RenderPath::PathTraced) ? settings_.floorGloss : 0.0f;
+    sc.rimColor = lp.rimColor;
+    sc.fog = settings_.fog;
+    sc.viewportSize = {(float)w, (float)h};
+    sc.edgeScale = (float)h / 1080.0f;
+    sc.transparentBg = settings_.transparentBackground ? 1.0f : 0.0f;
+    sc.jitterUv = {jx * 0.5f, -jy * 0.5f};
+    sc.invViewportSize = {1.0f / w, 1.0f / h};
+    sc.nearZ = cam.nearZ;
+    sc.farZ = cam.farZ;
+    sc.frameIndex = (float)(temporalIndex_ % 64);
+}
+
+void Renderer::RecordScene(ID3D12GraphicsCommandList* cmd, const FrameView& view, uint32_t w, uint32_t h,
+                           uint32_t cbSlot, uint64_t frame, bool offscreen) {
+    SceneConstants sc{};
+    FillSceneConstants(view, w, h, offscreen, sc);
+    memcpy(sceneCbMapped_ + (size_t)cbSlot * kSceneCbSize, &sc, sizeof(sc));
+    GpuLight lights[kMaxPunctualLights] = {};
+    const size_t count = std::min<size_t>(view.light.punctual.size(), kMaxPunctualLights);
+    for (size_t i = 0; i < count; ++i) {
+        const PunctualLight& p = view.light.punctual[i];
+        GpuLight& g = lights[i];
+        g.position = p.position;
+        g.invRange = 1.0f / std::max(p.range, 0.01f);
+        g.color = {p.color.x * p.intensity, p.color.y * p.intensity, p.color.z * p.intensity};
+        g.spotCosOuter = p.spotCosOuter;
+        XMStoreFloat3(&g.direction, XMVector3Normalize(XMLoadFloat3(&p.direction)));
+        g.spotCosInner = std::max(p.spotCosInner, p.spotCosOuter + 1e-3f);
+    }
+    memcpy(lightBufMapped_ + (size_t)cbSlot * kLightBytes, lights, sizeof(lights));
+
+    // Temporal history survives only consecutive on-screen frames without a camera cut.
+    bool historyValid = !offscreen && havePrev_ && prevTaa_ && settings_.taa && !view.cameraCut;
+    if (historyValid && XMVectorGetX(XMVector3Length(XMVectorSubtract(XMLoadFloat3(&view.camera.eye),
+                                                                      XMLoadFloat3(&prevEye_)))) > 12.0f)
+        historyValid = false;
+
+    // Build the acceleration structures for this frame; without them there is nothing to trace,
+    // so fall back to raster for this frame.
+    RenderPath path = offscreen ? RenderPath::Raster : EffectivePath();
+    RtScene* rt = nullptr;
+    if (path != RenderPath::Raster && rt_) {
+        if (rt_->Build(cmd, view.models, frame, cbSlot))
+            rt = rt_.get();
+        else
+            path = RenderPath::Raster;
+    }
+    IUpscaler* up = offscreen ? nullptr : EffectiveUpscaler();
+
+    stats_.drawCalls = 0;
+    stats_.triangles = 0;
+    stats_.internalWidth = w;
+    stats_.internalHeight = h;
+    stats_.outputWidth = targets_.outWidth;
+    stats_.outputHeight = targets_.outHeight;
+    stats_.renderPath = path;
+    stats_.upscaler = up ? up->Kind() : UpscalerKind::None;
+    PassContext pc{*ctx_, cmd, view, settings_, targets_, stats_, transient_,
+                   sceneCb_->GetGPUVirtualAddress() + (uint64_t)cbSlot * kSceneCbSize,
+                   lightBuf_->GetGPUVirtualAddress() + (uint64_t)cbSlot * kLightBytes,
+                   frame, historyValid, offscreen, &builtin_, path, rt, up,
+                   jitterPx_[0], jitterPx_[1], frameTimeMs_};
+    for (auto& pass : passes_) pass->Execute(pc);
+
+    if (!offscreen) {
+        prevViewProj_ = sc.viewProjNoJitter;
+        prevEye_ = view.camera.eye;
+        havePrev_ = true;
+        prevTaa_ = settings_.taa;
+        ++temporalIndex_;
+    }
 }
 
 void Renderer::Render(ID3D12GraphicsCommandList* cmd, const FrameView& view) {
     if (!cmd || !ctx_) return;
+    ID3D12DescriptorHeap* heaps[] = {ctx_->SrvHeap().Heap()};
+    cmd->SetDescriptorHeaps(1, heaps);
+    transient_.Begin(ctx_->FrameSlot());
 
-    // 1. Internal resolution.
-    uint32_t w = 0, h = 0;
-    if (settings_.fixedResolution) {
-        w = settings_.fixedWidth;
-        h = settings_.fixedHeight;
-    } else {
-        float scale = std::clamp(settings_.renderScale, 0.25f, 2.0f);
-        upscaler_->ComputeRenderSize(ctx_->Width(), ctx_->Height(), scale, w, h);
+    const float bw = (float)ctx_->Width(), bh = (float)ctx_->Height();
+    D3D12_VIEWPORT fullViewport{0.0f, 0.0f, bw, bh, 0.0f, 1.0f};
+    D3D12_RECT fullScissor{0, 0, (LONG)bw, (LONG)bh};
+
+    if (view.models.empty() && !view.studioFloor) {
+        // Menus: nothing to render, just a clean surface for the UI.
+        sceneVisible_ = false;
+        havePrev_ = false;
+        lastFrameQpc_ = 0;
+        D3D12_CPU_DESCRIPTOR_HANDLE rtv = ctx_->BackBufferRtv();
+        cmd->OMSetRenderTargets(1, &rtv, FALSE, nullptr);
+        const float bg[4] = {0.955f, 0.965f, 0.975f, 1.0f};
+        cmd->ClearRenderTargetView(rtv, bg, 0, nullptr);
+        cmd->RSSetViewports(1, &fullViewport);
+        cmd->RSSetScissorRects(1, &fullScissor);
+        return;
     }
 
+    // Wall time since the previous on-screen frame (upscaler input; clamped against pauses).
+    LARGE_INTEGER now, freq;
+    QueryPerformanceCounter(&now);
+    QueryPerformanceFrequency(&freq);
+    frameTimeMs_ = lastFrameQpc_ ? std::clamp((float)((now.QuadPart - lastFrameQpc_) * 1000.0 / freq.QuadPart),
+                                             0.1f, 100.0f)
+                                 : 16.7f;
+    lastFrameQpc_ = now.QuadPart;
+
+    // 1. Output and internal resolution.
+    IUpscaler* up = EffectiveUpscaler();
+    const RenderPath path = EffectivePath();
+    uint32_t outW, outH;
+    if (settings_.fixedResolution) {
+        outW = settings_.fixedWidth;
+        outH = settings_.fixedHeight;
+    } else if (up) {
+        outW = ctx_->Width();
+        outH = ctx_->Height();
+    } else {
+        float scale = std::clamp(settings_.renderScale, 0.25f, 2.0f);
+        outW = std::max(16u, (uint32_t)(ctx_->Width() * scale));
+        outH = std::max(16u, (uint32_t)(ctx_->Height() * scale));
+    }
+    uint32_t w = outW, h = outH;
+    if (up) IUpscaler::ComputeRenderSize(outW, outH, settings_.upscalerQuality, w, h);
+
     // 2. MSAA / pipelines / targets.
-    uint32_t msaa = SupportedMsaa(*ctx_, settings_.msaaSamples);
+    uint32_t msaa = (up || path == RenderPath::PathTraced) ? 1u : SupportedMsaa(*ctx_, settings_.msaaSamples);
     if (msaa != pipelineMsaa_) {
         ctx_->WaitForGpu();
         for (auto& pass : passes_) {
@@ -278,67 +485,178 @@ void Renderer::Render(ID3D12GraphicsCommandList* cmd, const FrameView& view) {
         }
         pipelineMsaa_ = msaa;
     }
-    EnsureTargets(w, h, msaa);
+    EnsureTargets(w, h, outW, outH, msaa);
+    EnsureShadowMap(settings_.shadowMapSize);
+    if (!targets_.colorMsaa) return;
 
-    // 3. GPU timer for the previous frame of this slot.
+    // 3. GPU timer for the previous frame of this slot, then the begin timestamp.
     ReadGpuTimer();
-
-    // 4. Begin timestamp.
-    uint32_t slot = ctx_->FrameSlot();
+    const uint32_t slot = ctx_->FrameSlot();
     cmd->EndQuery(timestampHeap_.Get(), D3D12_QUERY_TYPE_TIMESTAMP, slot * 2);
 
-    // 5. Scene constants.
-    CameraParams cam = view.camera;
-    DirectX::XMMATRIX proj = DirectX::XMMatrixPerspectiveFovLH(cam.fovYRadians, (float)w / (float)h, cam.nearZ, cam.farZ);
-    DirectX::XMMATRIX viewM = DirectX::XMLoadFloat4x4(&cam.view);
-    DirectX::XMMATRIX viewProj = viewM * proj;
-    SceneConstants sc{};
-    XMStoreFloat4x4(&sc.view, viewM);
-    XMStoreFloat4x4(&sc.proj, proj);
-    XMStoreFloat4x4(&sc.viewProj, viewProj);
-    sc.eyePos = cam.eye;
-    DirectX::XMVECTOR dir = DirectX::XMLoadFloat3(&view.light.direction);
-    DirectX::XMVECTOR n = DirectX::XMVector3Normalize(dir);
-    XMStoreFloat3(&sc.lightDir, n);
-    sc.lightColor = view.light.color;
-    sc.viewportSize = {(float)w, (float)h};
-    sc.edgeScale = (float)h / 1080.0f;
-    memcpy(sceneCbMapped_ + slot * 256, &sc, sizeof(SceneConstants));
-    D3D12_GPU_VIRTUAL_ADDRESS scAddress = sceneCb_->GetGPUVirtualAddress() + slot * 256;
+    RecordScene(cmd, view, w, h, slot, ctx_->FrameNumber(), false);
 
-
-    // 6. Descriptor heap.
-    ID3D12DescriptorHeap* heaps[] = {ctx_->SrvHeap().Heap()};
-    cmd->SetDescriptorHeaps(1, heaps);
-
-    // 7. Passes.
-    stats_.drawCalls = 0;
-    stats_.triangles = 0;
-    stats_.internalWidth = w;
-    stats_.internalHeight = h;
-    PassContext pc{*ctx_, cmd, view, settings_, targets_, stats_, scAddress};
-
-    for (auto& pass : passes_) pass->Execute(pc);
-
-    // 8. End timestamp + resolve.
     cmd->EndQuery(timestampHeap_.Get(), D3D12_QUERY_TYPE_TIMESTAMP, slot * 2 + 1);
     cmd->ResolveQueryData(timestampHeap_.Get(), D3D12_QUERY_TYPE_TIMESTAMP, slot * 2, 2,
                           timestampReadback_.Get(), slot * 16);
+
+    // UI backdrop descriptor follows the backdrop texture (recreated only on resize).
+    if (targets_.uiBackdrop && targets_.uiBackdrop->res.Get() != backdropSrvRes_ &&
+        backdropSrv_ != DescriptorHeap::kInvalid) {
+        targets_.uiBackdrop->WriteSrv(ctx_->Device(), ctx_->SrvHeap().Cpu(backdropSrv_));
+        backdropSrvRes_ = targets_.uiBackdrop->res.Get();
+    }
+    const float s = std::min(bw / (float)outW, bh / (float)outH);
+    presentRect_[2] = outW * s;
+    presentRect_[3] = outH * s;
+    presentRect_[0] = (bw - presentRect_[2]) * 0.5f;
+    presentRect_[1] = (bh - presentRect_[3]) * 0.5f;
+    sceneVisible_ = true;
+}
+
+bool Renderer::RenderToImage(const FrameView& view, uint32_t w, uint32_t h, ImageRGBA8& out) {
+    if (!ctx_ || w == 0 || h == 0) return false;
+    ID3D12Device* device = ctx_->Device();
+    ctx_->WaitForGpu();
+    if (!offAlloc_) {
+        if (!CheckHr(device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&offAlloc_)),
+                     "RenderToImage: allocator") ||
+            !CheckHr(device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, offAlloc_.Get(), nullptr,
+                                               IID_PPV_ARGS(&offList_)),
+                     "RenderToImage: list"))
+            return false;
+        offList_->Close();
+    }
+    offAlloc_->Reset();
+    offList_->Reset(offAlloc_.Get(), nullptr);
+
+    const RenderSettings saved = settings_;
+    settings_.transparentBackground = true;
+    settings_.taa = false;
+    settings_.fog = 0.0f;
+    settings_.vignette = 0.0f;
+    settings_.ssr = false;
+    settings_.renderPath = RenderPath::Raster;
+    settings_.upscaler = UpscalerKind::None;
+    sceneVisible_ = false;
+
+    const uint32_t msaa = pipelineMsaa_ ? pipelineMsaa_ : 1;
+    EnsureTargets(w, h, w, h, msaa);
+    EnsureShadowMap(settings_.shadowMapSize);
+    bool ok = targets_.colorMsaa && targets_.ldr;
+    ComPtr<ID3D12Resource> readback;
+    D3D12_PLACED_SUBRESOURCE_FOOTPRINT fp{};
+    if (ok) {
+        ID3D12DescriptorHeap* heaps[] = {ctx_->SrvHeap().Heap()};
+        offList_->SetDescriptorHeaps(1, heaps);
+        transient_.Begin(kOffscreenSlot);
+        RecordScene(offList_.Get(), view, w, h, kOffscreenSlot, 0, true);
+
+        D3D12_RESOURCE_DESC desc = targets_.ldr.res->GetDesc();
+        UINT64 total = 0;
+        device->GetCopyableFootprints(&desc, 0, 1, 0, &fp, nullptr, nullptr, &total);
+        D3D12_HEAP_PROPERTIES rb{D3D12_HEAP_TYPE_READBACK};
+        CD3DX12_RESOURCE_DESC bd = CD3DX12_RESOURCE_DESC::Buffer(total);
+        ok = CheckHr(device->CreateCommittedResource(&rb, D3D12_HEAP_FLAG_NONE, &bd, D3D12_RESOURCE_STATE_COPY_DEST,
+                                                     nullptr, IID_PPV_ARGS(&readback)),
+                     "RenderToImage: readback");
+        if (ok) {
+            targets_.ldr.Transition(offList_.Get(), D3D12_RESOURCE_STATE_COPY_SOURCE);
+            CD3DX12_TEXTURE_COPY_LOCATION dst(readback.Get(), fp);
+            CD3DX12_TEXTURE_COPY_LOCATION src(targets_.ldr.res.Get(), 0);
+            offList_->CopyTextureRegion(&dst, 0, 0, 0, &src, nullptr);
+            targets_.ldr.Transition(offList_.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+        }
+    }
+    offList_->Close();
+    if (ok) {
+        ID3D12CommandList* lists[] = {offList_.Get()};
+        ctx_->Queue()->ExecuteCommandLists(1, lists);
+        ctx_->WaitForGpu();
+        uint8_t* data = nullptr;
+        D3D12_RANGE range{0, (SIZE_T)(fp.Footprint.RowPitch * h)};
+        if (SUCCEEDED(readback->Map(0, &range, (void**)&data))) {
+            out = ImageRGBA8{};
+            out.mips.push_back({w, h, std::vector<uint8_t>((size_t)w * h * 4)});
+            for (uint32_t y = 0; y < h; ++y) {
+                const uint8_t* srcRow = data + (size_t)fp.Footprint.RowPitch * y;
+                uint8_t* dstRow = out.mips[0].pixels.data() + (size_t)w * 4 * y;
+                for (uint32_t x = 0; x < w; ++x) {
+                    const uint8_t* s = srcRow + x * 4;
+                    uint8_t* d = dstRow + x * 4;
+                    const uint32_t a = s[3];
+                    for (int ch = 0; ch < 3; ++ch)
+                        d[ch] = a == 0 ? 0 : (uint8_t)std::min(255u, (uint32_t)s[ch] * 255u / a);
+                    d[3] = (uint8_t)a;
+                }
+            }
+            out.hasAlpha = true;
+            D3D12_RANGE none{0, 0};
+            readback->Unmap(0, &none);
+        } else {
+            ok = false;
+        }
+    }
+    settings_ = saved;
+    return ok;
+}
+
+uint64_t Renderer::UiBackdropTexture() const {
+    if (!sceneVisible_ || !backdropSrvRes_ || backdropSrv_ == DescriptorHeap::kInvalid) return 0;
+    return ctx_->SrvHeap().Gpu(backdropSrv_).ptr;
+}
+
+void Renderer::PresentRect(float& x, float& y, float& w, float& h) const {
+    x = presentRect_[0];
+    y = presentRect_[1];
+    w = presentRect_[2];
+    h = presentRect_[3];
+}
+
+RenderPath Renderer::EffectivePath() const { return rtSupported_ ? settings_.renderPath : RenderPath::Raster; }
+
+IUpscaler* Renderer::EffectiveUpscaler() const {
+    const size_t k = (size_t)settings_.upscaler;
+    if (k == 0 || k >= 4 || !upscalerAvailable_[k] || !upscalers_[k]) return nullptr;
+    return upscalers_[k].get();
+}
+
+bool Renderer::UpscalerAvailable(UpscalerKind kind) const {
+    const size_t k = (size_t)kind;
+    return k < 4 && upscalerAvailable_[k];
 }
 
 void Renderer::Shutdown() {
     if (!ctx_) return;
     ctx_->WaitForGpu();
+    if (rt_) {
+        rt_->Shutdown();
+        rt_.reset();
+    }
+    rtSupported_ = false;
+    for (size_t k = 1; k < 4; ++k) {
+        if (upscalers_[k]) {
+            upscalers_[k]->Shutdown();
+            upscalers_[k].reset();
+        }
+        upscalerAvailable_[k] = false;
+    }
     ReleaseTargets();
+    targets_.shadowMap.Release(*ctx_);
     passes_.clear();
     pipelineMsaa_ = 0;
+    transient_.Release(*ctx_);
+    if (backdropSrv_ != DescriptorHeap::kInvalid) ctx_->SrvHeap().Free(backdropSrv_, 1);
+    backdropSrv_ = DescriptorHeap::kInvalid;
     for (auto& t : builtin_.toon) t.Reset();
     builtin_.white.Reset();
-    if (sceneCb_ && sceneCbMapped_) {
-        sceneCb_->Unmap(0, nullptr);
-        sceneCbMapped_ = nullptr;
-    }
+    if (sceneCb_ && sceneCbMapped_) sceneCb_->Unmap(0, nullptr);
+    if (lightBuf_ && lightBufMapped_) lightBuf_->Unmap(0, nullptr);
+    sceneCbMapped_ = lightBufMapped_ = nullptr;
     sceneCb_.Reset();
+    lightBuf_.Reset();
+    offList_.Reset();
+    offAlloc_.Reset();
     timestampReadback_.Reset();
     timestampHeap_.Reset();
     timestampFrequency_ = 0;

@@ -35,6 +35,11 @@ struct LoadProgress {
     std::string Status() { std::lock_guard<std::mutex> l(mutex); return status; }
 };
 
+// Decodes every texture referenced by m.pmx's materials into m.textures (parallel).
+// `progress` may be null.
+void DecodeModelTextures(LoadedModelCpu& m, LoadProgress* progress, float fracBegin, float fracEnd,
+                         const char* label);
+
 // `stage` may be null. Returns false with *error on failure of the character or motion;
 // a stage part or texture that fails to load only logs a warning.
 // Textures are decoded in parallel (std::for_each with std::execution::par).

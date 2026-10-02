@@ -1,285 +1,719 @@
+// Library screens: scanning, the library (select) screen, loading.
 #include "app/App.h"
+#include "app/Icons.h"
+#include "app/Lighting.h"
+#include "app/UiHelpers.h"
+#include "app/UiKit.h"
 
 #include <ShlObj.h>
+#include <shellapi.h>
 
 #include <algorithm>
+#include <cmath>
 #include <cstring>
 
 #include "core/Log.h"
 #include "core/TextUtil.h"
 #include "imgui.h"
-#include "imgui_impl_win32.h"
-#include <shellapi.h>
+#include "imgui_internal.h"
 
 namespace mmdx {
 
+using namespace ui;
+
 namespace {
 
-constexpr ImGuiWindowFlags kFullScreenFlags = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove |
-                                              ImGuiWindowFlags_NoResize |
-                                              ImGuiWindowFlags_NoSavedSettings |
-                                              ImGuiWindowFlags_NoBringToFrontOnFocus;
+constexpr float kAppBarH = 64.0f;
+constexpr float kPad = 28.0f;
+constexpr float kPanelW = 380.0f;
 
-void BeginFullScreen(const char* title) {
-    ImGui::SetNextWindowPos(ImVec2(0, 0));
-    ImGui::SetNextWindowSize(ImGui::GetIO().DisplaySize);
-    ImGui::Begin(title, nullptr, kFullScreenFlags);
+bool MatchesFilter(const std::string& needle, const std::string& a, const std::string& b) {
+    return needle.empty() || ToLowerAscii(a).find(needle) != std::string::npos ||
+           ToLowerAscii(b).find(needle) != std::string::npos;
+}
+
+// Card hit area: an invisible ImGui item so hover/click/nav work like any widget.
+bool CardItem(const char* id, ImVec2 a, ImVec2 b, bool* hovered) {
+    ImGui::SetCursorScreenPos(a);
+    const bool pressed = ImGui::InvisibleButton(id, ImVec2(b.x - a.x, b.y - a.y));
+    *hovered = ImGui::IsItemHovered();
+    if (*hovered) ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+    return pressed;
+}
+
+void CheckBadge(ImDrawList* dl, ImVec2 c, float t) {
+    if (t <= 0.01f) return;
+    const float r = Dp(12.0f) * (0.6f + 0.4f * t);
+    dl->AddCircleFilled(ImVec2(c.x, c.y + Dp(1.0f)), r + Dp(1.5f), WithAlpha(IM_COL32(10, 40, 40, 255), 0.18f * t), 24);
+    dl->AddCircleFilled(c, r, WithAlpha(P().accent, t), 24);
+    Icon(dl, icon::Check, 14.0f, c, WithAlpha(P().onAccent, t));
 }
 
 } // namespace
 
 // ---------------------------------------------------------------------------
-// DrawScanning
+// Shared pieces
 // ---------------------------------------------------------------------------
 
-void App::DrawScanning() {
-    BeginFullScreen("##scanning");
+uint64_t App::CharacterThumb(int index) {
+    if (index < 0 || index >= (int)library_.characters.size()) return 0;
+    const CharacterAsset& a = library_.characters[(size_t)index];
+    return thumbs_.Get("c:" + a.id, ThumbnailKind::Character, {a.pmxPath});
+}
 
-    ImVec2 center = ImGui::GetMainViewport()->GetCenter();
-    ImGui::SetCursorPos(ImVec2(center.x - 200, center.y - 60));
+uint64_t App::StageThumb(int index) {
+    if (index < 0 || index >= (int)library_.stages.size()) return 0;
+    const StageAsset& a = library_.stages[(size_t)index];
+    return thumbs_.Get("s:" + a.id, ThumbnailKind::Stage, a.pmxParts);
+}
 
-    ImGui::TextUnformatted("라이브러리 검색 중…");
+void App::DrawAppBar(int activeNav) {
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    const Palette& p = P();
+    const float W = ImGui::GetIO().DisplaySize.x;
+    const float h = Dp(kAppBarH);
+    dl->AddRectFilled(ImVec2(0, 0), ImVec2(W, h), p.surface);
+    dl->AddLine(ImVec2(0, h - 0.5f), ImVec2(W, h - 0.5f), p.line);
+
+    // Wordmark: the product name in bold ink, the "12" in Miku teal.
+    const float x0 = Dp(kPad);
+    const ImVec2 ws = TextSize(Font::Bold, 20.0f, "MMDX");
+    const float ty = (h - ws.y) * 0.5f;
+    Text(dl, Font::Bold, 20.0f, ImVec2(x0, ty), p.ink, "MMDX");
+    Text(dl, Font::Bold, 20.0f, ImVec2(x0 + ws.x, ty), p.accentInk, "12");
+    const float navX = x0 + TextSize(Font::Bold, 20.0f, "MMDX12").x + Dp(36.0f);
+
+    // Primary navigation.
+    ImGui::SetCursorScreenPos(ImVec2(navX, (h - Dp(38.0f)) * 0.5f));
+    const char* nav[] = {"라이브러리", "벤치마크"};
+    const char* navIcons[] = {icon::Stack, icon::Gauge};
+    int sel = activeNav;
+    if (Segmented("##nav", nav, 2, &sel, 0.0f, 38.0f, navIcons)) {
+        if (sel == 1) {
+            screen_ = Screen::BenchLobby;
+            RefreshLeaderboard();
+        } else {
+            screen_ = Screen::Select;
+        }
+    }
+
+    // Library folder (right side): opens a small editor popup.
     const std::string path = PathToUtf8(library_.root.empty() ? ResolveLibraryPath() : library_.root);
-    ImGui::TextDisabled("%s", path.c_str());
-    const int visited = scanProgress_.filesVisited.load(std::memory_order_relaxed);
-    const int total = scanProgress_.filesTotal.load(std::memory_order_relaxed);
-    ImGui::ProgressBar((float)visited / (float)std::max(1, total), ImVec2(-1, 0));
-    ImGui::Text("%d / %d 파일", visited, total);
+    const float pillW = Dp(300.0f);
+    const float right = W - Dp(kPad);
+    const ImVec2 pa(right - pillW - Dp(46.0f), (h - Dp(36.0f)) * 0.5f);
+    ImGui::SetCursorScreenPos(pa);
+    bool hovered = false;
+    const bool clicked = CardItem("##libpath", pa, ImVec2(pa.x + pillW, pa.y + Dp(36.0f)), &hovered);
+    const float hv = Anim(ImGui::GetID("##libpathanim"), hovered);
+    dl->AddRectFilled(pa, ImVec2(pa.x + pillW, pa.y + Dp(36.0f)), Mix(p.sunken, Mix(p.sunken, p.lineStrong, 0.5f), hv),
+                      Dp(18.0f));
+    Icon(dl, icon::FolderOpen, 16.0f, ImVec2(pa.x + Dp(20.0f), pa.y + Dp(18.0f)), p.ink2);
+    TextEllipsis(dl, Font::Regular, size::Small, ImVec2(pa.x + Dp(36.0f), pa.y + Dp(9.0f)), pa.x + pillW - Dp(14.0f),
+                 p.ink2, path.c_str());
+    if (hovered) Tooltip("라이브러리 폴더 변경");
+    if (clicked) ImGui::OpenPopup("##libpopup");
+    ImGui::SetCursorScreenPos(ImVec2(right - Dp(36.0f), (h - Dp(36.0f)) * 0.5f));
+    if (IconButton("##rescan", icon::Refresh, "라이브러리 다시 검색")) StartScan();
 
-    ImGui::End();
-}
-
-// ---------------------------------------------------------------------------
-// DrawSelect
-// ---------------------------------------------------------------------------
-
-namespace {
-
-struct SelectFilter {
-    bool Matches(const CharacterAsset& a) const {
-        return needle.empty() || ToLowerAscii(a.displayName).find(needle) != std::string::npos ||
-               ToLowerAscii(a.id).find(needle) != std::string::npos;
-    }
-    bool Matches(const StageAsset& a) const {
-        return needle.empty() || ToLowerAscii(a.displayName).find(needle) != std::string::npos ||
-               ToLowerAscii(a.id).find(needle) != std::string::npos;
-    }
-    bool Matches(const SongAsset& a) const {
-        return needle.empty() || ToLowerAscii(a.displayName).find(needle) != std::string::npos ||
-               ToLowerAscii(a.id).find(needle) != std::string::npos;
-    }
-    std::string needle;
-};
-
-} // namespace
-
-void App::DrawSelect() {
-    ImGuiIO& io = ImGui::GetIO();
-    ImGuiStyle& style = ImGui::GetStyle();
-    const float dpi = ImGui_ImplWin32_GetDpiScaleForHwnd(hwnd_);
-    BeginFullScreen("##select");
-
-    // 1. Header.
-    {
-        ImGui::TextUnformatted("MMDX12");
-        ImGui::SameLine();
-        ImGui::TextDisabled("MikuMikuDance DX12 Player");
-        const std::string counts = "캐릭터 " + std::to_string(library_.characters.size()) +
-                                   " · 스테이지 " + std::to_string(library_.stages.size()) +
-                                   " · 곡 " + std::to_string(library_.songs.size());
-        const float countsWidth = ImGui::CalcTextSize(counts.c_str()).x;
-        const float rightEdge = ImGui::GetWindowPos().x + ImGui::GetWindowWidth() - style.FramePadding.x * 2.0f;
-        ImGui::SameLine(std::max(ImGui::GetCursorPosX() + 1.0f, rightEdge - countsWidth));
-        ImGui::TextUnformatted(counts.c_str());
-    }
-    ImGui::Separator();
-
-    // 2. Library row.
-    {
-        ImGui::SetNextItemWidth(io.DisplaySize.x * 0.4f);
-        ImGui::InputText("##lib", libraryPathEdit_, sizeof(libraryPathEdit_));
-        ImGui::SameLine();
-        if (ImGui::Button("적용/재검색")) {
+    ImGui::SetNextWindowPos(ImVec2(pa.x + pillW + Dp(46.0f), h + Dp(6.0f)), ImGuiCond_Always, ImVec2(1.0f, 0.0f));
+    ImGui::SetNextWindowSize(ImVec2(Dp(440.0f), 0));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(Dp(18.0f), Dp(16.0f)));
+    if (ImGui::BeginPopup("##libpopup")) {
+        TextField("##libedit", "라이브러리 폴더", libraryPathEdit_, sizeof(libraryPathEdit_), -1.0f);
+        Gap(4.0f);
+        PushFont(Font::Regular, size::Caption);
+        ImGui::PushStyleColor(ImGuiCol_Text, ImGui::ColorConvertU32ToFloat4(p.ink3));
+        ImGui::TextWrapped("PMX 모델, 스테이지, VMD 모션과 음원이 들어 있는 폴더입니다. 폴더 구성은 자유롭게 두어도 됩니다.");
+        ImGui::PopStyleColor();
+        PopFont();
+        Gap(8.0f);
+        if (Button("##libapply", "적용하고 다시 검색", icon::Refresh, ButtonKind::Primary)) {
             settings_.libraryPath = libraryPathEdit_;
             settings_.Save(settingsPath_);
+            ImGui::CloseCurrentPopup();
             StartScan();
         }
         ImGui::SameLine();
-        if (ImGui::Button("폴더 열기")) {
+        if (Button("##libopen", "탐색기에서 열기", icon::FolderOpen, ButtonKind::Secondary))
             ShellExecuteW(nullptr, L"open", Utf8ToPath(libraryPathEdit_).c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+        ImGui::EndPopup();
+    }
+    ImGui::PopStyleVar();
+}
+
+// Stage thumbnail (or the studio backdrop) with the character portrait standing in front.
+void App::DrawScenePreview(const CharacterAsset* ch, const StageAsset* st, float x0, float y0, float x1, float y1,
+                           float rounding) {
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    const Palette& p = P();
+    const ImVec2 a(x0, y0), b(x1, y1);
+    const int stageIndex = st ? (int)(st - library_.stages.data()) : -1;
+    const uint64_t stageTex = st ? StageThumb(stageIndex) : 0;
+    if (st && stageTex) {
+        // cover-fit the 16:10 thumbnail
+        const float aspect = (x1 - x0) / (y1 - y0), src = 512.0f / 320.0f;
+        ImVec2 uv0(0, 0), uv1(1, 1);
+        if (aspect > src) {
+            const float v = src / aspect;
+            uv0.y = (1 - v) * 0.5f;
+            uv1.y = 1 - uv0.y;
+        } else {
+            const float u = aspect / src;
+            uv0.x = (1 - u) * 0.5f;
+            uv1.x = 1 - uv0.x;
         }
-        if (!library_.warnings.empty()) {
-            if (ImGui::CollapsingHeader(("경고 (" + std::to_string(library_.warnings.size()) + ")").c_str())) {
-                for (const std::string& w : library_.warnings) ImGui::TextDisabled("%s", w.c_str());
-            }
+        dl->AddRectFilled(a, b, IM_COL32(28, 32, 40, 255), rounding);
+        dl->AddImageRounded(ImTextureRef(stageTex), a, b, uv0, uv1, IM_COL32_WHITE, rounding);
+    } else if (st) {
+        Skeleton(dl, a, b, rounding);
+    } else {
+        // Studio: the same sky-to-floor ramp the renderer uses without a stage.
+        dl->AddRectFilled(a, b, IM_COL32(222, 233, 242, 255), rounding);
+        const float hy = y0 + (y1 - y0) * 0.58f;
+        dl->PushClipRect(a, b, true);
+        dl->AddRectFilledMultiColor(ImVec2(x0, y0), ImVec2(x1, hy), IM_COL32(176, 205, 232, 255),
+                                    IM_COL32(176, 205, 232, 255), IM_COL32(232, 239, 245, 255),
+                                    IM_COL32(232, 239, 245, 255));
+        dl->AddRectFilledMultiColor(ImVec2(x0, hy), ImVec2(x1, y1), IM_COL32(220, 229, 238, 255),
+                                    IM_COL32(220, 229, 238, 255), IM_COL32(196, 210, 224, 255),
+                                    IM_COL32(196, 210, 224, 255));
+        dl->PopClipRect();
+    }
+    if (ch) {
+        const int ci = (int)(ch - library_.characters.data());
+        const uint64_t tex = CharacterThumb(ci);
+        const float h = (y1 - y0) * 0.96f, w = h * 0.75f;
+        const float cx = (x0 + x1) * 0.5f;
+        if (tex) {
+            dl->PushClipRect(a, b, true);
+            dl->AddImage(ImTextureRef(tex), ImVec2(cx - w * 0.5f, y1 - h), ImVec2(cx + w * 0.5f, y1));
+            dl->PopClipRect();
         }
     }
-    ImGui::Separator();
-
-    // 3. Pick list.
-    const float footerReserve = 150.0f * dpi;
-    const float listHeight = std::max(120.0f, ImGui::GetContentRegionAvail().y - footerReserve);
-    SelectFilter fc, fs, fg;
-    fc.needle = ToLowerAscii(filterCharacter_);
-    fs.needle = ToLowerAscii(filterStage_);
-    fg.needle = ToLowerAscii(filterSong_);
-
-    if (ImGui::BeginTable("pick", 3, ImGuiTableFlags_SizingStretchSame)) {
-        ImGui::TableSetupColumn("캐릭터");
-        ImGui::TableSetupColumn("스테이지");
-        ImGui::TableSetupColumn("곡 / 모션");
-        ImGui::TableHeadersRow();
-        ImGui::TableNextRow();
-
-        for (int col = 0; col < 3; ++col) {
-            ImGui::TableSetColumnIndex(col);
-            char* filterBuf = col == 0 ? filterCharacter_ : (col == 1 ? filterStage_ : filterSong_);
-            ImGui::SetNextItemWidth(-1);
-            ImGui::InputTextWithHint(col == 0 ? "##fc" : (col == 1 ? "##fs" : "##fg"), "검색", filterBuf, 128);
-        }
-        ImGui::TableNextRow();
-        for (int col = 0; col < 3; ++col) {
-            ImGui::TableSetColumnIndex(col);
-            const float childHeight = listHeight - ImGui::GetFrameHeight() - style.ItemSpacing.y;
-            ImGui::BeginChild(col == 0 ? "childChar" : (col == 1 ? "childStage" : "childSong"),
-                              ImVec2(0, childHeight), ImGuiChildFlags_Borders);
-            if (col == 0) {
-                if (library_.characters.empty()) {
-                    ImGui::TextDisabled("라이브러리 폴더에 PMX 모델을 넣어주세요");
-                }
-                for (size_t i = 0; i < library_.characters.size(); ++i) {
-                    const CharacterAsset& a = library_.characters[i];
-                    if (!fc.Matches(a)) continue;
-                    ImGui::PushID((int)i);
-                    if (ImGui::Selectable(a.displayName.c_str(), selCharacter_ == (int)i,
-                                          ImGuiSelectableFlags_None)) {
-                        selCharacter_ = (int)i;
-                        settings_.lastCharacter = a.id;
-                    }
-                    ImGui::TextDisabled("정점 %u · 본 %u · 재질 %u", a.vertexCount, a.boneCount,
-                                        a.materialCount);
-                    ImGui::PopID();
-                }
-            } else if (col == 1) {
-                ImGui::PushID("nostage");
-                if (ImGui::Selectable("(스테이지 없음)", selStage_ == -1, ImGuiSelectableFlags_None))
-                    selStage_ = -1;
-                ImGui::PopID();
-                if (library_.stages.empty()) {
-                    ImGui::TextDisabled("라이브러리 폴더에 스테이지를 넣어주세요");
-                }
-                for (size_t i = 0; i < library_.stages.size(); ++i) {
-                    const StageAsset& a = library_.stages[i];
-                    if (!fs.Matches(a)) continue;
-                    ImGui::PushID((int)i);
-                    if (ImGui::Selectable(a.displayName.c_str(), selStage_ == (int)i,
-                                          ImGuiSelectableFlags_None)) {
-                        selStage_ = (int)i;
-                        settings_.lastStage = a.id;
-                    }
-                    ImGui::TextDisabled("파트 %zu · 정점 %u", a.pmxParts.size(), a.vertexCount);
-                    ImGui::PopID();
-                }
-            } else {
-                if (library_.songs.empty()) {
-                    ImGui::TextDisabled("라이브러리 폴더에 VMD 모션을 넣어주세요");
-                }
-                for (size_t i = 0; i < library_.songs.size(); ++i) {
-                    const SongAsset& a = library_.songs[i];
-                    if (!fg.Matches(a)) continue;
-                    const int secs = (int)(a.durationSec + 0.5f);
-                    ImGui::PushID((int)i);
-                    if (ImGui::Selectable(a.displayName.c_str(), selSong_ == (int)i,
-                                          ImGuiSelectableFlags_None)) {
-                        selSong_ = (int)i;
-                        settings_.lastSong = a.id;
-                    }
-                    ImGui::TextDisabled("%d:%02d · 카메라 %s · 음악 %s", secs / 60, secs % 60,
-                                        a.cameraVmd.empty() ? "X" : "O", a.audioPath.empty() ? "X" : "O");
-                    ImGui::PopID();
-                }
-            }
-            ImGui::EndChild();
-        }
-        ImGui::EndTable();
-    }
-    ImGui::Separator();
-
-    // 4. Footer: graphics row.
-    {
-        bool changed = false;
-        changed |= ImGui::Checkbox("VSync", &settings_.vsync);
-        ImGui::SameLine();
-        {
-            const char* msaaItems[] = {"1x", "2x", "4x", "8x"};
-            int msaaIdx = settings_.msaa == 1 ? 0 : settings_.msaa == 2 ? 1 : settings_.msaa == 4 ? 2 : 3;
-            ImGui::SetNextItemWidth(90);
-            if (ImGui::Combo("MSAA", &msaaIdx, msaaItems, 4)) {
-                settings_.msaa = msaaIdx == 0 ? 1 : msaaIdx == 1 ? 2 : msaaIdx == 2 ? 4 : 8;
-                changed = true;
-            }
-        }
-        ImGui::SameLine();
-        ImGui::SetNextItemWidth(160);
-        changed |= ImGui::SliderFloat("렌더 스케일", &settings_.renderScale, 0.5f, 2.0f, "%.2fx");
-        ImGui::SameLine();
-        changed |= ImGui::Checkbox("외곽선", &settings_.drawEdges);
-        if (changed) {
-            ApplyRenderSettings();
-            settings_.Save(settingsPath_);
-        }
-    }
-
-    // 5. Footer: action buttons.
-    {
-        const bool canPlay = selCharacter_ >= 0 && selSong_ >= 0;
-        const ImVec2 btnSize(0, 40.0f * dpi);
-
-        ImGui::BeginDisabled(!canPlay);
-        if (ImGui::Button("▶ 플레이", btnSize)) {
-            settings_.Save(settingsPath_);
-            StartLoad(LoadTarget::Play, &library_.characters[selCharacter_],
-                      selStage_ >= 0 ? &library_.stages[selStage_] : nullptr,
-                      &library_.songs[selSong_]);
-        }
-        ImGui::EndDisabled();
-        ImGui::SameLine();
-        if (ImGui::Button("벤치마크", btnSize)) {
-            screen_ = Screen::BenchLobby;
-            RefreshLeaderboard();
-        }
-        ImGui::SameLine();
-        if (ImGui::Button("종료", btnSize)) {
-            running_ = false;
-        }
-    }
-
-    ImGui::End();
+    dl->AddRect(a, b, WithAlpha(p.ink, 0.06f), rounding);
 }
 
 // ---------------------------------------------------------------------------
-// DrawLoading
+// Scanning
+// ---------------------------------------------------------------------------
+
+void App::DrawScanning() {
+    BeginScreen("##scanning");
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    const Palette& p = P();
+    const ImVec2 c = ImGui::GetMainViewport()->GetCenter();
+    const float w = Dp(360.0f);
+
+    const ImVec2 ws = TextSize(Font::Bold, 34.0f, "MMDX12");
+    const ImVec2 wm = TextSize(Font::Bold, 34.0f, "MMDX");
+    const float y = c.y - Dp(70.0f);
+    Text(dl, Font::Bold, 34.0f, ImVec2(c.x - ws.x * 0.5f, y), p.ink, "MMDX");
+    Text(dl, Font::Bold, 34.0f, ImVec2(c.x - ws.x * 0.5f + wm.x, y), p.accentInk, "12");
+
+    const int visited = scanProgress_.filesVisited.load(std::memory_order_relaxed);
+    const int total = scanProgress_.filesTotal.load(std::memory_order_relaxed);
+    const char* label = "라이브러리를 살펴보는 중";
+    const ImVec2 ls = TextSize(Font::Semibold, size::Body, label);
+    Text(dl, Font::Semibold, size::Body, ImVec2(c.x - ls.x * 0.5f, y + ws.y + Dp(22.0f)), p.ink2, label);
+    const float by = y + ws.y + Dp(54.0f);
+    if (total > 0)
+        ProgressBar(dl, ImVec2(c.x - w * 0.5f, by), ImVec2(c.x + w * 0.5f, by + Dp(6.0f)), (float)visited / (float)total);
+    else
+        Skeleton(dl, ImVec2(c.x - w * 0.5f, by), ImVec2(c.x + w * 0.5f, by + Dp(6.0f)), Dp(3.0f));
+    const std::string count = total > 0 ? Thousands((uint64_t)visited) + " / " + Thousands((uint64_t)total) + " 파일"
+                                        : Thousands((uint64_t)visited) + " 파일";
+    const ImVec2 cs = TextSize(Font::Regular, size::Caption, count.c_str());
+    Text(dl, Font::Regular, size::Caption, ImVec2(c.x - cs.x * 0.5f, by + Dp(16.0f)), p.ink3, count.c_str());
+    EndScreen();
+}
+
+// ---------------------------------------------------------------------------
+// Library (select)
+// ---------------------------------------------------------------------------
+
+void App::DrawSelect() {
+    BeginScreen("##select");
+    DrawAppBar(0);
+    const Palette& p = P();
+    const ImVec2 ds = ImGui::GetIO().DisplaySize;
+    const float pad = Dp(kPad), gap = Dp(24.0f);
+    const float top = Dp(kAppBarH) + pad;
+    const float panelX = ds.x - pad - Dp(kPanelW);
+    const float leftX = pad, leftR = panelX - gap;
+
+    // ---- header row: category tabs + search
+    {
+        const std::string l0 = "캐릭터  " + std::to_string(library_.characters.size());
+        const std::string l1 = "스테이지  " + std::to_string(library_.stages.size());
+        const std::string l2 = "곡  " + std::to_string(library_.songs.size());
+        const char* labels[] = {l0.c_str(), l1.c_str(), l2.c_str()};
+        const char* icons[] = {icon::Person, icon::Mountains, icon::Music};
+        ImGui::SetCursorScreenPos(ImVec2(leftX, top));
+        Segmented("##tabs", labels, 3, &libraryTab_, 0.0f, 40.0f, icons);
+        char* filter = libraryTab_ == 0 ? filterCharacter_ : (libraryTab_ == 1 ? filterStage_ : filterSong_);
+        const float sw = std::min(280.0f, (leftR - leftX) / Dpi() * 0.4f);
+        ImGui::SetCursorScreenPos(ImVec2(leftR - Dp(sw), top + Dp(1.0f)));
+        const char* hints[] = {"캐릭터 검색", "스테이지 검색", "곡 검색"};
+        SearchField("##search", filter, 128, hints[libraryTab_], sw);
+    }
+
+    // ---- content grid
+    const float gridTop = top + Dp(40.0f) + Dp(20.0f);
+    ImGui::SetCursorScreenPos(ImVec2(leftX - Dp(6.0f), gridTop - Dp(6.0f)));
+    ImGui::BeginChild("##grid", ImVec2(leftR - leftX + Dp(12.0f), ds.y - gridTop - pad + Dp(12.0f)), ImGuiChildFlags_None,
+                      ImGuiWindowFlags_NoBackground);
+    {
+        ImDrawList* dl = ImGui::GetWindowDrawList();
+        const float inset = Dp(6.0f);
+        const float availW = ImGui::GetContentRegionAvail().x - inset * 2.0f - Dp(10.0f);
+        const ImVec2 origin(ImGui::GetCursorScreenPos().x + inset, ImGui::GetCursorScreenPos().y + inset);
+        const float cgap = Dp(16.0f);
+        float contentH = 0;
+
+        if (libraryTab_ == 0) {
+            const std::string needle = ToLowerAscii(filterCharacter_);
+            const float minW = Dp(172.0f);
+            const int cols = std::max(1, (int)((availW + cgap) / (minW + cgap)));
+            const float cw = (availW - cgap * (cols - 1)) / cols;
+            const float thumbH = cw * 4.0f / 3.0f, ch = thumbH + Dp(64.0f);
+            int n = 0;
+            for (size_t i = 0; i < library_.characters.size(); ++i) {
+                const CharacterAsset& a = library_.characters[i];
+                if (!MatchesFilter(needle, a.displayName, a.id)) continue;
+                const int col = n % cols, row = n / cols;
+                ++n;
+                const ImVec2 ca(origin.x + col * (cw + cgap), origin.y + row * (ch + cgap));
+                const ImVec2 cb(ca.x + cw, ca.y + ch);
+                contentH = std::max(contentH, cb.y - origin.y);
+                if (!ImGui::IsRectVisible(ImVec2(ca.x, ca.y - Dp(20)), ImVec2(cb.x, cb.y + Dp(20)))) continue;
+                ImGui::PushID((int)i);
+                bool hovered = false;
+                if (CardItem("##card", ca, cb, &hovered)) {
+                    selCharacter_ = (int)i;
+                    settings_.lastCharacter = a.id;
+                }
+                const bool sel = selCharacter_ == (int)i;
+                const float hv = Anim(ImGui::GetID("##hv"), hovered);
+                const float sv = Anim(ImGui::GetID("##sv"), sel, 14.0f);
+                const float lift = -Dp(3.0f) * hv;
+                const ImVec2 a0(ca.x, ca.y + lift), b0(cb.x, cb.y + lift);
+                const float r = Dp(14.0f);
+                SoftShadow(dl, a0, b0, r, Dp(10.0f + 8.0f * hv), 0.07f + 0.07f * hv, ImVec2(0, Dp(3.0f + 3.0f * hv)));
+                dl->AddRectFilled(a0, b0, p.surface, r);
+                const ImVec2 ta(a0.x, a0.y), tb(b0.x, a0.y + thumbH);
+                dl->AddRectFilled(ta, tb, Mix(p.surface, p.accentSoft, 0.85f), r, ImDrawFlags_RoundCornersTop);
+                // light floor fade behind the portrait
+                dl->AddRectFilledMultiColor(ImVec2(ta.x, tb.y - thumbH * 0.35f), tb, WithAlpha(p.surface, 0.0f),
+                                            WithAlpha(p.surface, 0.0f), WithAlpha(p.surface, 0.55f),
+                                            WithAlpha(p.surface, 0.55f));
+                if (const uint64_t tex = CharacterThumb((int)i))
+                    dl->AddImageRounded(ImTextureRef(tex), ta, tb, ImVec2(0, 0), ImVec2(1, 1), IM_COL32_WHITE, r,
+                                        ImDrawFlags_RoundCornersTop);
+                else
+                    Skeleton(dl, ImVec2(ta.x + Dp(10), ta.y + Dp(10)), ImVec2(tb.x - Dp(10), tb.y - Dp(10)), Dp(10.0f));
+                TextEllipsis(dl, Font::Semibold, size::Body, ImVec2(a0.x + Dp(14.0f), tb.y + Dp(12.0f)), b0.x - Dp(12.0f),
+                             p.ink, a.displayName.c_str());
+                const std::string meta = "정점 " + Thousands(a.vertexCount) + "  ·  본 " + Thousands(a.boneCount);
+                TextEllipsis(dl, Font::Regular, size::Caption, ImVec2(a0.x + Dp(14.0f), tb.y + Dp(35.0f)),
+                             b0.x - Dp(12.0f), p.ink3, meta.c_str());
+                if (sv > 0.01f) dl->AddRect(a0, b0, WithAlpha(p.accent, sv), r, 0, Dp(2.0f));
+                else dl->AddRect(a0, b0, WithAlpha(p.ink, 0.05f), r);
+                CheckBadge(dl, ImVec2(b0.x - Dp(20.0f), a0.y + Dp(20.0f)), sv);
+                ImGui::PopID();
+            }
+            if (n == 0) {
+                const char* msg = library_.characters.empty() ? "라이브러리 폴더에 PMX 모델을 넣어 주세요"
+                                                              : "검색 결과가 없습니다";
+                const ImVec2 ms = TextSize(Font::Semibold, size::Title, msg);
+                Text(dl, Font::Semibold, size::Title, ImVec2(origin.x + (availW - ms.x) * 0.5f, origin.y + Dp(80.0f)),
+                     p.ink2, msg);
+                contentH = Dp(160.0f);
+            }
+        } else if (libraryTab_ == 1) {
+            const std::string needle = ToLowerAscii(filterStage_);
+            const float minW = Dp(250.0f);
+            const int cols = std::max(1, (int)((availW + cgap) / (minW + cgap)));
+            const float cw = (availW - cgap * (cols - 1)) / cols;
+            const float thumbH = cw * 10.0f / 16.0f, ch = thumbH + Dp(64.0f);
+            int n = 0;
+            for (int i = -1; i < (int)library_.stages.size(); ++i) {
+                const StageAsset* a = i >= 0 ? &library_.stages[(size_t)i] : nullptr;
+                if (a && !MatchesFilter(needle, a->displayName, a->id)) continue;
+                const int col = n % cols, row = n / cols;
+                ++n;
+                const ImVec2 ca(origin.x + col * (cw + cgap), origin.y + row * (ch + cgap));
+                const ImVec2 cb(ca.x + cw, ca.y + ch);
+                contentH = std::max(contentH, cb.y - origin.y);
+                if (!ImGui::IsRectVisible(ImVec2(ca.x, ca.y - Dp(20)), ImVec2(cb.x, cb.y + Dp(20)))) continue;
+                ImGui::PushID(i);
+                bool hovered = false;
+                if (CardItem("##card", ca, cb, &hovered)) {
+                    selStage_ = i;
+                    settings_.lastStage = a ? a->id : std::string();
+                }
+                const bool sel = selStage_ == i;
+                const float hv = Anim(ImGui::GetID("##hv"), hovered);
+                const float sv = Anim(ImGui::GetID("##sv"), sel, 14.0f);
+                const float lift = -Dp(3.0f) * hv;
+                const ImVec2 a0(ca.x, ca.y + lift), b0(cb.x, cb.y + lift);
+                const float r = Dp(14.0f);
+                SoftShadow(dl, a0, b0, r, Dp(10.0f + 8.0f * hv), 0.07f + 0.07f * hv, ImVec2(0, Dp(3.0f + 3.0f * hv)));
+                dl->AddRectFilled(a0, b0, p.surface, r);
+                const ImVec2 ta(a0.x, a0.y), tb(b0.x, a0.y + thumbH);
+                if (a) {
+                    if (const uint64_t tex = StageThumb(i)) {
+                        dl->AddRectFilled(ta, tb, IM_COL32(28, 32, 40, 255), r, ImDrawFlags_RoundCornersTop);
+                        dl->AddImageRounded(ImTextureRef(tex), ta, tb, ImVec2(0, 0), ImVec2(1, 1), IM_COL32_WHITE, r,
+                                            ImDrawFlags_RoundCornersTop);
+                    } else {
+                        Skeleton(dl, ImVec2(ta.x + Dp(10), ta.y + Dp(10)), ImVec2(tb.x - Dp(10), tb.y - Dp(10)), Dp(10.0f));
+                    }
+                } else {
+                    dl->PushClipRect(ta, tb, true);
+                    DrawScenePreview(nullptr, nullptr, ta.x, ta.y, tb.x, tb.y + r, r);
+                    dl->PopClipRect();
+                    Icon(dl, icon::Sun, 30.0f, ImVec2((ta.x + tb.x) * 0.5f, (ta.y + tb.y) * 0.5f), WithAlpha(p.ink2, 0.55f));
+                }
+                const char* name = a ? a->displayName.c_str() : "스튜디오";
+                TextEllipsis(dl, Font::Semibold, size::Body, ImVec2(a0.x + Dp(14.0f), tb.y + Dp(12.0f)), b0.x - Dp(12.0f),
+                             p.ink, name);
+                const std::string meta = a ? "파트 " + std::to_string(a->pmxParts.size()) + "  ·  정점 " +
+                                                 Thousands(a->vertexCount)
+                                           : std::string("스테이지 없이 밝은 바닥 위에서");
+                TextEllipsis(dl, Font::Regular, size::Caption, ImVec2(a0.x + Dp(14.0f), tb.y + Dp(35.0f)),
+                             b0.x - Dp(12.0f), p.ink3, meta.c_str());
+                if (sv > 0.01f) dl->AddRect(a0, b0, WithAlpha(p.accent, sv), r, 0, Dp(2.0f));
+                else dl->AddRect(a0, b0, WithAlpha(p.ink, 0.05f), r);
+                CheckBadge(dl, ImVec2(b0.x - Dp(20.0f), a0.y + Dp(20.0f)), sv);
+                ImGui::PopID();
+            }
+        } else {
+            const std::string needle = ToLowerAscii(filterSong_);
+            const float rowH = Dp(68.0f), rgap = Dp(8.0f);
+            int n = 0;
+            for (size_t i = 0; i < library_.songs.size(); ++i) {
+                const SongAsset& a = library_.songs[i];
+                if (!MatchesFilter(needle, a.displayName, a.id)) continue;
+                const ImVec2 ra(origin.x, origin.y + n * (rowH + rgap)), rb(origin.x + availW, ra.y + rowH);
+                ++n;
+                contentH = std::max(contentH, rb.y - origin.y);
+                if (!ImGui::IsRectVisible(ra, rb)) continue;
+                ImGui::PushID((int)i);
+                bool hovered = false;
+                if (CardItem("##row", ra, rb, &hovered)) {
+                    selSong_ = (int)i;
+                    settings_.lastSong = a.id;
+                }
+                const bool sel = selSong_ == (int)i;
+                const float hv = Anim(ImGui::GetID("##hv"), hovered);
+                const float sv = Anim(ImGui::GetID("##sv"), sel, 14.0f);
+                const float r = Dp(14.0f);
+                SoftShadow(dl, ra, rb, r, Dp(8.0f), 0.05f + 0.05f * hv, ImVec2(0, Dp(2.0f)));
+                dl->AddRectFilled(ra, rb, Mix(Mix(p.surface, p.sunken, hv * 0.35f), p.accentSoft, sv), r);
+                dl->AddRect(ra, rb, Mix(WithAlpha(p.ink, 0.05f), p.accent, sv), r, 0, sv > 0.5f ? Dp(2.0f) : 1.0f);
+                const ImVec2 ia(ra.x + Dp(14.0f), ra.y + Dp(14.0f)), ib(ia.x + Dp(40.0f), ia.y + Dp(40.0f));
+                dl->AddRectFilled(ia, ib, Mix(p.accentSoft, p.surface, sv), Dp(10.0f));
+                Icon(dl, icon::Music, 20.0f, ImVec2((ia.x + ib.x) * 0.5f, (ia.y + ib.y) * 0.5f), p.accentInk);
+                const float tx = ib.x + Dp(14.0f);
+                const float durX = rb.x - Dp(64.0f);
+                TextEllipsis(dl, Font::Semibold, size::Body, ImVec2(tx, ra.y + Dp(14.0f)), durX - Dp(16.0f), p.ink,
+                             a.displayName.c_str());
+                // feature badges
+                float bx = tx;
+                const float by = ra.y + Dp(38.0f);
+                ImVec2 bs;
+                if (!a.audioPath.empty()) {
+                    Badge(dl, ImVec2(bx, by), "음원", WithAlpha(p.accent, 0.16f), p.accentInk, &bs);
+                    bx += bs.x + Dp(6.0f);
+                } else {
+                    Badge(dl, ImVec2(bx, by), "음원 없음", p.warnSoft, p.warn, &bs);
+                    bx += bs.x + Dp(6.0f);
+                }
+                if (!a.cameraVmd.empty()) {
+                    Badge(dl, ImVec2(bx, by), "카메라 모션", WithAlpha(p.ink, 0.06f), p.ink2, &bs);
+                    bx += bs.x + Dp(6.0f);
+                }
+                if (!a.extraVmds.empty()) Badge(dl, ImVec2(bx, by), "표정", WithAlpha(p.ink, 0.06f), p.ink2, &bs);
+                const std::string dur = MinSec(a.durationSec);
+                const ImVec2 dsz = TextSize(Font::Semibold, size::Body, dur.c_str());
+                if (sv > 0.01f)
+                    CheckBadge(dl, ImVec2(rb.x - Dp(28.0f), ra.y + rowH * 0.5f), sv);
+                const float durRight = sv > 0.01f ? rb.x - Dp(52.0f) : rb.x - Dp(20.0f);
+                Text(dl, Font::Semibold, size::Body, ImVec2(durRight - dsz.x, ra.y + (rowH - dsz.y) * 0.5f), p.ink2,
+                     dur.c_str());
+                ImGui::PopID();
+            }
+            if (n == 0) {
+                const char* msg = library_.songs.empty() ? "라이브러리 폴더에 VMD 댄스 모션을 넣어 주세요"
+                                                         : "검색 결과가 없습니다";
+                const ImVec2 ms = TextSize(Font::Semibold, size::Title, msg);
+                Text(dl, Font::Semibold, size::Title, ImVec2(origin.x + (availW - ms.x) * 0.5f, origin.y + Dp(80.0f)),
+                     p.ink2, msg);
+                contentH = Dp(160.0f);
+            }
+        }
+        ImGui::SetCursorScreenPos(origin);
+        ImGui::Dummy(ImVec2(availW, contentH + inset * 2.0f));
+    }
+    ImGui::EndChild();
+
+    // ---- right panel: the scene being assembled + graphics + play
+    {
+        ImDrawList* dl = ImGui::GetWindowDrawList();
+        const ImVec2 pa(panelX, top), pb(ds.x - pad, ds.y - pad);
+        Panel(dl, pa, pb, Dp(18.0f), 1.0f);
+        const float ip = Dp(20.0f);
+        const float innerW = pb.x - pa.x - ip * 2.0f;
+        const CharacterAsset* ch = selCharacter_ >= 0 ? &library_.characters[(size_t)selCharacter_] : nullptr;
+        const StageAsset* st = selStage_ >= 0 ? &library_.stages[(size_t)selStage_] : nullptr;
+        const SongAsset* song = selSong_ >= 0 ? &library_.songs[(size_t)selSong_] : nullptr;
+
+        // preview
+        const float prevH = innerW * (advancedOpen_ ? 0.34f : 10.0f / 16.0f);
+        DrawScenePreview(ch, st, pa.x + ip, pa.y + ip, pb.x - ip, pa.y + ip + prevH, Dp(12.0f));
+        if (!ch) {
+            const char* msg = "캐릭터를 골라 주세요";
+            const ImVec2 ms = TextSize(Font::Semibold, size::Body, msg);
+            Text(dl, Font::Semibold, size::Body, ImVec2(pa.x + ip + (innerW - ms.x) * 0.5f, pa.y + ip + prevH * 0.5f - ms.y),
+                 WithAlpha(p.ink2, 0.8f), msg);
+        }
+        float y = pa.y + ip + prevH + Dp(18.0f);
+        TextEllipsis(dl, Font::Bold, size::Heading, ImVec2(pa.x + ip, y), pb.x - ip, song ? p.ink : p.ink3,
+                     song ? song->displayName.c_str() : "곡을 골라 주세요");
+        y += Dp(32.0f);
+        {
+            std::string sub = (ch ? ch->displayName : std::string("캐릭터 미선택")) + "  ·  " +
+                              (st ? st->displayName : std::string("스튜디오"));
+            if (song) sub += "  ·  " + MinSec(song->durationSec);
+            TextEllipsis(dl, Font::Regular, size::Small, ImVec2(pa.x + ip, y), pb.x - ip, p.ink2, sub.c_str());
+        }
+        y += Dp(34.0f);
+        dl->AddLine(ImVec2(pa.x + ip, y), ImVec2(pb.x - ip, y), p.line);
+        y += Dp(16.0f);
+
+        // settings column (scrolls when the detailed settings are open)
+        const float playH = Dp(52.0f);
+        const float bottomBlock = playH + Dp(20.0f) + (ch && song ? 0.0f : Dp(26.0f));
+        ImGui::SetCursorScreenPos(ImVec2(pa.x + ip, y));
+        ImGui::BeginChild("##settings", ImVec2(innerW + Dp(8.0f), pb.y - y - bottomBlock - Dp(8.0f)), ImGuiChildFlags_None,
+                          ImGuiWindowFlags_NoBackground);
+        ImGui::PushItemWidth(innerW);
+        {
+            ImGuiWindow* win = ImGui::GetCurrentWindow();
+            win->DC.CursorPos.x = win->Pos.x;
+            const float colW = innerW;
+            ImGui::BeginGroup();
+            ImGui::PushClipRect(win->Pos, ImVec2(win->Pos.x + colW + Dp(4.0f), win->Pos.y + win->Size.y), true);
+            SectionLabel("그래픽 품질");
+            const char* q[] = {"낮음", "보통", "높음", "최고"};
+            int preset = settings_.graphicsPreset;
+            if (Segmented("##quality", q, 4, &preset, colW / Dpi(), 36.0f)) {
+                ApplyGraphicsPreset(preset);
+                ApplyRenderSettings();
+                settings_.Save(settingsPath_);
+            }
+            Gap(18.0f);
+            SectionLabel("렌더링");
+            const char* paths[] = {"래스터", "레이 트레이싱", "패스 트레이싱"};
+            int path = settings_.renderPath;
+            if (Segmented("##renderpath", paths, 3, &path, colW / Dpi(), 36.0f)) {
+                if (path != 0 && !renderer_.RayTracingSupported()) path = 0;
+                settings_.renderPath = path;
+                ApplyRenderSettings();
+                settings_.Save(settingsPath_);
+            }
+            if (!renderer_.RayTracingSupported()) {
+                PushFont(Font::Regular, size::Caption);
+                ImGui::PushStyleColor(ImGuiCol_Text, ImGui::ColorConvertU32ToFloat4(P().ink3));
+                ImGui::TextUnformatted("이 GPU는 DXR 1.1 레이 트레이싱을 지원하지 않습니다");
+                ImGui::PopStyleColor();
+                PopFont();
+            }
+            Gap(14.0f);
+            SectionLabel("업스케일러");
+            const char* ups[] = {"끔", "DLSS", "FSR", "XeSS"};
+            int up = settings_.upscaler;
+            if (Segmented("##upscaler", ups, 4, &up, colW / Dpi(), 36.0f)) {
+                if (up != 0 && !renderer_.UpscalerAvailable((UpscalerKind)up)) up = 0;
+                settings_.upscaler = up;
+                ApplyRenderSettings();
+                settings_.Save(settingsPath_);
+            }
+            {
+                std::string unavail;
+                for (int k = 1; k <= 3; ++k) {
+                    if (!renderer_.UpscalerAvailable((UpscalerKind)k)) {
+                        if (!unavail.empty()) unavail += ", ";
+                        unavail += ups[k];
+                    }
+                }
+                if (!unavail.empty()) {
+                    const std::string cap = "사용할 수 없음: " + unavail;
+                    PushFont(Font::Regular, size::Caption);
+                    ImGui::PushStyleColor(ImGuiCol_Text, ImGui::ColorConvertU32ToFloat4(P().ink3));
+                    ImGui::TextUnformatted(cap.c_str());
+                    ImGui::PopStyleColor();
+                    PopFont();
+                }
+            }
+            if (settings_.upscaler != 0) {
+                Gap(10.0f);
+                const char* qs[] = {"네이티브", "품질", "균형", "성능", "울트라"};
+                int q = settings_.upscalerQuality;
+                if (Segmented("##upq", qs, 5, &q, colW / Dpi(), 34.0f)) {
+                    settings_.upscalerQuality = q;
+                    ApplyRenderSettings();
+                    settings_.Save(settingsPath_);
+                }
+            }
+            Gap(18.0f);
+            SectionLabel("조명");
+            const char* lightIcons[] = {icon::Sun, icon::CircleHalf, icon::Sparkle, icon::Moon};
+            const float chipW = (colW / Dpi() - 8.0f) * 0.5f;
+            for (int i = 0; i < kLightingPresetCount; ++i) {
+                if (i % 2) ImGui::SameLine(0, Dp(8.0f));
+                ImGui::PushID(i);
+                if (Chip("##light", LightingPresetName((LightingPreset)i), lightIcons[i], settings_.lighting == i, chipW)) {
+                    settings_.lighting = i;
+                    settings_.Save(settingsPath_);
+                }
+                ImGui::PopID();
+            }
+            Gap(14.0f);
+            // detailed settings disclosure
+            {
+                ImGuiWindow* w = ImGui::GetCurrentWindow();
+                const ImVec2 da = w->DC.CursorPos;
+                bool hovered = false;
+                if (CardItem("##advanced", da, ImVec2(da.x + colW, da.y + Dp(34.0f)), &hovered)) advancedOpen_ = !advancedOpen_;
+                const float rot = Anim(ImGui::GetID("##advrot"), advancedOpen_, 14.0f);
+                Text(w->DrawList, Font::Semibold, size::Small, ImVec2(da.x, da.y + Dp(8.0f)), hovered ? p.ink : p.ink2,
+                     "세부 설정");
+                Icon(w->DrawList, rot > 0.5f ? icon::CaretDown : icon::CaretRight, 14.0f,
+                     ImVec2(da.x + colW - Dp(10.0f), da.y + Dp(17.0f)), p.ink2);
+            }
+            if (advancedOpen_) {
+                bool changed = false;
+                changed |= Switch("##shadows", "그림자", &settings_.shadows);
+                changed |= Switch("##ssao", "앰비언트 오클루전", &settings_.ssao);
+                changed |= Switch("##ssr", "화면 공간 반사", &settings_.ssr);
+                changed |= Switch("##bloom", "블룸", &settings_.bloom);
+                changed |= Switch("##taa", "TAA", &settings_.taa, "시간 누적 안티에일리어싱");
+                changed |= Switch("##edges", "외곽선", &settings_.drawEdges);
+                changed |= Switch("##vsync", "수직 동기화", &settings_.vsync);
+                Gap(6.0f);
+                SectionLabel("MSAA");
+                const char* m[] = {"끔", "2x", "4x", "8x"};
+                int mi = settings_.msaa == 1 ? 0 : settings_.msaa == 2 ? 1 : settings_.msaa == 4 ? 2 : 3;
+                if (Segmented("##msaa", m, 4, &mi, colW / Dpi(), 34.0f)) {
+                    settings_.msaa = mi == 0 ? 1 : mi == 1 ? 2 : mi == 2 ? 4 : 8;
+                    changed = true;
+                }
+                if (settings_.renderPath == 2) {
+                    Gap(14.0f);
+                    SectionLabel("패스 트레이싱 샘플");
+                    const char* s[] = {"1", "2", "4"};
+                    int si = settings_.ptSamples == 1 ? 0 : settings_.ptSamples == 2 ? 1 : 2;
+                    if (Segmented("##ptsamples", s, 3, &si, colW / Dpi(), 34.0f)) {
+                        settings_.ptSamples = si == 0 ? 1 : si == 1 ? 2 : 4;
+                        ApplyRenderSettings();
+                        settings_.Save(settingsPath_);
+                    }
+                    SectionLabel("반사 횟수");
+                    const char* bn[] = {"2", "3", "4", "6"};
+                    int bi = settings_.ptBounces == 2 ? 0 : settings_.ptBounces == 3 ? 1 : settings_.ptBounces == 4 ? 2 : 3;
+                    if (Segmented("##ptbounces", bn, 4, &bi, colW / Dpi(), 34.0f)) {
+                        settings_.ptBounces = bi == 0 ? 2 : bi == 1 ? 3 : bi == 2 ? 4 : 6;
+                        ApplyRenderSettings();
+                        settings_.Save(settingsPath_);
+                    }
+                }
+                Gap(14.0f);
+                changed |= SliderRow("##scale", "렌더 스케일", &settings_.renderScale, 0.5f, 2.0f, "%.2fx");
+                Gap(10.0f);
+                changed |= SliderRow("##exposure", "노출", &settings_.exposure, 0.5f, 2.0f, "%.2f");
+                Gap(10.0f);
+                if (Switch("##physics", "물리 연산", &settings_.physics, "머리카락과 옷의 흔들림")) settings_.Save(settingsPath_);
+                if (changed) {
+                    // touching an effect toggle leaves the named presets
+                    settings_.graphicsPreset = 4;
+                    ApplyRenderSettings();
+                    settings_.Save(settingsPath_);
+                }
+            }
+            ImGui::PopClipRect();
+            ImGui::EndGroup();
+        }
+        ImGui::PopItemWidth();
+        ImGui::EndChild();
+
+        // play
+        const bool canPlay = ch && song;
+        float by = pb.y - ip - playH;
+        if (!canPlay) {
+            const char* hint = !ch ? "캐릭터와 곡을 고르면 시작할 수 있어요" : "곡을 고르면 시작할 수 있어요";
+            const ImVec2 hs = TextSize(Font::Regular, size::Caption, hint);
+            Text(dl, Font::Regular, size::Caption, ImVec2(pa.x + ip + (innerW - hs.x) * 0.5f, by - Dp(24.0f)), p.ink3, hint);
+        }
+        ImGui::SetCursorScreenPos(ImVec2(pa.x + ip, by));
+        ImGui::BeginDisabled(!canPlay);
+        if (Button("##play", "플레이", icon::Play, ButtonKind::Primary, ImVec2(innerW / Dpi(), 52.0f))) {
+            settings_.Save(settingsPath_);
+            StartLoad(LoadTarget::Play, ch, st, song);
+        }
+        ImGui::EndDisabled();
+    }
+
+    // keyboard: Enter starts playback
+    if (selCharacter_ >= 0 && selSong_ >= 0 && !ImGui::GetIO().WantTextInput && ImGui::IsKeyPressed(ImGuiKey_Enter, false))
+        StartLoad(LoadTarget::Play, &library_.characters[(size_t)selCharacter_],
+                  selStage_ >= 0 ? &library_.stages[(size_t)selStage_] : nullptr, &library_.songs[(size_t)selSong_]);
+    EndScreen();
+}
+
+// ---------------------------------------------------------------------------
+// Loading
 // ---------------------------------------------------------------------------
 
 void App::DrawLoading() {
-    BeginFullScreen("##loading");
+    BeginScreen("##loading");
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    const Palette& p = P();
+    const ImVec2 c = ImGui::GetMainViewport()->GetCenter();
+    const float w = Dp(520.0f), prevH = w * 9.0f / 16.0f;
+    const float h = prevH + Dp(150.0f);
+    const ImVec2 a(c.x - w * 0.5f, c.y - h * 0.5f), b(c.x + w * 0.5f, c.y + h * 0.5f);
+    Panel(dl, a, b, Dp(18.0f), 1.2f);
 
-    ImVec2 center = ImGui::GetMainViewport()->GetCenter();
-    ImGui::SetCursorPos(ImVec2(center.x - 200, center.y - 60));
-    ImGui::BeginGroup();
-    ImGui::TextUnformatted("불러오는 중…");
-    ImGui::TextUnformatted(loadProgress_.Status().c_str());
-    ImGui::ProgressBar(loadProgress_.fraction.load(std::memory_order_relaxed), ImVec2(400, 0));
+    const CharacterAsset* ch = selCharacter_ >= 0 && loadTarget_ == LoadTarget::Play ? &library_.characters[(size_t)selCharacter_] : nullptr;
+    const StageAsset* st = selStage_ >= 0 && loadTarget_ == LoadTarget::Play ? &library_.stages[(size_t)selStage_] : nullptr;
+    const SongAsset* song = selSong_ >= 0 && loadTarget_ == LoadTarget::Play ? &library_.songs[(size_t)selSong_] : nullptr;
+    const float ip = Dp(14.0f);
+    DrawScenePreview(ch, st, a.x + ip, a.y + ip, b.x - ip, a.y + ip + prevH - ip, Dp(12.0f));
 
-    if (!loadError_.empty() && !loadFuture_.valid()) {
-        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.3f, 0.3f, 1.0f));
-        ImGui::TextUnformatted(loadError_.c_str());
-        ImGui::PopStyleColor();
-        if (ImGui::Button("돌아가기")) screen_ = Screen::Select;
+    float y = a.y + prevH + Dp(16.0f);
+    const char* title = loadTarget_ == LoadTarget::Benchmark ? "벤치마크 준비 중" : (song ? song->displayName.c_str() : "불러오는 중");
+    TextEllipsis(dl, Font::Bold, size::Title + 2.0f, ImVec2(a.x + Dp(24.0f), y), b.x - Dp(24.0f), p.ink, title);
+    y += Dp(34.0f);
+    const bool failed = !loadError_.empty() && !loadFuture_.valid();
+    if (failed) {
+        ImVec2 bs;
+        Badge(dl, ImVec2(a.x + Dp(24.0f), y), "불러오지 못했습니다", p.dangerSoft, p.danger, &bs);
+        TextEllipsis(dl, Font::Regular, size::Small, ImVec2(a.x + Dp(24.0f), y + bs.y + Dp(8.0f)), b.x - Dp(24.0f), p.ink2,
+                     loadError_.c_str());
+        ImGui::SetCursorScreenPos(ImVec2(b.x - Dp(24.0f) - Dp(120.0f), b.y - Dp(24.0f) - Dp(40.0f)));
+        if (Button("##back", "돌아가기", icon::ArrowLeft, ButtonKind::Secondary, ImVec2(120.0f, 40.0f)))
+            screen_ = loadTarget_ == LoadTarget::Benchmark ? Screen::BenchLobby : Screen::Select;
+    } else {
+        const std::string status = loadProgress_.Status();
+        TextEllipsis(dl, Font::Regular, size::Small, ImVec2(a.x + Dp(24.0f), y), b.x - Dp(24.0f), p.ink2,
+                     status.empty() ? "준비 중" : status.c_str());
+        y += Dp(30.0f);
+        ProgressBar(dl, ImVec2(a.x + Dp(24.0f), y), ImVec2(b.x - Dp(24.0f), y + Dp(6.0f)),
+                    loadProgress_.fraction.load(std::memory_order_relaxed));
     }
-    ImGui::EndGroup();
-
-    ImGui::End();
+    EndScreen();
 }
 
 } // namespace mmdx

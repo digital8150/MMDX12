@@ -30,6 +30,18 @@ add_library(imgui STATIC
 target_include_directories(imgui PUBLIC ${EXT}/imgui ${EXT}/imgui/backends)
 target_link_libraries(imgui PUBLIC d3d12 dxgi)
 
+# Bullet Physics (LinearMath + Collision + Dynamics only). Not built from its *All.cpp unity
+# files: btVector3.cpp defines BT_USE_SSE_IN_API, which breaks the files after it.
+file(GLOB_RECURSE BULLET_SRC CONFIGURE_DEPENDS
+  ${EXT}/bullet/src/LinearMath/*.cpp
+  ${EXT}/bullet/src/BulletCollision/*.cpp
+  ${EXT}/bullet/src/BulletDynamics/*.cpp)
+add_library(bullet STATIC ${BULLET_SRC})
+target_include_directories(bullet SYSTEM PUBLIC ${EXT}/bullet/src)
+if(MSVC)
+  target_compile_options(bullet PRIVATE /W0)
+endif()
+
 # ---- engine modules --------------------------------------------------------
 # core + asset: file formats, text conversion, library scanning (no GPU)
 file(GLOB CORE_SRC CONFIGURE_DEPENDS src/core/*.cpp src/asset/*.cpp)
@@ -45,7 +57,7 @@ if(NOT ANIM_SRC)
   set(ANIM_SRC ${CMAKE_SOURCE_DIR}/cmake/empty.cpp)
 endif()
 add_library(mmdx_anim STATIC ${ANIM_SRC})
-target_link_libraries(mmdx_anim PUBLIC mmdx_core)
+target_link_libraries(mmdx_anim PUBLIC mmdx_core PRIVATE bullet)
 
 # render: D3D12 device, GPU resources, render passes
 file(GLOB RENDER_SRC CONFIGURE_DEPENDS src/render/*.cpp)
@@ -54,6 +66,14 @@ if(NOT RENDER_SRC)
 endif()
 add_library(mmdx_render STATIC ${RENDER_SRC})
 target_link_libraries(mmdx_render PUBLIC mmdx_core Microsoft::DirectX-Headers Microsoft::DirectX-Guids d3d12 dxgi d3dcompiler)
+# Upscaler SDKs (headers + import libs vendored; runtime DLLs fetched by tools/fetch_sdks.ps1).
+# DLSS: static NGX loader (loads nvngx_dlss.dll itself). XeSS: delay-loaded so a missing
+# libxess.dll only disables XeSS. FSR: amd_fidelityfx_loader_dx12.dll via LoadLibrary.
+target_include_directories(mmdx_render PRIVATE ${EXT}/dlss/include ${EXT}/xess/include ${EXT}/ffx/api/include ${EXT}/ffx/upscalers/include)
+target_link_libraries(mmdx_render PUBLIC
+  $<IF:$<CONFIG:Debug>,${EXT}/dlss/lib/nvsdk_ngx_d_dbg.lib,${EXT}/dlss/lib/nvsdk_ngx_d.lib>
+  ${EXT}/xess/lib/libxess.lib delayimp)
+target_link_options(mmdx_render INTERFACE /DELAYLOAD:libxess.dll)
 
 # app: window, screens, audio, benchmark, leaderboard
 file(GLOB APP_SRC CONFIGURE_DEPENDS src/app/*.cpp src/audio/*.cpp)
@@ -70,7 +90,31 @@ if(EXISTS ${CMAKE_SOURCE_DIR}/src/main.cpp)
   # Shaders are compiled at runtime; keep the copy next to the exe in sync on every build.
   add_custom_target(copy_shaders ALL
     COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_SOURCE_DIR}/shaders ${CMAKE_BINARY_DIR}/bin/shaders)
-  add_dependencies(MMDX12 copy_shaders)
+  add_custom_target(copy_assets ALL
+    COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_SOURCE_DIR}/assets ${CMAKE_BINARY_DIR}/bin/assets)
+  add_dependencies(MMDX12 copy_shaders copy_assets)
+
+  # Runtime DLLs next to the exe: DXC (shader model 6.x, from the Windows SDK) and the
+  # upscaler runtimes that tools/fetch_sdks.ps1 put into external/*/bin.
+  set(RUNTIME_DLLS "")
+  file(TO_CMAKE_PATH "$ENV{WindowsSdkVerBinPath}" SDK_BIN)
+  if(NOT SDK_BIN)
+    file(GLOB SDK_BINS "C:/Program Files (x86)/Windows Kits/10/bin/10.*")
+    list(SORT SDK_BINS)
+    list(POP_BACK SDK_BINS SDK_BIN)
+  endif()
+  foreach(dll dxcompiler.dll dxil.dll)
+    if(EXISTS "${SDK_BIN}/x64/${dll}")
+      list(APPEND RUNTIME_DLLS "${SDK_BIN}/x64/${dll}")
+    else()
+      message(WARNING "${dll} not found in ${SDK_BIN}/x64: ray tracing will be unavailable")
+    endif()
+  endforeach()
+  file(GLOB SDK_DLLS CONFIGURE_DEPENDS ${EXT}/dlss/bin/*.dll ${EXT}/xess/bin/*.dll ${EXT}/ffx/bin/*.dll)
+  list(APPEND RUNTIME_DLLS ${SDK_DLLS})
+  add_custom_target(copy_runtime_dlls ALL
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different ${RUNTIME_DLLS} ${CMAKE_BINARY_DIR}/bin)
+  add_dependencies(MMDX12 copy_runtime_dlls)
 endif()
 
 # ---- tools -----------------------------------------------------------------

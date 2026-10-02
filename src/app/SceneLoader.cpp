@@ -13,8 +13,6 @@
 
 namespace mmdx {
 
-namespace {
-
 // Decodes all textures referenced by the model's materials in parallel.
 void DecodeModelTextures(LoadedModelCpu& m, LoadProgress* progress, float fracBegin, float fracEnd,
                          const char* label) {
@@ -52,8 +50,6 @@ void DecodeModelTextures(LoadedModelCpu& m, LoadProgress* progress, float fracBe
                                                    std::memory_order_relaxed);
                   });
 }
-
-} // namespace
 
 bool LoadScenePackage(const CharacterAsset& character, const StageAsset* stage, const SongAsset& song,
                       ScenePackage& out, LoadProgress* progress, std::string* error) {

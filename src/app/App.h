@@ -5,6 +5,7 @@
 #include "app/LeaderboardClient.h"
 #include "app/SceneLoader.h"
 #include "app/Settings.h"
+#include "app/ThumbnailCache.h"
 #include "asset/AssetLibrary.h"
 #include "audio/AudioPlayer.h"
 #include "render/Dx12Context.h"
@@ -33,7 +34,14 @@ namespace mmdx {
 //   --width <w> --height <h>  initial window client size
 //   --debug                enable the D3D12 debug layer
 //   --free-camera          start with the free orbit camera
-//   --screen <select|bench> open that screen after the scan (UI testing; --frames counts all frames)
+//   --screen <select|stages|songs|settings|bench> open that screen after the scan (UI testing;
+//                          --frames counts all frames)
+//   --lighting <0..3>      lighting preset for this run (Studio, Sunset, Concert, Night)
+//   --quality <0..3>       graphics preset for this run (low, medium, high, ultra)
+//   --render <raster|rt|pt>            render path for this run (override settings)
+//   --upscaler <none|dlss|fsr|xess>    upscaler for this run (override settings)
+//   --upscale-quality <native|quality|balanced|performance|ultra>  upscaler quality for this run
+//   --no-physics           disable rigid-body physics for this run
 struct AppOptions {
     std::filesystem::path libraryOverride;
     std::string character, stage, song;
@@ -46,6 +54,15 @@ struct AppOptions {
     int width = 0, height = 0;
     bool debugLayer = false;
     bool freeCamera = false;
+    float camera[6] = {};        // --camera tx,ty,tz,yawDeg,pitchDeg,dist (implies free camera)
+    bool hasCamera = false;
+    bool paused = false;        // --paused: start --autoplay paused (overlay captures)
+    int lighting = -1;         // --lighting: override settings for this run
+    int quality = -1;          // --quality: override settings for this run
+    int renderPath = -1;       // --render <raster|rt|pt>: override settings for this run
+    int upscaler = -1;         // --upscaler <none|dlss|fsr|xess>: override settings for this run
+    int upscalerQuality = -1;  // --upscale-quality <native|quality|balanced|performance|ultra>: override settings for this run
+    bool noPhysics = false;    // --no-physics: override settings for this run
     std::string startScreen;  // --screen select|bench: open that screen after the scan; --frames then counts every frame  // --free-camera: start in the orbit camera instead of the VMD camera
 };
 AppOptions ParseCommandLine(int argc, wchar_t** argv);  // unknown args are logged and ignored
@@ -70,6 +87,7 @@ private:
         std::shared_ptr<CameraMotion> camera;
         float endFrame = 0;
         bool hasAudio = false;
+        float physicsFrame = -1;  // motion frame of the last physics step (-1: reset on next update)
     };
 
     // --- lifecycle (App.cpp)
@@ -83,6 +101,7 @@ private:
     void PollScan();
     void ApplyCommandLinePreselection();
     void ApplyRenderSettings();
+    void ApplyGraphicsPreset(int preset);  // sets the effect toggles of AppSettings
 
     // --- scene (App.cpp)
     void StartLoad(LoadTarget target, const CharacterAsset* ch, const StageAsset* st, const SongAsset* song);
@@ -90,7 +109,7 @@ private:
     bool BuildSceneRuntime(ScenePackage& pkg);  // GPU upload on the main thread
     void UnloadScene();                          // WaitForGpu, release runtime + audio
     void UpdateScene(float frame);               // evaluate motion, update poses, upload to GPU
-    void BuildFrameView(float frame, FrameView& view) const;
+    void BuildFrameView(float frame, FrameView& view);
 
     // --- screens (UiSelect.cpp / UiPlay.cpp / UiBenchmark.cpp)
     void DrawScanning();
@@ -103,7 +122,18 @@ private:
     void DrawBenchRunOverlay();
     void DrawBenchResult();
     void RefreshLeaderboard();
+    void DrawAppBar(int activeNav);  // 0 = library, 1 = benchmark
+    void DrawScenePreview(const CharacterAsset* ch, const StageAsset* st, float x0, float y0, float x1, float y1,
+                          float rounding);
+    void StartBenchmarkLoad();       // official preset, else the current selection
+    void SetPlaying(bool play);
     void FinishBenchmark();
+
+    // --- thumbnails (AppThumbnails.cpp)
+    std::filesystem::path ThumbnailCacheDir() const;
+    bool RenderThumbnail(ThumbnailKind kind, std::vector<LoadedModelCpu>& models, ImageRGBA8& out);
+    uint64_t CharacterThumb(int index);  // ImTextureID, 0 while not ready
+    uint64_t StageThumb(int index);
 
     // --- free camera helpers (UiPlay.cpp)
     void UpdateFreeCamera();
@@ -127,6 +157,11 @@ private:
     int selCharacter_ = -1, selStage_ = -1, selSong_ = -1;  // indices into library_ vectors; stage -1 = none
     char filterCharacter_[128] = {}, filterStage_[128] = {}, filterSong_[128] = {};
     char libraryPathEdit_[512] = {};
+    ThumbnailCache thumbs_;
+    bool thumbsClearPending_ = false;
+    int libraryTab_ = 0;          // 0 characters, 1 stages, 2 songs
+    bool advancedOpen_ = false;
+    std::filesystem::path assetsDir_;
 
     // loading
     LoadTarget loadTarget_ = LoadTarget::Play;
@@ -138,6 +173,7 @@ private:
     // scene / play
     std::unique_ptr<SceneRuntime> scene_;
     double playTime_ = 0;         // seconds into the song
+    double lastRenderedTime_ = -1; // for camera-cut / seek detection
     bool playing_ = false;
     bool useMotionCamera_ = true;
     bool overlayVisible_ = true;

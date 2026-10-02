@@ -2,8 +2,13 @@
 
 #include <cmath>
 
+#include "app/Icons.h"
+#include "app/Lighting.h"
+#include "app/UiHelpers.h"
+#include "app/UiKit.h"
 #include "core/Log.h"
 #include "imgui.h"
+#include "imgui_internal.h"
 #include "imgui_impl_win32.h"
 
 namespace mmdx {
@@ -25,17 +30,10 @@ void App::UpdatePlay(double dt) {
     };
 
     if (!io.WantCaptureKeyboard) {
-        if (ImGui::IsKeyPressed(ImGuiKey_Space)) {
-            if (!playing_ && playTime_ * kMmdFps >= s->endFrame) playTime_ = 0;
-            playing_ = !playing_;
-            if (s->hasAudio) {
-                if (playing_) {
-                    audio_.Seek(playTime_);
-                    audio_.Play();
-                } else {
-                    audio_.Pause();
-                }
-            }
+        if (ImGui::IsKeyPressed(ImGuiKey_Space)) SetPlaying(!playing_);
+        if (ImGui::IsKeyPressed(ImGuiKey_L)) {
+            settings_.lighting = (settings_.lighting + 1) % kLightingPresetCount;
+            settings_.Save(settingsPath_);
         }
         if (ImGui::IsKeyPressed(ImGuiKey_Escape)) {
             UnloadScene();
@@ -65,6 +63,21 @@ void App::UpdatePlay(double dt) {
     }
 
     if (!useMotionCamera_ || !s->camera) UpdateFreeCamera();
+}
+
+void App::SetPlaying(bool play) {
+    const SceneRuntime* s = scene_.get();
+    if (!s) return;
+    if (play && playTime_ * kMmdFps >= s->endFrame) playTime_ = 0;
+    playing_ = play;
+    if (s->hasAudio) {
+        if (playing_) {
+            audio_.Seek(playTime_);
+            audio_.Play();
+        } else {
+            audio_.Pause();
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -97,102 +110,255 @@ void App::UpdateFreeCamera() {
     }
 }
 
+
 // ---------------------------------------------------------------------------
 // Overlay UI
 // ---------------------------------------------------------------------------
 
+namespace {
+
+// Seek bar: thin track that thickens on hover, knob while hovered or dragged.
+bool SeekBar(const char* id, float width, float height, double* t, double duration) {
+    using namespace ui;
+    ImGuiWindow* w = ImGui::GetCurrentWindow();
+    const ImGuiID gid = w->GetID(id);
+    const ImRect bb(w->DC.CursorPos, ImVec2(w->DC.CursorPos.x + width, w->DC.CursorPos.y + height));
+    ImGui::ItemSize(bb);
+    if (!ImGui::ItemAdd(bb, gid)) return false;
+    bool hovered = false, held = false;
+    ImGui::ButtonBehavior(bb, gid, &hovered, &held, ImGuiButtonFlags_PressedOnClick);
+    if (hovered || held) ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+    const Palette& p = P();
+    ImDrawList* dl = w->DrawList;
+    const float hv = Anim(gid, hovered || held, 14.0f);
+    const float th = Dp(4.0f + 2.0f * hv);
+    const float cy = bb.Min.y + height * 0.5f;
+    const float frac = duration > 0 ? (float)std::clamp(*t / duration, 0.0, 1.0) : 0.0f;
+    const float mx = ImGui::GetIO().MousePos.x;
+    const float hoverFrac = std::clamp((mx - bb.Min.x) / std::max(width, 1.0f), 0.0f, 1.0f);
+    dl->AddRectFilled(ImVec2(bb.Min.x, cy - th * 0.5f), ImVec2(bb.Max.x, cy + th * 0.5f), WithAlpha(p.ink, 0.12f), th);
+    if (hovered && !held)
+        dl->AddRectFilled(ImVec2(bb.Min.x, cy - th * 0.5f), ImVec2(bb.Min.x + width * hoverFrac, cy + th * 0.5f),
+                          WithAlpha(p.ink, 0.10f), th);
+    dl->AddRectFilled(ImVec2(bb.Min.x, cy - th * 0.5f), ImVec2(bb.Min.x + width * frac, cy + th * 0.5f), p.accent, th);
+    if (hv > 0.01f) {
+        const ImVec2 kc(bb.Min.x + width * frac, cy);
+        const float kr = Dp(7.0f) * hv;
+        dl->AddCircleFilled(ImVec2(kc.x, kc.y + Dp(1.0f)), kr + Dp(1.0f), WithAlpha(IM_COL32(10, 40, 40, 255), 0.2f * hv), 24);
+        dl->AddCircleFilled(kc, kr, p.surface, 24);
+        dl->AddCircle(kc, kr, p.accent, 24, Dp(2.0f));
+    }
+    if (hovered && !held) {
+        const std::string label = MinSec(duration * hoverFrac);
+        const ImVec2 ls = TextSize(Font::Semibold, size::Caption, label.c_str());
+        const ImVec2 ta(mx - ls.x * 0.5f - Dp(8.0f), bb.Min.y - ls.y - Dp(14.0f));
+        dl->AddRectFilled(ta, ImVec2(ta.x + ls.x + Dp(16.0f), ta.y + ls.y + Dp(8.0f)), p.ink, Dp(6.0f));
+        Text(dl, Font::Semibold, size::Caption, ImVec2(ta.x + Dp(8.0f), ta.y + Dp(4.0f)), p.surface, label.c_str());
+    }
+    if (held && duration > 0) {
+        *t = duration * hoverFrac;
+        return true;
+    }
+    return false;
+}
+
+} // namespace
+
 void App::DrawPlayOverlay() {
+    using namespace ui;
     ImGuiIO& io = ImGui::GetIO();
     const SceneRuntime* s = scene_.get();
     if (!s) return;
+    const Palette& p = P();
 
     const bool showBar = overlayVisible_ && (!playing_ || timeSeconds_ - lastMouseMoveTime_ < 3.0);
+    const float show = Anim(ImGui::GetID("##overlayShow"), showBar, 7.0f);
+    if (show < 0.005f) return;
 
-    // --- Stats window (top-left), visible whenever overlayVisible_.
-    if (overlayVisible_) {
-        ImGui::SetNextWindowPos(ImVec2(16, 16));
-        ImGui::SetNextWindowBgAlpha(0.45f);
-        const ImGuiWindowFlags flags = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize |
-                                       ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoNav;
-        if (ImGui::Begin("##stats", nullptr, flags)) {
-            ImGui::Text("FPS %.0f (%.2f ms)", io.Framerate, 1000.0f / std::max(io.Framerate, 0.01f));
-            ImGui::Text("GPU %.2f ms", renderer_.Stats().gpuFrameMs);
-            ImGui::Text("%ux%u · MSAA %ux · draw %u · tri %.1fK", ctx_.Width(), ctx_.Height(),
-                        renderer_.Settings().msaaSamples, renderer_.Stats().drawCalls,
-                        renderer_.Stats().triangles / 1000.0);
-            ImGui::TextUnformatted(ctx_.Caps().adapterName.c_str());
-        }
-        ImGui::End();
+    float rect[4];
+    renderer_.PresentRect(rect[0], rect[1], rect[2], rect[3]);
+    const ImTextureID backdrop = (ImTextureID)renderer_.UiBackdropTexture();
+
+    ImGui::SetNextWindowPos(ImVec2(0, 0));
+    ImGui::SetNextWindowSize(io.DisplaySize);
+    ImGui::Begin("##playoverlay", nullptr,
+                 ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoBackground | ImGuiWindowFlags_NoMove |
+                     ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoBringToFrontOnFocus |
+                     ImGuiWindowFlags_NoScrollWithMouse | ImGuiWindowFlags_NoNav);
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    const float ease = 1.0f - (1.0f - show) * (1.0f - show) * (1.0f - show);
+    const ImVec2 ds = io.DisplaySize;
+
+    // ---- title block (top left), slides up when hidden
+    {
+        const SongAsset* song = selSong_ >= 0 ? &library_.songs[(size_t)selSong_] : nullptr;
+        const CharacterAsset* ch = selCharacter_ >= 0 ? &library_.characters[(size_t)selCharacter_] : nullptr;
+        const StageAsset* st = selStage_ >= 0 ? &library_.stages[(size_t)selStage_] : nullptr;
+        const std::string title = song ? song->displayName : std::string("재생 중");
+        const std::string sub =
+            (ch ? ch->displayName : std::string()) + "  ·  " + (st ? st->displayName : std::string("스튜디오"));
+        const ImVec2 ts = TextSize(Font::Semibold, size::Title, title.c_str());
+        const ImVec2 ss = TextSize(Font::Regular, size::Caption, sub.c_str());
+        const float w = std::min(std::max(ts.x, ss.x) + Dp(40.0f), Dp(520.0f));
+        const float h = Dp(62.0f);
+        const float y = Dp(20.0f) - (h + Dp(30.0f)) * (1.0f - ease);
+        const ImVec2 a(Dp(20.0f), y), b(a.x + w, y + h);
+        FrostedPanel(dl, a, b, Dp(16.0f), backdrop, rect);
+        TextEllipsis(dl, Font::Semibold, size::Title, ImVec2(a.x + Dp(20.0f), a.y + Dp(11.0f)), b.x - Dp(16.0f), p.ink,
+                     title.c_str());
+        TextEllipsis(dl, Font::Regular, size::Caption, ImVec2(a.x + Dp(20.0f), a.y + Dp(36.0f)), b.x - Dp(16.0f), p.ink2,
+                     sub.c_str());
     }
 
-    // --- Bottom bar.
-    if (!showBar) return;
-
-    const float dpi = ImGui_ImplWin32_GetDpiScaleForHwnd(hwnd_);
-    const float barHeight = 90.0f * dpi;
-    ImGui::SetNextWindowPos(ImVec2(0, io.DisplaySize.y - barHeight));
-    ImGui::SetNextWindowSize(ImVec2(io.DisplaySize.x, barHeight));
-    const ImGuiWindowFlags barFlags = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove |
-                                      ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoSavedSettings |
-                                      ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoNav;
-    if (ImGui::Begin("##playbar", nullptr, barFlags)) {
-        if (ImGui::Button(playing_ ? "일시정지" : "재생")) {
-            if (!playing_ && playTime_ * kMmdFps >= (double)s->endFrame) playTime_ = 0;
-            playing_ = !playing_;
-            if (s->hasAudio) {
-                if (playing_) {
-                    audio_.Seek(playTime_);
-                    audio_.Play();
-                } else {
-                    audio_.Pause();
-                }
-            }
+    // ---- performance pill (top right)
+    {
+        char buf[200];
+        const RenderStats& rs = renderer_.Stats();
+        int n = std::snprintf(buf, sizeof(buf), "%.0f FPS   GPU %.2f ms   %ux%u", io.Framerate, rs.gpuFrameMs,
+                              rs.internalWidth, rs.internalHeight);
+        if (rs.outputWidth != rs.internalWidth || rs.outputHeight != rs.internalHeight)
+            n += std::snprintf(buf + n, sizeof(buf) - n, " → %ux%u", rs.outputWidth, rs.outputHeight);
+        if (rs.renderPath == RenderPath::Raster && renderer_.Settings().upscaler == UpscalerKind::None) {
+            n += std::snprintf(buf + n, sizeof(buf) - n, "   MSAA %ux", renderer_.Settings().msaaSamples);
+        } else if (rs.renderPath == RenderPath::RayTraced) {
+            n += std::snprintf(buf + n, sizeof(buf) - n, "   RT");
+        } else if (rs.renderPath == RenderPath::PathTraced) {
+            n += std::snprintf(buf + n, sizeof(buf) - n, "   PT");
         }
-        ImGui::SameLine();
-        if (ImGui::Button("처음으로")) {
-            playTime_ = 0;
-            if (s->hasAudio) audio_.Seek(playTime_);
+        if (rs.upscaler != UpscalerKind::None) {
+            const char* upName = rs.upscaler == UpscalerKind::DLSS ? "DLSS"
+                                 : rs.upscaler == UpscalerKind::FSR ? "FSR"
+                                 : "XeSS";
+            n += std::snprintf(buf + n, sizeof(buf) - n, "   %s", upName);
         }
-        ImGui::SameLine();
-        const auto fmtTime = [](double t) {
-            if (t < 0) t = 0;
-            const int secs = (int)t;
-            return std::to_string(secs / 60) + ":" + (secs % 60 < 10 ? "0" : "") + std::to_string(secs % 60);
-        };
-        ImGui::TextUnformatted((fmtTime(playTime_) + " / " + fmtTime(s->endFrame / kMmdFps)).c_str());
-        ImGui::SameLine();
-
-        float t = (float)playTime_;
-        // Seek bar takes what is left after the fixed-width controls on its right.
-        const float rightControls = ImGui::GetFontSize() * 26.0f;
-        ImGui::SetNextItemWidth(std::max(160.0f, ImGui::GetContentRegionAvail().x - rightControls));
-        if (ImGui::SliderFloat("##seek", &t, 0.0f, s->endFrame / kMmdFps, "")) {
-            playTime_ = t;
-            if (s->hasAudio) audio_.Seek(playTime_);
-        }
-        if (ImGui::IsItemDeactivatedAfterEdit()) {
-            playTime_ = t;
-            if (s->hasAudio) audio_.Seek(playTime_);
-        }
-        ImGui::SameLine();
-        ImGui::SetNextItemWidth(ImGui::GetFontSize() * 6.0f);
-        if (ImGui::SliderFloat("볼륨", &settings_.volume, 0.0f, 1.0f)) audio_.SetVolume(settings_.volume);
-        ImGui::SameLine();
-
-        // "모션 카메라" checkbox on the same line (disabled when no camera).
-        if (!s->camera) ImGui::BeginDisabled();
-        ImGui::Checkbox("모션 카메라", &useMotionCamera_);
-        if (!s->camera) ImGui::EndDisabled();
-
-        ImGui::SameLine();
-        if (ImGui::Button("선택 화면 (Esc)")) {
-            UnloadScene();
-            screen_ = Screen::Select;
-        }
-
-        ImGui::TextDisabled("Space 재생/정지 · ←/→ 5초 이동 · C 카메라 · F1 UI · 드래그 회전 · 휠 줌");
+        (void)n;
+        const ImVec2 bs = TextSize(Font::Semibold, size::Caption, buf);
+        const float w = bs.x + Dp(28.0f), h = Dp(34.0f);
+        const float y = Dp(20.0f) - (h + Dp(30.0f)) * (1.0f - ease);
+        const ImVec2 a(ds.x - Dp(20.0f) - w, y), b(ds.x - Dp(20.0f), y + h);
+        FrostedPanel(dl, a, b, h * 0.5f, backdrop, rect);
+        Text(dl, Font::Semibold, size::Caption, ImVec2(a.x + Dp(14.0f), a.y + (h - bs.y) * 0.5f), p.ink2, buf);
     }
+
+    // ---- control bar (bottom), slides down when hidden
+    const float barW = std::min(ds.x - Dp(40.0f), Dp(1000.0f));
+    const float barH = Dp(76.0f);
+    const float barY = ds.y - Dp(24.0f) - barH + (barH + Dp(40.0f)) * (1.0f - ease);
+    const ImVec2 ba((ds.x - barW) * 0.5f, barY), bb(ba.x + barW, barY + barH);
+    FrostedPanel(dl, ba, bb, Dp(22.0f), backdrop, rect, 0.68f);
+    const float cy = ba.y + barH * 0.5f;
+    float x = ba.x + Dp(16.0f);
+
+    // play / pause
+    {
+        const float d = Dp(48.0f);
+        const ImVec2 a(x, cy - d * 0.5f);
+        ImGui::SetCursorScreenPos(a);
+        const bool pressed = ImGui::InvisibleButton("##playpause", ImVec2(d, d));
+        const bool hovered = ImGui::IsItemHovered();
+        if (hovered) ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+        const float hv = Anim(ImGui::GetID("##pphv"), hovered);
+        SoftShadow(dl, a, ImVec2(a.x + d, a.y + d), d * 0.5f, Dp(8.0f), 0.14f + 0.06f * hv, ImVec2(0, Dp(2.0f)));
+        dl->AddCircleFilled(ImVec2(a.x + d * 0.5f, a.y + d * 0.5f), d * 0.5f, Mix(p.accent, p.accentHover, hv), 32);
+        const char* glyph = playing_ ? icon::Pause : icon::Play;
+        PushFont(Font::Bold, 22.0f);  // the bold face carries the filled icon set
+        const ImVec2 gs = ImGui::CalcTextSize(glyph);
+        dl->AddText(ImVec2(std::round(a.x + (d - gs.x) * 0.5f + (playing_ ? 0.0f : Dp(1.5f))),
+                           std::round(a.y + (d - gs.y) * 0.5f)),
+                    p.onAccent, glyph);
+        PopFont();
+        if (hovered) Tooltip(playing_ ? "일시정지 (Space)" : "재생 (Space)");
+        if (pressed) SetPlaying(!playing_);
+        x += d + Dp(8.0f);
+    }
+    ImGui::SetCursorScreenPos(ImVec2(x, cy - Dp(20.0f)));
+    if (IconButton("##restart", icon::SkipBack, "처음부터", false, 40.0f)) {
+        playTime_ = 0;
+        if (s->hasAudio) audio_.Seek(playTime_);
+    }
+    x += Dp(40.0f) + Dp(12.0f);
+
+    // time
+    const double duration = s->endFrame / kMmdFps;
+    {
+        const std::string cur = MinSec(playTime_), tot = " / " + MinSec(duration);
+        const ImVec2 cs = TextSize(Font::Semibold, size::Body, cur.c_str());
+        Text(dl, Font::Semibold, size::Body, ImVec2(x, cy - cs.y * 0.5f), p.ink, cur.c_str());
+        Text(dl, Font::Regular, size::Body, ImVec2(x + cs.x, cy - cs.y * 0.5f), p.ink3, tot.c_str());
+        x += Dp(96.0f);
+    }
+
+    // right cluster: volume icon + slider, camera, lighting, divider, exit
+    const float rightW = Dp(36.0f + 4.0f + 88.0f + 12.0f + 44.0f + 50.0f + 11.0f + 40.0f + 16.0f);
+    const float seekW = std::max(Dp(120.0f), bb.x - rightW - x - Dp(20.0f));
+    ImGui::SetCursorScreenPos(ImVec2(x, cy - Dp(14.0f)));
+    double t = playTime_;
+    if (SeekBar("##seek", seekW, Dp(28.0f), &t, duration)) {
+        playTime_ = t;
+        if (s->hasAudio) audio_.Seek(playTime_);
+    }
+    x += seekW + Dp(20.0f);
+
+    // volume
+    ImGui::SetCursorScreenPos(ImVec2(x, cy - Dp(18.0f)));
+    const bool muted = settings_.volume <= 0.001f;
+    if (IconButton("##mute", muted ? icon::SpeakerX : (settings_.volume < 0.5f ? icon::SpeakerLow : icon::SpeakerHigh),
+                   muted ? "소리 켜기" : "음소거", false, 36.0f)) {
+        static float lastVolume = 0.8f;
+        if (muted) {
+            settings_.volume = lastVolume > 0.01f ? lastVolume : 0.8f;
+        } else {
+            lastVolume = settings_.volume;
+            settings_.volume = 0.0f;
+        }
+        audio_.SetVolume(settings_.volume);
+    }
+    x += Dp(36.0f) + Dp(4.0f);
+    {
+        const float vw = Dp(88.0f);
+        ImGui::SetCursorScreenPos(ImVec2(x, cy - Dp(10.0f)));
+        ImGui::InvisibleButton("##vol", ImVec2(vw, Dp(20.0f)));
+        const bool hovered = ImGui::IsItemHovered(), held = ImGui::IsItemActive();
+        if (hovered || held) ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+        if (held) {
+            settings_.volume = std::clamp((io.MousePos.x - x) / vw, 0.0f, 1.0f);
+            audio_.SetVolume(settings_.volume);
+        }
+        const float th = Dp(4.0f);
+        dl->AddRectFilled(ImVec2(x, cy - th * 0.5f), ImVec2(x + vw, cy + th * 0.5f), WithAlpha(p.ink, 0.12f), th);
+        dl->AddRectFilled(ImVec2(x, cy - th * 0.5f), ImVec2(x + vw * settings_.volume, cy + th * 0.5f), p.ink2, th);
+        const float hv = Anim(ImGui::GetID("##volhv"), hovered || held);
+        if (hv > 0.01f) dl->AddCircleFilled(ImVec2(x + vw * settings_.volume, cy), Dp(6.0f) * hv, p.ink, 24);
+        x += vw + Dp(12.0f);
+    }
+
+    // camera, lighting
+    ImGui::SetCursorScreenPos(ImVec2(x, cy - Dp(20.0f)));
+    ImGui::BeginDisabled(!s->camera);
+    if (IconButton("##cam", icon::VideoCamera, useMotionCamera_ ? "모션 카메라 켜짐 (C)" : "자유 카메라 (C)",
+                   useMotionCamera_ && s->camera, 40.0f))
+        useMotionCamera_ = !useMotionCamera_;
+    ImGui::EndDisabled();
+    x += Dp(44.0f);
+    {
+        const char* lightIcons[] = {icon::Sun, icon::CircleHalf, icon::Sparkle, icon::Moon};
+        const std::string tip = std::string("조명: ") + LightingPresetName((LightingPreset)settings_.lighting) + " (L)";
+        ImGui::SetCursorScreenPos(ImVec2(x, cy - Dp(20.0f)));
+        if (IconButton("##light", lightIcons[settings_.lighting], tip.c_str(), false, 40.0f)) {
+            settings_.lighting = (settings_.lighting + 1) % kLightingPresetCount;
+            settings_.Save(settingsPath_);
+        }
+        x += Dp(40.0f) + Dp(10.0f);
+    }
+    dl->AddLine(ImVec2(x, cy - Dp(14.0f)), ImVec2(x, cy + Dp(14.0f)), WithAlpha(p.ink, 0.12f));
+    x += Dp(11.0f);
+    ImGui::SetCursorScreenPos(ImVec2(x, cy - Dp(20.0f)));
+    const bool exit = IconButton("##exit", icon::X, "라이브러리로 (Esc)", false, 40.0f);
     ImGui::End();
+    if (exit) {
+        UnloadScene();
+        screen_ = Screen::Select;
+    }
 }
 
 } // namespace mmdx

@@ -228,8 +228,8 @@ int wmain(int argc, wchar_t** argv) {
         std::vector<DirectX::XMFLOAT4X4> skin = {rot, rot};
 
         ID3D12GraphicsCommandList* cmd = ctx.BeginFrame();
-        gm->UpdateSkinning(ctx.FrameSlot(), skin);
-        gm->UpdateMorphs(ctx.FrameSlot(), zeroMorphs, 1);
+        gm->UpdateSkinning(ctx.FrameNumber(), skin);
+        gm->UpdateMorphs(ctx.FrameNumber(), zeroMorphs, 1);
 
         mmdx::FrameView view;
         DirectX::XMStoreFloat4x4(&view.camera.view,

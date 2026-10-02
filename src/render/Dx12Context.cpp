@@ -144,6 +144,7 @@ bool Dx12Context::Initialize(HWND hwnd, uint32_t width, uint32_t height, bool en
     if (SUCCEEDED(adapter_->GetDesc1(&desc))) {
         caps_.adapterName = WideToUtf8(desc.Description);
         caps_.dedicatedVideoMemory = desc.DedicatedVideoMemory;
+        caps_.vendorId = desc.VendorId;
     }
     {
         const D3D_FEATURE_LEVEL levels[] = {

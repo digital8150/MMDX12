@@ -72,6 +72,9 @@ ModelInstance::ModelInstance(std::shared_ptr<const PmxModel> model) : model_(std
         if (pa != pb) return pb;  // before-physics bones first
         return bones[a].deformLayer < bones[b].deformLayer;
     });
+    afterPhysicsBegin_ = (size_t)(std::find_if(order_.begin(), order_.end(), [&](int b) {
+        return (bones[b].flags & PmxBone_AfterPhysics) != 0;
+    }) - order_.begin());
     morphWeight_.assign(model_->morphs.size(), 0.0f);
     appliedMorphWeight_.assign(model_->morphs.size(), 0.0f);
     morphDelta_.assign(model_->vertices.size(), XMFLOAT3{0, 0, 0});
@@ -81,6 +84,21 @@ ModelInstance::ModelInstance(std::shared_ptr<const PmxModel> model) : model_(std
     for (auto& m : skin_) m = identity;
     ResetPose();
     UpdatePose();
+}
+
+ModelInstance::~ModelInstance() = default;
+
+void ModelInstance::EnablePhysics(bool enabled) {
+    if (enabled && !physics_ && !model_->rigidBodies.empty()) {
+        std::vector<XMFLOAT4X4> bind(bones_.size());
+        for (size_t i = 0; i < bind.size(); ++i) {
+            const XMFLOAT3& p = model_->bones[i].position;
+            XMStoreFloat4x4(&bind[i], XMMatrixTranslation(p.x, p.y, p.z));
+        }
+        physics_ = std::make_unique<PhysicsWorld>(*model_, bind);
+    }
+    if (enabled && !physicsEnabled_) physicsResetPending_ = true;
+    physicsEnabled_ = enabled;
 }
 
 void ModelInstance::ResetPose() {
@@ -337,7 +355,7 @@ void ModelInstance::SolveIk(int ikBone) {
     }
 }
 
-void ModelInstance::UpdatePose() {
+void ModelInstance::UpdatePose(float physicsDt) {
     ApplyMorphs();
     const auto& pbones = model_->bones;
     const int n = (int)bones_.size();
@@ -351,40 +369,90 @@ void ModelInstance::UpdatePose() {
         const int p = pbones[b].parentIndex;
         if (p < 0 || p >= n || p == b) UpdateWorldRecursive(b);
     }
-    for (int b : order_) {
-        const PmxBone& pb = pbones[b];
-        if ((pb.flags & (PmxBone_AppendRotate | PmxBone_AppendTranslate)) && pb.appendParentIndex >= 0 &&
-            pb.appendParentIndex < n && pb.appendParentIndex != b) {
-            const int a = pb.appendParentIndex;
-            const PmxBone& pa = pbones[a];
-            const bool aHasAppend = pa.appendParentIndex >= 0 && (pa.flags & (PmxBone_AppendRotate | PmxBone_AppendTranslate));
-            BoneState& s = bones_[b];
-            if (pb.flags & PmxBone_AppendRotate) {
-                XMVECTOR ar;
-                if ((pb.flags & PmxBone_AppendLocal) || !aHasAppend) {
-                    const XMFLOAT4 r = AnimRotation(a);
-                    ar = XMLoadFloat4(&r);
-                } else {
-                    ar = XMLoadFloat4(&bones_[a].appendR);
-                }
-                ar = XMQuaternionMultiply(ar, XMLoadFloat4(&bones_[a].ikR));
-                XMStoreFloat4(&s.appendR, XMQuaternionSlerp(XMQuaternionIdentity(), ar, pb.appendRatio));
-            }
-            if (pb.flags & PmxBone_AppendTranslate) {
-                XMFLOAT3 at = ((pb.flags & PmxBone_AppendLocal) || !aHasAppend) ? AnimTranslation(a) : bones_[a].appendT;
-                s.appendT = {at.x * pb.appendRatio, at.y * pb.appendRatio, at.z * pb.appendRatio};
-            }
-            UpdateLocal(b);
-            UpdateWorldRecursive(b);
-        }
-        if ((pb.flags & PmxBone_IK) && bones_[b].ikEnabled) {
-            SolveIk(b);
-            UpdateWorldRecursive(b);
-        }
-    }
+    for (size_t i = 0; i < afterPhysicsBegin_; ++i) EvaluateAppendAndIk(order_[i]);
+    if (physicsEnabled_ && physics_ && physics_->HasDynamicBodies()) RunPhysics(physicsDt);
+    for (size_t i = afterPhysicsBegin_; i < order_.size(); ++i) EvaluateAppendAndIk(order_[i]);
     for (int i = 0; i < n; ++i) {
         const XMFLOAT3& p = pbones[i].position;
         XMStoreFloat4x4(&skin_[i], XMMatrixMultiply(XMMatrixTranslation(-p.x, -p.y, -p.z), XMLoadFloat4x4(&bones_[i].world)));
+    }
+}
+
+void ModelInstance::EvaluateAppendAndIk(int b) {
+    const auto& pbones = model_->bones;
+    const int n = (int)bones_.size();
+    const PmxBone& pb = pbones[b];
+    if ((pb.flags & (PmxBone_AppendRotate | PmxBone_AppendTranslate)) && pb.appendParentIndex >= 0 &&
+        pb.appendParentIndex < n && pb.appendParentIndex != b) {
+        const int a = pb.appendParentIndex;
+        const PmxBone& pa = pbones[a];
+        const bool aHasAppend = pa.appendParentIndex >= 0 && (pa.flags & (PmxBone_AppendRotate | PmxBone_AppendTranslate));
+        BoneState& s = bones_[b];
+        if (pb.flags & PmxBone_AppendRotate) {
+            XMVECTOR ar;
+            if ((pb.flags & PmxBone_AppendLocal) || !aHasAppend) {
+                const XMFLOAT4 r = AnimRotation(a);
+                ar = XMLoadFloat4(&r);
+            } else {
+                ar = XMLoadFloat4(&bones_[a].appendR);
+            }
+            ar = XMQuaternionMultiply(ar, XMLoadFloat4(&bones_[a].ikR));
+            XMStoreFloat4(&s.appendR, XMQuaternionSlerp(XMQuaternionIdentity(), ar, pb.appendRatio));
+        }
+        if (pb.flags & PmxBone_AppendTranslate) {
+            XMFLOAT3 at = ((pb.flags & PmxBone_AppendLocal) || !aHasAppend) ? AnimTranslation(a) : bones_[a].appendT;
+            s.appendT = {at.x * pb.appendRatio, at.y * pb.appendRatio, at.z * pb.appendRatio};
+        }
+        UpdateLocal(b);
+        UpdateWorldRecursive(b);
+    }
+    if ((pb.flags & PmxBone_IK) && bones_[b].ikEnabled) {
+        SolveIk(b);
+        UpdateWorldRecursive(b);
+    }
+}
+
+// Hands the animated pose to the physics world, steps it, and writes the simulated bones back.
+// Bones are revisited parents-first so non-simulated children of simulated bones follow them;
+// simulated bones get their local matrix rebuilt so later append/IK passes stay consistent.
+void ModelInstance::RunPhysics(float dt) {
+    const int n = (int)bones_.size();
+    physicsPose_.resize(n);
+    for (int i = 0; i < n; ++i) physicsPose_[i] = bones_[i].world;
+    if (physicsResetPending_) {
+        physics_->Reset(physicsPose_, 1.0f);
+        physicsResetPending_ = false;
+    } else {
+        physics_->Step(physicsPose_, dt);
+    }
+    physics_->Results(physicsPose_, physicsOut_);
+    if (physicsOut_.empty()) return;
+
+    physicsResult_.assign(n, -1);
+    for (size_t i = 0; i < physicsOut_.size(); ++i) physicsResult_[physicsOut_[i].bone] = (int)i;
+    std::vector<int>& stack = dfsStack_;
+    stack.clear();
+    for (int i = 0; i < n; ++i) {
+        const int p = model_->bones[i].parentIndex;
+        if (p < 0 || p >= n || p == i) stack.push_back(i);
+    }
+    while (!stack.empty()) {
+        const int b = stack.back();
+        stack.pop_back();
+        BoneState& s = bones_[b];
+        const int p = model_->bones[b].parentIndex;
+        const bool hasParent = p >= 0 && p < n && p != b;
+        if (physicsResult_[b] >= 0) {
+            s.world = physicsOut_[physicsResult_[b]].world;
+            if (hasParent)
+                XMStoreFloat4x4(&s.local, XMMatrixMultiply(XMLoadFloat4x4(&s.world),
+                                                           XMMatrixInverse(nullptr, XMLoadFloat4x4(&bones_[p].world))));
+            else
+                s.local = s.world;
+        } else {
+            UpdateWorld(b);
+        }
+        for (int c : children_[b]) stack.push_back(c);
     }
 }
 

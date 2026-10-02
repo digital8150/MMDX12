@@ -1,28 +1,49 @@
 #pragma once
 // C++ mirror of the constant-buffer / vertex layouts used by shaders/*.hlsl.
-// Keep both sides in sync. HLSL uses `#pragma pack_matrix(row_major)` and mul(v, M), so
-// DirectXMath matrices are uploaded as-is (no transpose).
+// Keep both sides in sync (shaders/common.hlsli). HLSL uses `#pragma pack_matrix(row_major)`
+// and mul(v, M), so DirectXMath matrices are uploaded as-is (no transpose).
 #include <DirectXMath.h>
 #include <cstdint>
 
 namespace mmdx {
 
-struct SceneConstants {               // b0, 256-byte aligned slot per frame
+inline constexpr uint32_t kShadowCascades = 3;
+inline constexpr uint32_t kSceneCbSize = 1024;
+
+struct SceneConstants {               // b0, kSceneCbSize-byte slot per frame
     DirectX::XMFLOAT4X4 view;
-    DirectX::XMFLOAT4X4 proj;
-    DirectX::XMFLOAT4X4 viewProj;
-    DirectX::XMFLOAT3 eyePos;      float _pad0;
-    DirectX::XMFLOAT3 lightDir;    float _pad1;   // normalized, pointing from light toward scene
-    DirectX::XMFLOAT3 lightColor;  float _pad2;
-    DirectX::XMFLOAT2 viewportSize; float edgeScale; float _pad3;  // edgeScale = viewportHeight / 1080
+    DirectX::XMFLOAT4X4 proj;          // jittered when TAA is on
+    DirectX::XMFLOAT4X4 viewProj;      // jittered
+    DirectX::XMFLOAT4X4 invProj;       // inverse of proj (jittered)
+    DirectX::XMFLOAT4X4 invView;
+    DirectX::XMFLOAT4X4 viewProjNoJitter;
+    DirectX::XMFLOAT4X4 prevViewProjNoJitter;
+    DirectX::XMFLOAT4X4 shadowViewProj[kShadowCascades];
+    DirectX::XMFLOAT4 cascadeSplits;   // view-space far z of cascade 0..2, w = shadows enabled (0/1)
+    DirectX::XMFLOAT4 shadowParams;    // x = 1/mapSize, y = normal offset scale, z = softness (texels), w = unused
+    DirectX::XMFLOAT4 cascadeTexel;    // world size of one shadow texel per cascade
+    DirectX::XMFLOAT3 eyePos;      float time;
+    DirectX::XMFLOAT3 lightDir;    float sunIntensity;   // lightDir normalized, from light toward scene
+    DirectX::XMFLOAT3 lightColor;  float hemiStrength;   // MMD light colour (gamma space)
+    DirectX::XMFLOAT3 skyZenith;   float rimStrength;
+    DirectX::XMFLOAT3 skyHorizon;  float numLights;
+    DirectX::XMFLOAT3 groundColor; float floorGloss;
+    DirectX::XMFLOAT3 rimColor;    float fog;
+    DirectX::XMFLOAT2 viewportSize; float edgeScale; float transparentBg;  // edgeScale = viewportHeight / 1080
+    DirectX::XMFLOAT2 jitterUv;    DirectX::XMFLOAT2 invViewportSize;      // jitter in uv units
+    float nearZ, farZ, frameIndex, _pad;
 };
-static_assert(sizeof(SceneConstants) == 256, "SceneConstants layout");
+static_assert(sizeof(SceneConstants) <= kSceneCbSize, "SceneConstants layout");
 
 enum MaterialShaderFlags : uint32_t {
-    MatFlag_HasTexture = 1u << 0,
-    MatFlag_HasToon    = 1u << 1,
-    MatFlag_SphereMul  = 1u << 2,
-    MatFlag_SphereAdd  = 1u << 3,
+    MatFlag_HasTexture    = 1u << 0,
+    MatFlag_HasToon       = 1u << 1,
+    MatFlag_SphereMul     = 1u << 2,
+    MatFlag_SphereAdd     = 1u << 3,
+    MatFlag_ReceiveShadow = 1u << 4,
+    MatFlag_Stage         = 1u << 5,  // material belongs to a stage model (floor gloss, no rim)
+    MatFlag_ToonMap       = 1u << 6,  // "toon" is a UV-mapped shadow-colour texture (Project Sekai style)
+    MatFlag_FlatShade     = 1u << 7,  // no N.L modelling (faces): only cast shadows darken
 };
 
 struct MaterialConstants {            // b1, one 256-byte slot per material
@@ -31,10 +52,20 @@ struct MaterialConstants {            // b1, one 256-byte slot per material
     DirectX::XMFLOAT3 ambient;   float edgeSize;
     DirectX::XMFLOAT4 edgeColor;
     uint32_t flags;              // MaterialShaderFlags
-    uint32_t _pad[3];
+    float reflectivity;          // base SSR reflectivity derived from the MMD specular
+    uint32_t _pad[2];
     uint8_t _reserve[256 - 80];
 };
 static_assert(sizeof(MaterialConstants) == 256, "MaterialConstants layout");
+
+// StructuredBuffer element for punctual lights (t6 in the scene pass). 64 bytes.
+struct GpuLight {
+    DirectX::XMFLOAT3 position; float invRange;
+    DirectX::XMFLOAT3 color;    float spotCosOuter;   // colour premultiplied by intensity
+    DirectX::XMFLOAT3 direction; float spotCosInner;
+    float _pad[4];
+};
+static_assert(sizeof(GpuLight) == 64, "GpuLight layout");
 
 // Vertex buffer slot 0 (static, DEFAULT heap). 60 bytes.
 struct GpuVertex {
@@ -46,6 +77,44 @@ struct GpuVertex {
     float edgeScale;     // TEXCOORD1     R32_FLOAT
 };
 static_assert(sizeof(GpuVertex) == 60, "GpuVertex layout");
-// Vertex buffer slot 1 (per frame slot, UPLOAD heap): float3 morph position delta, TEXCOORD2.
+// Vertex buffer slot 1 (per frame ring, UPLOAD heap): float3 morph position delta, TEXCOORD2.
+// Vertex buffer slot 2 (previous frame's morph deltas, same layout): TEXCOORD3.
+
+// ---- ray tracing (mirror of shaders/rt_common.hlsli) -------------------------------------
+
+// Skinned world-space vertex written by shaders/skin.hlsl, read by BLAS builds and ray
+// queries (raw buffer, 48-byte stride, position at offset 0).
+struct RtVertex {
+    float position[3];
+    float normal[3];       // normalized
+    float uv[2];
+    float prevPosition[3]; // previous frame (previous bones + previous morphs), for motion vectors
+    float _pad;
+};
+static_assert(sizeof(RtVertex) == 48, "RtVertex layout");
+
+// Flags stored in RtGeometry::flags next to the MaterialShaderFlags (bits 0..15).
+enum RtGeometryFlags : uint32_t {
+    RtGeom_CastShadow = 1u << 16,  // occludes shadow rays
+    RtGeom_AlphaTest  = 1u << 17,  // non-opaque in the BLAS: ray queries evaluate texture alpha
+    RtGeom_Character  = 1u << 18,
+};
+
+// One entry per BLAS geometry. TLAS InstanceID = index of the model's first entry, so a hit's
+// entry is gGeometries[CommittedInstanceID() + CommittedGeometryIndex()]. 80 bytes.
+struct RtGeometry {
+    uint32_t vertexSrv;    // SrvHeap index of a raw SRV over the model's RtVertex buffer
+    uint32_t indexSrv;     // SrvHeap index of a raw SRV over the model's uint32 index buffer
+    uint32_t indexStart;   // first index of this material in the index buffer
+    uint32_t flags;        // MaterialShaderFlags | RtGeometryFlags
+    DirectX::XMFLOAT4 diffuse;
+    DirectX::XMFLOAT3 specular; float specularPower;
+    DirectX::XMFLOAT3 ambient;  float reflectivity;
+    uint32_t textureSrv;   // SrvHeap index of the material texture (GpuModel::Material::srvTable + 0)
+    uint32_t sphereSrv;    // srvTable + 1
+    uint32_t toonSrv;      // srvTable + 2
+    uint32_t _pad;
+};
+static_assert(sizeof(RtGeometry) == 80, "RtGeometry layout");
 
 } // namespace mmdx

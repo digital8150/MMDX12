@@ -5,6 +5,9 @@
 #include "render/ShaderInterop.h"
 #include "core/Log.h"
 #include <directx/d3dx12.h>
+#include <algorithm>
+#include <cctype>
+#include <cstdlib>
 #include <cstring>
 
 namespace mmdx {
@@ -15,6 +18,35 @@ DirectX::XMFLOAT4X4 Identity4x4() {
     DirectX::XMFLOAT4X4 r;
     DirectX::XMStoreFloat4x4(&r, DirectX::XMMatrixIdentity());
     return r;
+}
+
+// A toon ramp is a vertical gradient: every row is (near) one colour. Models made for the
+// Project Sekai MME shader put a UV-mapped shadow-colour texture in the toon slot instead.
+bool IsToonRamp(const ImageRGBA8& img) {
+    if (img.Empty()) return true;
+    const ImageRGBA8::Level& l = img.mips[0];
+    if (l.width <= 2) return true;
+    const uint32_t step = std::max(1u, l.height / 64);
+    uint64_t dev = 0, n = 0;
+    for (uint32_t y = 0; y < l.height; y += step) {
+        const uint8_t* row = &l.pixels[(size_t)y * l.width * 4];
+        for (int ch = 0; ch < 3; ++ch) {
+            uint32_t sum = 0;
+            for (uint32_t x = 0; x < l.width; ++x) sum += row[x * 4 + ch];
+            const int mean = (int)(sum / l.width);
+            for (uint32_t x = 0; x < l.width; ++x) dev += (uint32_t)std::abs(row[x * 4 + ch] - mean);
+            n += l.width;
+        }
+    }
+    return dev < n * 4;  // mean absolute deviation along x below ~1.5%
+}
+
+// Face-like material names of the Project Sekai rigs (their Face.fx uses an SDF face map we
+// don't have; flat shading is the closest match).
+bool IsSekaiFaceMaterial(const std::string& name) {
+    std::string n = name;
+    for (char& ch : n) ch = (char)std::tolower((unsigned char)ch);
+    return n == "face" || n == "eyelash" || n == "eyebrow";
 }
 
 } // namespace
@@ -33,8 +65,10 @@ static ComPtr<ID3D12Resource> CreateUploadBuffer(ID3D12Device* device, uint32_t 
 }
 
 bool GpuModel::Create(Dx12Context& ctx, UploadBatch& batch, const PmxModel& pmx,
-                      const std::vector<ImageRGBA8>& textures, const BuiltinTextures& builtin) {
+                      const std::vector<ImageRGBA8>& textures, const BuiltinTextures& builtin,
+                      ModelRole role) {
     ctx_ = &ctx;
+    role_ = role;
     name_ = pmx.name;
     boneCount_ = (uint32_t)pmx.bones.size();
     vertexCount_ = (uint32_t)pmx.vertices.size();
@@ -64,6 +98,17 @@ bool GpuModel::Create(Dx12Context& ctx, UploadBatch& batch, const PmxModel& pmx,
         }
         dst.edgeScale = src.edgeScale;
     }
+    if (vertexCount_ > 0) {
+        boundsMin_ = boundsMax_ = pmx.vertices[0].position;
+        for (const PmxVertex& v : pmx.vertices) {
+            boundsMin_.x = std::min(boundsMin_.x, v.position.x);
+            boundsMin_.y = std::min(boundsMin_.y, v.position.y);
+            boundsMin_.z = std::min(boundsMin_.z, v.position.z);
+            boundsMax_.x = std::max(boundsMax_.x, v.position.x);
+            boundsMax_.y = std::max(boundsMax_.y, v.position.y);
+            boundsMax_.z = std::max(boundsMax_.z, v.position.z);
+        }
+    }
     if (boneCount_ == 0) {
         // No bones: everything bound to bone 0 which holds an identity matrix.
         for (GpuVertex& d : verts) {
@@ -77,13 +122,17 @@ bool GpuModel::Create(Dx12Context& ctx, UploadBatch& batch, const PmxModel& pmx,
     }
 
     vb_ = batch.CreateBuffer(verts.data(), verts.size() * sizeof(GpuVertex),
-                             D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER, L"model.vb");
+                             D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER |
+                                 D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+                             L"model.vb");
     if (!vb_) {
         LOG_ERROR("model '%s': vertex buffer creation failed", name_.c_str());
         return false;
     }
     ib_ = batch.CreateBuffer(pmx.indices.data(), pmx.indices.size() * sizeof(uint32_t),
-                             D3D12_RESOURCE_STATE_INDEX_BUFFER, L"model.ib");
+                             D3D12_RESOURCE_STATE_INDEX_BUFFER | D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE |
+                                 D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+                             L"model.ib");
     if (!ib_) {
         LOG_ERROR("model '%s': index buffer creation failed", name_.c_str());
         return false;
@@ -138,10 +187,27 @@ bool GpuModel::Create(Dx12Context& ctx, UploadBatch& batch, const PmxModel& pmx,
             if (m.sphereMode == PmxSphereMode::Multiply) c.flags |= MatFlag_SphereMul;
             if (m.sphereMode == PmxSphereMode::Add) c.flags |= MatFlag_SphereAdd;
         }
-        if (m.sharedToon)
+        if (m.sharedToon) {
             c.flags |= MatFlag_HasToon;
-        else if (m.toonIndex >= 0 && (size_t)m.toonIndex < textures_.size() && textures_[m.toonIndex])
+        } else if (m.toonIndex >= 0 && (size_t)m.toonIndex < textures_.size() && textures_[m.toonIndex]) {
             c.flags |= MatFlag_HasToon;
+            if (!IsToonRamp(textures[m.toonIndex])) {
+                // Sekai layout: toon = shadow colour (_S), sphere = UV-space parameter mask (_H),
+                // which must not be added as an environment sphere.
+                c.flags |= MatFlag_ToonMap;
+                c.flags &= ~(MatFlag_SphereMul | MatFlag_SphereAdd);
+                if (IsSekaiFaceMaterial(m.name)) c.flags |= MatFlag_FlatShade;
+            }
+        }
+        // No toon on a character material: the author wants it unmodelled (typically the face,
+        // which often comes with painted hair shadows).
+        if (!(c.flags & MatFlag_HasToon) && role != ModelRole::Stage) c.flags |= MatFlag_FlatShade;
+        if (m.flags & PmxMat_ReceiveShadow) c.flags |= MatFlag_ReceiveShadow;
+        if (role == ModelRole::Stage) c.flags |= MatFlag_Stage;
+        // MMD has no roughness: treat a tight, bright specular as a hint of gloss.
+        const float specLum = 0.299f * m.specular.x + 0.587f * m.specular.y + 0.114f * m.specular.z;
+        const float tightness = std::clamp((m.specularPower - 5.0f) / 60.0f, 0.0f, 1.0f);
+        c.reflectivity = std::clamp(specLum * tightness, 0.0f, 1.0f) * (role == ModelRole::Stage ? 0.5f : 0.12f);
     }
     materialCb_ = batch.CreateBuffer(consts.data(), consts.size() * sizeof(MaterialConstants),
                                      D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER, L"model.materialCb");
@@ -149,6 +215,7 @@ bool GpuModel::Create(Dx12Context& ctx, UploadBatch& batch, const PmxModel& pmx,
         LOG_ERROR("model '%s': material constant buffer creation failed", name_.c_str());
         return false;
     }
+    materialConsts_ = consts;
 
     // Per material: descriptor table and Material struct.
     materials_.clear();
@@ -161,6 +228,9 @@ bool GpuModel::Create(Dx12Context& ctx, UploadBatch& batch, const PmxModel& pmx,
         indexStart += m.indexCount;
         mat.doubleSided = (m.flags & PmxMat_DoubleSided) != 0;
         mat.drawEdge = (m.flags & PmxMat_Edge) && m.edgeSize > 0 && m.edgeColor.w > 0;
+        mat.castShadow = (m.flags & (PmxMat_CastShadow | PmxMat_GroundShadow)) != 0 && m.diffuse.w > 0.01f;
+        mat.alphaTested = m.textureIndex >= 0 && (size_t)m.textureIndex < textures.size() &&
+                          textures[m.textureIndex].hasAlpha;
         mat.edgeSize = m.edgeSize;
         mat.constants = materialCb_->GetGPUVirtualAddress() + mIdx * 256;
 
@@ -207,7 +277,7 @@ bool GpuModel::Create(Dx12Context& ctx, UploadBatch& batch, const PmxModel& pmx,
     // Per frame slot dynamic buffers.
     const uint32_t boneBytes = (boneCount_ == 0 ? 1u : boneCount_) * 64;
     const uint32_t morphBytes = (vertexCount_ == 0 ? 1u : vertexCount_) * 12;
-    for (uint32_t s = 0; s < Dx12Context::kFramesInFlight; ++s) {
+    for (uint32_t s = 0; s < kRing; ++s) {
         boneBuf_[s] = CreateUploadBuffer(ctx.Device(), boneBytes, L"model.bones");
         if (!boneBuf_[s]) {
             LOG_ERROR("model '%s': bone buffer creation failed", name_.c_str());
@@ -239,30 +309,46 @@ bool GpuModel::Create(Dx12Context& ctx, UploadBatch& batch, const PmxModel& pmx,
     return true;
 }
 
-void GpuModel::UpdateSkinning(uint32_t frameSlot, const std::vector<DirectX::XMFLOAT4X4>& skin) {
-    if (frameSlot >= Dx12Context::kFramesInFlight || !boneMapped_[frameSlot]) return;
-    size_t count = std::min(skin.size(), (size_t)(boneCount_ == 0 ? 1u : boneCount_));
-    memcpy(boneMapped_[frameSlot], skin.data(), count * 64);
+void GpuModel::UpdateSkinning(uint64_t frame, const std::vector<DirectX::XMFLOAT4X4>& skin) {
+    const size_t count = std::min(skin.size(), (size_t)(boneCount_ == 0 ? 1u : boneCount_));
+    const uint32_t r = (uint32_t)(frame % kRing);
+    for (uint32_t i = 0; i < kRing; ++i) {
+        if ((skinInitialized_ && i != r) || !boneMapped_[i]) continue;
+        memcpy(boneMapped_[i], skin.data(), count * 64);
+    }
+    skinInitialized_ = true;
 }
 
-void GpuModel::UpdateMorphs(uint32_t frameSlot, const std::vector<DirectX::XMFLOAT3>& deltas, uint64_t version) {
-    if (frameSlot >= Dx12Context::kFramesInFlight || !morphMapped_[frameSlot]) return;
-    if (version == morphVersion_[frameSlot]) return;
-    size_t count = std::min(deltas.size(), (size_t)vertexCount_);
-    memcpy(morphMapped_[frameSlot], deltas.data(), count * 12);
-    morphVersion_[frameSlot] = version;
+void GpuModel::UpdateMorphs(uint64_t frame, const std::vector<DirectX::XMFLOAT3>& deltas, uint64_t version) {
+    const size_t count = std::min(deltas.size(), (size_t)vertexCount_);
+    const uint32_t r = (uint32_t)(frame % kRing);
+    for (uint32_t i = 0; i < kRing; ++i) {
+        if ((morphInitialized_ && i != r) || !morphMapped_[i]) continue;
+        if (version == morphVersion_[i]) continue;
+        memcpy(morphMapped_[i], deltas.data(), count * 12);
+        morphVersion_[i] = version;
+    }
+    morphInitialized_ = true;
 }
 
-D3D12_GPU_VIRTUAL_ADDRESS GpuModel::BoneBuffer(uint32_t frameSlot) const {
-    if (frameSlot >= Dx12Context::kFramesInFlight || !boneBuf_[frameSlot]) return 0;
-    return boneBuf_[frameSlot]->GetGPUVirtualAddress();
+D3D12_GPU_VIRTUAL_ADDRESS GpuModel::BoneBuffer(uint64_t frame) const {
+    const ComPtr<ID3D12Resource>& b = boneBuf_[frame % kRing];
+    return b ? b->GetGPUVirtualAddress() : 0;
+}
+
+D3D12_GPU_VIRTUAL_ADDRESS GpuModel::PrevBoneBuffer(uint64_t frame) const {
+    const ComPtr<ID3D12Resource>& b = boneBuf_[(frame + kRing - 1) % kRing];
+    return b ? b->GetGPUVirtualAddress() : 0;
 }
 
 void GpuModel::Destroy() {
     if (!ctx_) return;
+    if (rt_.srv != DescriptorHeap::kInvalid) ctx_->SrvHeap().Free(rt_.srv, 2);
+    rt_ = RtResources{};
+    materialConsts_.clear();
     for (uint32_t a : srvAllocations_) ctx_->SrvHeap().Free(a, 3);
     srvAllocations_.clear();
-    for (uint32_t s = 0; s < Dx12Context::kFramesInFlight; ++s) {
+    for (uint32_t s = 0; s < kRing; ++s) {
         if (boneBuf_[s] && boneMapped_[s]) {
             boneBuf_[s]->Unmap(0, nullptr);
             boneMapped_[s] = nullptr;

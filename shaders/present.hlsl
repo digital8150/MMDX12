@@ -1,3 +1,4 @@
+// Letterboxed stretch of the final LDR image (already sRGB-encoded) to the back buffer.
 Texture2D gSrc : register(t0);
 SamplerState gLinear : register(s0);
 struct VSOut { float4 pos : SV_Position; float2 uv : TEXCOORD0; };
@@ -8,4 +9,4 @@ VSOut VSFullscreen(uint id : SV_VertexID) {
     o.uv = uv;
     return o;
 }
-float4 PSPresent(VSOut i) : SV_Target { return float4(saturate(gSrc.Sample(gLinear, i.uv).rgb), 1.0); }
+float4 PSPresent(VSOut i) : SV_Target { return float4(gSrc.Sample(gLinear, i.uv).rgb, 1.0); }

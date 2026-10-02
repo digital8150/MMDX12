@@ -4,3 +4,7 @@
 *.log
 mmdx12.ini
 /captures/
+# upscaler runtime DLLs (tools/fetch_sdks.ps1)
+/external/dlss/bin/
+/external/xess/bin/
+/external/ffx/bin/

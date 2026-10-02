@@ -7,6 +7,8 @@
 #include <cstdio>
 #include <cstring>
 
+#include "app/Lighting.h"
+#include "app/UiKit.h"
 #include "core/Log.h"
 #include "core/TextUtil.h"
 #include "imgui.h"
@@ -57,8 +59,44 @@ AppOptions ParseCommandLine(int argc, wchar_t** argv) {
             opt.debugLayer = true;
         } else if (arg == L"--screen") {
             opt.startScreen = WideToUtf8(next());
+        } else if (arg == L"--lighting") {
+            opt.lighting = _wtoi(next().c_str());
+        } else if (arg == L"--quality") {
+            opt.quality = _wtoi(next().c_str());
+        } else if (arg == L"--render") {
+            const std::string v = ToLowerAscii(WideToUtf8(next()));
+            if (v == "raster") opt.renderPath = 0;
+            else if (v == "rt") opt.renderPath = 1;
+            else if (v == "pt") opt.renderPath = 2;
+            else LOG_WARN("unknown --render value: %s (want raster|rt|pt)", v.c_str());
+        } else if (arg == L"--upscaler") {
+            const std::string v = ToLowerAscii(WideToUtf8(next()));
+            if (v == "none") opt.upscaler = 0;
+            else if (v == "dlss") opt.upscaler = 1;
+            else if (v == "fsr") opt.upscaler = 2;
+            else if (v == "xess") opt.upscaler = 3;
+            else LOG_WARN("unknown --upscaler value: %s (want none|dlss|fsr|xess)", v.c_str());
+        } else if (arg == L"--upscale-quality") {
+            const std::string v = ToLowerAscii(WideToUtf8(next()));
+            if (v == "native") opt.upscalerQuality = 0;
+            else if (v == "quality") opt.upscalerQuality = 1;
+            else if (v == "balanced") opt.upscalerQuality = 2;
+            else if (v == "performance") opt.upscalerQuality = 3;
+            else if (v == "ultra") opt.upscalerQuality = 4;
+            else LOG_WARN("unknown --upscale-quality value: %s (want native|quality|balanced|performance|ultra)", v.c_str());
+        } else if (arg == L"--no-physics") {
+            opt.noPhysics = true;
+        } else if (arg == L"--paused") {
+            opt.paused = true;
         } else if (arg == L"--free-camera") {
             opt.freeCamera = true;
+        } else if (arg == L"--camera") {
+            std::string v = WideToUtf8(next());
+            if (sscanf_s(v.c_str(), "%f,%f,%f,%f,%f,%f", &opt.camera[0], &opt.camera[1], &opt.camera[2],
+                         &opt.camera[3], &opt.camera[4], &opt.camera[5]) == 6) {
+                opt.hasCamera = true;
+                opt.freeCamera = true;
+            }
         } else {
             LOG_WARN("unknown command line argument: %s", WideToUtf8(arg).c_str());
         }
@@ -74,6 +112,12 @@ int App::Run(HINSTANCE instance, const AppOptions& options) {
     options_ = options;
     settingsPath_ = ExecutableDir() / L"mmdx12.ini";
     settings_.Load(settingsPath_);
+    const AppSettings persisted = settings_;  // CLI overrides below are for this run only
+    if (options_.lighting >= 0) settings_.lighting = std::clamp(options_.lighting, 0, kLightingPresetCount - 1);
+    if (options_.quality >= 0) ApplyGraphicsPreset(std::clamp(options_.quality, 0, 3));
+    if (options_.renderPath >= 0) settings_.renderPath = std::clamp(options_.renderPath, 0, 2);
+    if (options_.upscaler >= 0) settings_.upscaler = std::clamp(options_.upscaler, 0, 3);
+    if (options_.upscalerQuality >= 0) settings_.upscalerQuality = std::clamp(options_.upscalerQuality, 0, 4);
 
     ImGui_ImplWin32_EnableDpiAwareness();
 
@@ -105,6 +149,10 @@ int App::Run(HINSTANCE instance, const AppOptions& options) {
     audio_.SetVolume(settings_.volume);
 
     if (!InitImGui()) return 1;
+    thumbs_.Initialize(ctx_, ThumbnailCacheDir(),
+                       [this](ThumbnailKind kind, std::vector<LoadedModelCpu>& models, ImageRGBA8& out) {
+                           return RenderThumbnail(kind, models, out);
+                       });
 
     std::strncpy(nicknameEdit_, settings_.nickname.c_str(), sizeof(nicknameEdit_) - 1);
     nicknameEdit_[sizeof(nicknameEdit_) - 1] = '\0';
@@ -123,6 +171,7 @@ int App::Run(HINSTANCE instance, const AppOptions& options) {
 
     ctx_.WaitForGpu();
     UnloadScene();
+    thumbs_.Shutdown();
     ShutdownImGui();
     renderer_.Shutdown();
 
@@ -133,6 +182,19 @@ int App::Run(HINSTANCE instance, const AppOptions& options) {
     }
     settings_.volume = audio_.Volume();
     settings_.nickname = nicknameEdit_;
+    if (options_.lighting >= 0) settings_.lighting = persisted.lighting;
+    if (options_.quality >= 0) {
+        settings_.graphicsPreset = persisted.graphicsPreset;
+        settings_.shadows = persisted.shadows;
+        settings_.ssao = persisted.ssao;
+        settings_.ssr = persisted.ssr;
+        settings_.bloom = persisted.bloom;
+        settings_.taa = persisted.taa;
+        settings_.shadowMapSize = persisted.shadowMapSize;
+    }
+    if (options_.renderPath >= 0) settings_.renderPath = persisted.renderPath;
+    if (options_.upscaler >= 0) settings_.upscaler = persisted.upscaler;
+    if (options_.upscalerQuality >= 0) settings_.upscalerQuality = persisted.upscalerQuality;
     settings_.Save(settingsPath_);
 
     ctx_.Shutdown();
@@ -200,7 +262,7 @@ bool App::InitWindow(HINSTANCE instance, int width, int height) {
     const int w = rc.right - rc.left;
     const int h = rc.bottom - rc.top;
 
-    hwnd_ = CreateWindowExW(0, wc.lpszClassName, L"MMDX12 — MikuMikuDance DX12", WS_OVERLAPPEDWINDOW,
+    hwnd_ = CreateWindowExW(0, wc.lpszClassName, L"MMDX12", WS_OVERLAPPEDWINDOW,
                             CW_USEDEFAULT, CW_USEDEFAULT, w, h, nullptr, nullptr, instance, this);
     if (!hwnd_) return false;
     ShowWindow(hwnd_, SW_SHOW);
@@ -218,37 +280,13 @@ bool App::InitImGui() {
     io.IniFilename = nullptr;
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
 
-    ImGui::StyleColorsDark();
-    ImGuiStyle& style = ImGui::GetStyle();
-    style.WindowRounding = 8;
-    style.FrameRounding = 5;
-    style.GrabRounding = 5;
-    const ImVec4 accent(0.22f, 0.77f, 0.73f, 1.0f); // Miku teal #39C5BB
-    style.Colors[ImGuiCol_Button] = ImVec4(0.22f, 0.77f, 0.73f, 0.45f);
-    style.Colors[ImGuiCol_ButtonHovered] = ImVec4(accent.x, accent.y, accent.z, 0.70f);
-    style.Colors[ImGuiCol_ButtonActive] = ImVec4(accent.x, accent.y, accent.z, 0.95f);
-    style.Colors[ImGuiCol_Header] = ImVec4(accent.x, accent.y, accent.z, 0.45f);
-    style.Colors[ImGuiCol_HeaderHovered] = ImVec4(accent.x, accent.y, accent.z, 0.70f);
-    style.Colors[ImGuiCol_HeaderActive] = ImVec4(accent.x, accent.y, accent.z, 0.95f);
-    style.Colors[ImGuiCol_SliderGrab] = ImVec4(accent.x, accent.y, accent.z, 1.0f);
-    style.Colors[ImGuiCol_CheckMark] = ImVec4(accent.x, accent.y, accent.z, 1.0f);
-    style.Colors[ImGuiCol_WindowBg] = ImVec4(0.06f, 0.07f, 0.10f, 0.94f);
-
-    const float dpi = ImGui_ImplWin32_GetDpiScaleForHwnd(hwnd_);
-    style.ScaleAllSizes(dpi);
-    style.FontScaleDpi = dpi;
-
-    // Fonts: 18 px base, Korean-capable, with CJK fallback merges.
-    io.Fonts->AddFontFromFileTTF("C:\\Windows\\Fonts\\malgun.ttf", 18.0f);
-    if (io.Fonts->Fonts.empty()) io.Fonts->AddFontDefault();
-    ImFontConfig cfg;
-    cfg.MergeMode = true;
-    if (std::filesystem::exists(L"C:\\Windows\\Fonts\\YuGothM.ttc"))
-        io.Fonts->AddFontFromFileTTF("C:\\Windows\\Fonts\\YuGothM.ttc", 18.0f, &cfg);
-    else if (std::filesystem::exists(L"C:\\Windows\\Fonts\\msgothic.ttc"))
-        io.Fonts->AddFontFromFileTTF("C:\\Windows\\Fonts\\msgothic.ttc", 18.0f, &cfg);
-    if (std::filesystem::exists(L"C:\\Windows\\Fonts\\msyh.ttc"))
-        io.Fonts->AddFontFromFileTTF("C:\\Windows\\Fonts\\msyh.ttc", 18.0f, &cfg);
+    assetsDir_ = ExecutableDir() / L"assets";
+    if (!std::filesystem::exists(assetsDir_ / L"fonts")) {
+        std::filesystem::path found = FindUpward(ExecutableDir(), L"assets/fonts");
+        if (!found.empty()) assetsDir_ = found / L"assets";
+    }
+    if (!ui::LoadFonts(assetsDir_)) LOG_WARN("UI fonts not found under %s, using system fonts", PathToUtf8(assetsDir_).c_str());
+    ui::ApplyStyle(ImGui_ImplWin32_GetDpiScaleForHwnd(hwnd_));
 
     if (!ImGui_ImplWin32_Init(hwnd_)) return false;
 
@@ -313,9 +351,17 @@ void App::RenderFrame() {
 
     if (screen_ == Screen::BenchRun) UpdateBenchRun(); // frame timing first thing in the frame
 
+    // Thumbnails: renders/uploads happen outside frame recording, only on menu screens.
+    if (thumbsClearPending_) {
+        thumbs_.Clear();
+        thumbsClearPending_ = false;
+    }
+    if (screen_ == Screen::Select || screen_ == Screen::BenchLobby || screen_ == Screen::Loading) thumbs_.Pump();
+
     ImGui_ImplDX12_NewFrame();
     ImGui_ImplWin32_NewFrame();
     ImGui::NewFrame();
+    ui::NewFrame((float)dt);
 
     PollScan();
     PollLoad();
@@ -386,6 +432,7 @@ std::filesystem::path App::ResolveLibraryPath() const {
 
 void App::StartScan() {
     screen_ = Screen::Scanning;
+    thumbsClearPending_ = true;
     scanProgress_.filesVisited.store(0, std::memory_order_relaxed);
     scanProgress_.filesTotal.store(0, std::memory_order_relaxed);
     const std::filesystem::path path = ResolveLibraryPath();
@@ -426,6 +473,12 @@ void App::PollScan() {
     if (options_.startScreen == "bench") {
         screen_ = Screen::BenchLobby;
         RefreshLeaderboard();
+    } else if (options_.startScreen == "stages") {
+        libraryTab_ = 1;
+    } else if (options_.startScreen == "songs") {
+        libraryTab_ = 2;
+    } else if (options_.startScreen == "settings") {
+        advancedOpen_ = true;
     }
 
     // One-shot command line auto-actions.
@@ -437,6 +490,11 @@ void App::PollScan() {
         int cat = 0;
         for (size_t i = 0; i < std::size(kBenchCategories); ++i)
             if (ToLowerAscii(kBenchCategories[i].id) == ToLowerAscii(options_.benchmarkCategory)) { cat = (int)i; break; }
+        if (kBenchCategories[cat].path != RenderPath::Raster && !renderer_.RayTracingSupported()) {
+            LOG_ERROR("benchmark %s needs DXR 1.1", kBenchCategories[cat].id);
+            options_.benchmarkCategory.clear();
+            return;
+        }
         benchCategory_ = cat;
         // Same preset-or-selection logic as the lobby's "측정 시작" button.
         const auto findByPreset = [](const auto& list, const char* key) -> int {
@@ -500,12 +558,47 @@ void App::ApplyCommandLinePreselection() {
     }
 }
 
+void App::ApplyGraphicsPreset(int preset) {
+    settings_.graphicsPreset = preset;
+    switch (preset) {
+    case 0:  // low
+        settings_.shadows = false; settings_.ssao = false; settings_.ssr = false; settings_.bloom = true;
+        settings_.taa = false; settings_.shadowMapSize = 1024;
+        break;
+    case 1:  // medium
+        settings_.shadows = true; settings_.ssao = true; settings_.ssr = false; settings_.bloom = true;
+        settings_.taa = false; settings_.shadowMapSize = 1024;
+        break;
+    case 2:  // high
+        settings_.shadows = true; settings_.ssao = true; settings_.ssr = true; settings_.bloom = true;
+        settings_.taa = false; settings_.shadowMapSize = 2048;
+        break;
+    case 3:  // ultra
+        settings_.shadows = true; settings_.ssao = true; settings_.ssr = true; settings_.bloom = true;
+        settings_.taa = true; settings_.shadowMapSize = 4096;
+        break;
+    default: break;  // custom: keep the toggles
+    }
+}
+
 void App::ApplyRenderSettings() {
     RenderSettings rs = renderer_.Settings();
     rs.msaaSamples = settings_.msaa;
     rs.renderScale = settings_.renderScale;
     rs.vsync = settings_.vsync;
     rs.drawEdges = settings_.drawEdges;
+    rs.shadows = settings_.shadows;
+    rs.shadowMapSize = (uint32_t)settings_.shadowMapSize;
+    rs.ssao = settings_.ssao;
+    rs.ssr = settings_.ssr;
+    rs.bloom = settings_.bloom;
+    rs.taa = settings_.taa;
+    rs.exposure = settings_.exposure;
+    rs.renderPath = (RenderPath)settings_.renderPath;
+    rs.upscaler = (UpscalerKind)settings_.upscaler;
+    rs.upscalerQuality = (UpscalerQuality)settings_.upscalerQuality;
+    rs.ptSamples = (uint32_t)settings_.ptSamples;
+    rs.ptBounces = (uint32_t)settings_.ptBounces;
     rs.fixedResolution = false;
     renderer_.SetSettings(rs);
 }
@@ -555,6 +648,13 @@ void App::PollLoad() {
         options_.seekSeconds = 0;
         playing_ = true;
         useMotionCamera_ = scene_->camera != nullptr && !options_.freeCamera;
+        if (options_.hasCamera) {
+            const float* c = options_.camera;
+            freeCam_.target = {c[0], c[1], c[2]};
+            freeCam_.yaw = DirectX::XMConvertToRadians(c[3]);
+            freeCam_.pitch = DirectX::XMConvertToRadians(c[4]);
+            freeCam_.distance = c[5];
+        }
         if (scene_->hasAudio) {
             audio_.SetMuted(false);
             audio_.Seek(playTime_);
@@ -562,6 +662,10 @@ void App::PollLoad() {
         }
         framesInScene_ = 0;
         screen_ = Screen::Play;
+        if (options_.paused) {
+            options_.paused = false;
+            SetPlaying(false);
+        }
         return;
     }
 
@@ -584,6 +688,18 @@ void App::PollLoad() {
     rs.msaaSamples = 4;
     rs.drawEdges = true;
     rs.renderScale = 1.0f;
+    rs.renderPath = cat.path;
+    rs.upscaler = UpscalerKind::None;
+    rs.ptSamples = 1;
+    rs.ptBounces = 3;
+    // Fixed workload: the "high" effect set, studio lighting, regardless of user settings.
+    rs.shadows = true;
+    rs.shadowMapSize = 2048;
+    rs.ssao = true;
+    rs.ssr = true;
+    rs.bloom = true;
+    rs.taa = false;
+    rs.exposure = 1.0f;
     renderer_.SetSettings(rs);
 
     benchStartTime_ = timeSeconds_;
@@ -602,7 +718,7 @@ bool App::BuildSceneRuntime(ScenePackage& pkg) {
     for (LoadedModelCpu& part : pkg.stageParts) {
         auto inst = std::make_unique<ModelInstance>(part.pmx);
         inst->UpdatePose();
-        auto gpu = renderer_.CreateModel(batch, *part.pmx, part.textures);
+        auto gpu = renderer_.CreateModel(batch, *part.pmx, part.textures, ModelRole::Stage);
         if (!gpu) {
             LOG_WARN("stage part GPU upload failed: %s", part.pmx->name.c_str());
             continue;
@@ -631,13 +747,25 @@ void App::UnloadScene() {
 }
 
 void App::UpdateScene(float frame) {
-    const uint32_t slot = ctx_.FrameSlot();
+    const uint64_t slot = ctx_.FrameNumber();
     if (scene_->motion) {
         scene_->motion->Evaluate(frame, *scene_->character);
     } else {
         scene_->character->ResetPose();
     }
-    scene_->character->UpdatePose();
+    // Physics follows the motion clock. Backward jumps (seek, loop) and forward jumps beyond a
+    // normal frame step reset the bodies to the animated pose instead of simulating the jump.
+    // The benchmark always simulates (fixed workload).
+    ModelInstance& ch = *scene_->character;
+    ch.EnablePhysics(screen_ == Screen::BenchRun || (settings_.physics && !options_.noPhysics));
+    float physicsDt = 0.0f;
+    if (scene_->physicsFrame >= 0.0f) physicsDt = (frame - scene_->physicsFrame) / kMmdFps;
+    if (scene_->physicsFrame < 0.0f || physicsDt < 0.0f || physicsDt > 0.25f) {
+        ch.ResetPhysics();
+        physicsDt = 0.0f;
+    }
+    scene_->physicsFrame = frame;
+    ch.UpdatePose(physicsDt);
     scene_->characterGpu->UpdateSkinning(slot, scene_->character->SkinMatrices());
     scene_->characterGpu->UpdateMorphs(slot, scene_->character->VertexMorphDeltas(),
                                        scene_->character->MorphVersion());
@@ -648,8 +776,7 @@ void App::UpdateScene(float frame) {
     }
 }
 
-void App::BuildFrameView(float frame, FrameView& view) const {
-    (void)frame;
+void App::BuildFrameView(float frame, FrameView& view) {
     if (useMotionCamera_ && scene_->camera) {
         CameraPose pose = scene_->camera->Evaluate(frame);
         CameraMotion::ToView(pose, &view.camera.view, &view.camera.eye);
@@ -671,6 +798,21 @@ void App::BuildFrameView(float frame, FrameView& view) const {
     }
     for (const auto& g : scene_->stageGpu) view.models.push_back(g.get());
     if (scene_->characterGpu) view.models.push_back(scene_->characterGpu.get());
+    view.studioFloor = scene_->stageGpu.empty();
+
+    // Spotlights follow the performer (center bone when present).
+    DirectX::XMFLOAT3 focus{0, 10, 0};
+    if (scene_->character) {
+        const int center = scene_->character->Model().FindBone("\xE3\x82\xBB\xE3\x83\xB3\xE3\x82\xBF\xE3\x83\xBC");
+        if (center >= 0) focus = scene_->character->BoneWorldPosition(center);
+    }
+    const LightingPreset preset = screen_ == Screen::BenchRun ? LightingPreset::Studio : (LightingPreset)settings_.lighting;
+    BuildLighting(preset, playTime_, focus, view.light);
+
+    // Seeking (or a restart) breaks temporal history.
+    const double step = std::fabs(playTime_ - lastRenderedTime_);
+    view.cameraCut = lastRenderedTime_ < 0 || step > 0.25;
+    lastRenderedTime_ = playTime_;
 }
 
 } // namespace mmdx
