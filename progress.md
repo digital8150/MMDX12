@@ -274,3 +274,6 @@ every frame and encodes an MP4, 3) GI with a Pixar/Disney-like look while keepin
 
 ### Not verified
 - The leaderboard tooltip was not hovered (headless captures can't hover); the icon placement was checked in the capture.
+- README: YouTube introduction (https://youtu.be/7S7D670HbIM) linked from the hero preview and a badge; Korean README
+  (`README.ko.md`) with an English · 한국어 switch on both. Public repo history was scrubbed of server details and local paths
+  (git filter-repo), the GitHub repo recreated, server notes moved to the git-ignored `CLAUDE.local.md`.

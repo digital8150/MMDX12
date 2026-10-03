@@ -1,18 +1,20 @@
 <div align="center">
   <h1>MMDX12</h1>
+  <p><b>English</b> · <a href="README.ko.md">한국어</a></p>
   <p>A native Direct3D 12 MikuMikuDance player — real-time ray tracing, path tracing, and an offline GI renderer for Blender-class MMD videos.</p>
-  <p>차세대 MMD 플레이어 — 레이 트레이싱, 패스 트레이싱, 오프라인 GI 렌더</p>
   <p>
     <img src="https://img.shields.io/badge/Platform-Windows%2010%2F11-39C5BB" alt="Platform">
     <img src="https://img.shields.io/badge/Graphics-Direct3D%2012%20%2B%20DXR%201.1-39C5BB" alt="Graphics">
     <img src="https://img.shields.io/badge/Language-C%2B%2B20-39C5BB" alt="Language">
     <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-39C5BB" alt="License"></a>
+    <a href="https://youtu.be/7S7D670HbIM"><img src="https://img.shields.io/badge/YouTube-Introduction-39C5BB?logo=youtube&logoColor=white" alt="YouTube"></a>
   </p>
-  <a href="https://github.com/digital8150/MMDX12/releases/latest/download/MMDX12-intro-1080p60.mp4">
-    <img src="docs/media/promo-preview.webp" width="100%" alt="Preview">
+  <a href="https://youtu.be/7S7D670HbIM">
+    <img src="docs/media/promo-preview.webp" width="100%" alt="MMDX12 preview">
   </a>
   <br>
-  <a href="https://github.com/digital8150/MMDX12/releases/latest/download/MMDX12-intro-1080p60.mp4">▶ Watch the full promo (58 s, 1080p60)</a>
+  <a href="https://youtu.be/7S7D670HbIM">▶ Watch the introduction on YouTube</a>
+  · <a href="https://github.com/digital8150/MMDX12/releases/latest/download/MMDX12-intro-1080p60.mp4">Download the 58 s promo (1080p60 MP4)</a>
   <p>
     <a href="#gallery">Gallery</a> ·
     <a href="#highlights">Highlights</a> ·
