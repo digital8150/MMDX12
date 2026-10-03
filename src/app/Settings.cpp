@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <charconv>
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <fstream>
@@ -46,6 +47,21 @@ bool ParseFloat(const std::string& v, float& out) {
 }
 
 } // namespace
+
+const VideoProbe* AppSettings::FindVideoProbe(uint64_t key) const {
+    for (const VideoProbe& p : videoProbes)
+        if (p.key == key) return &p;
+    return nullptr;
+}
+
+void AppSettings::SetVideoProbe(uint64_t key, double secondsPerFrame) {
+    videoProbes.erase(std::remove_if(videoProbes.begin(), videoProbes.end(),
+                                     [&](const VideoProbe& p) { return p.key == key; }),
+                      videoProbes.end());
+    videoProbes.push_back({key, secondsPerFrame});
+    constexpr size_t kMaxProbes = 24;  // newest kept
+    if (videoProbes.size() > kMaxProbes) videoProbes.erase(videoProbes.begin(), videoProbes.end() - kMaxProbes);
+}
 
 bool AppSettings::Load(const std::filesystem::path& file) {
     std::ifstream in(file);
@@ -92,6 +108,30 @@ bool AppSettings::Load(const std::filesystem::path& file) {
         else if (key == "bloomConvolution" && ParseBool(value, b)) bloomConvolution = b;
         else if (key == "colorLut") colorLut = value;
         else if (key == "lutIntensity" && ParseFloat(value, f)) lutIntensity = f;
+        else if (key == "videoResolution" && ParseInt(value, i)) video.resolution = i;
+        else if (key == "videoFps" && ParseInt(value, i)) video.fps = i;
+        else if (key == "videoBitrate" && ParseInt(value, i)) video.bitrateMbps = i;
+        else if (key == "videoQuality" && ParseInt(value, i)) video.quality = i;
+        else if (key == "videoRenderer" && ParseInt(value, i)) video.renderer = i;
+        else if (key == "videoBloom" && ParseBool(value, b)) video.bloom = b;
+        else if (key == "videoBloomConvolution" && ParseBool(value, b)) video.bloomConvolution = b;
+        else if (key == "videoVolumetric" && ParseBool(value, b)) video.volumetric = b;
+        else if (key == "videoVolumetricDensity" && ParseFloat(value, f)) video.volumetricDensity = f;
+        else if (key == "videoDof" && ParseBool(value, b)) video.dof = b;
+        else if (key == "videoDofAperture" && ParseFloat(value, f)) video.dofAperture = f;
+        else if (key == "videoProbe") {
+            // "<key hex>:<seconds per frame>"
+            const size_t colon = value.find(':');
+            if (colon != std::string::npos) {
+                VideoProbe pr;
+                char* end = nullptr;
+                pr.key = std::strtoull(value.c_str(), &end, 16);
+                if (ParseFloat(value.substr(colon + 1), f) && f > 0.0f && std::isfinite(f)) {
+                    pr.secondsPerFrame = f;
+                    SetVideoProbe(pr.key, pr.secondsPerFrame);
+                }
+            }
+        }
         else if (key == "leaderboardUrl") leaderboardUrl = value;
         else if (key == "lastCharacter") lastCharacter = value;
         else if (key == "lastStage") lastStage = value;
@@ -116,6 +156,7 @@ bool AppSettings::Load(const std::filesystem::path& file) {
     volumetricDensity = std::clamp(volumetricDensity, 0.25f, 4.0f);
     lutIntensity = std::clamp(lutIntensity, 0.0f, 1.0f);
     volume = std::clamp(volume, 0.0f, 1.0f);
+    video.Clamp();
     windowWidth = std::clamp(windowWidth, 640, 7680);
     windowHeight = std::clamp(windowHeight, 360, 4320);
     return true;
@@ -148,6 +189,14 @@ bool AppSettings::Save(const std::filesystem::path& file) const {
     std::fprintf(f, "volumetric=%d\nvolumetricDensity=%.3f\n", volumetric ? 1 : 0, volumetricDensity);
     std::fprintf(f, "bloomConvolution=%d\n", bloomConvolution ? 1 : 0);
     std::fprintf(f, "colorLut=%s\nlutIntensity=%.3f\n", colorLut.c_str(), lutIntensity);
+    std::fprintf(f, "videoResolution=%d\nvideoFps=%d\nvideoBitrate=%d\nvideoQuality=%d\n", video.resolution, video.fps,
+                 video.bitrateMbps, video.quality);
+    std::fprintf(f, "videoRenderer=%d\nvideoBloom=%d\nvideoBloomConvolution=%d\nvideoVolumetric=%d\n", video.renderer,
+                 video.bloom ? 1 : 0, video.bloomConvolution ? 1 : 0, video.volumetric ? 1 : 0);
+    std::fprintf(f, "videoVolumetricDensity=%.3f\nvideoDof=%d\nvideoDofAperture=%.3f\n", video.volumetricDensity,
+                 video.dof ? 1 : 0, video.dofAperture);
+    for (const VideoProbe& pr : videoProbes)
+        std::fprintf(f, "videoProbe=%llx:%.4f\n", (unsigned long long)pr.key, pr.secondsPerFrame);
     std::fprintf(f, "leaderboardUrl=%s\n", leaderboardUrl.c_str());
     std::fprintf(f, "lastCharacter=%s\n", lastCharacter.c_str());
     std::fprintf(f, "lastStage=%s\n", lastStage.c_str());

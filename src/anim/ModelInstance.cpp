@@ -225,8 +225,10 @@ void ModelInstance::UpdateWorld(int bone) {
     if (p >= 0 && p < (int)bones_.size() && p != bone)
         XMStoreFloat4x4(&b.world, XMMatrixMultiply(XMLoadFloat4x4(&b.local), XMLoadFloat4x4(&bones_[p].world)));
     else
-        b.world = b.local;
+        XMStoreFloat4x4(&b.world, XMMatrixMultiply(XMLoadFloat4x4(&b.local), XMLoadFloat4x4(&root_)));
 }
+
+void ModelInstance::SetRootTransform(const XMFLOAT4X4& m) { root_ = m; }
 
 void ModelInstance::UpdateWorldRecursive(int bone) {
     // Iterative DFS (bone hierarchies can be deep).
@@ -448,7 +450,8 @@ void ModelInstance::RunPhysics(float dt) {
                 XMStoreFloat4x4(&s.local, XMMatrixMultiply(XMLoadFloat4x4(&s.world),
                                                            XMMatrixInverse(nullptr, XMLoadFloat4x4(&bones_[p].world))));
             else
-                s.local = s.world;
+                XMStoreFloat4x4(&s.local, XMMatrixMultiply(XMLoadFloat4x4(&s.world),
+                                                           XMMatrixInverse(nullptr, XMLoadFloat4x4(&root_))));
         } else {
             UpdateWorld(b);
         }

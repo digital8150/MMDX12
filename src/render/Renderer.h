@@ -45,11 +45,19 @@ public:
     // viewport/scissor cover the whole back buffer and ctx.SrvHeap() is the bound heap,
     // so the caller can draw UI (ImGui) directly afterwards.
     void Render(ID3D12GraphicsCommandList* cmd, const FrameView& view);
+    // The menu surface Render() leaves without models: the back buffer cleared and bound for the UI. Used
+    // after background work (a headless sample render) in the same frame; keeps temporal history.
+    void ClearBackBuffer(ID3D12GraphicsCommandList* cmd);
 
     // Renders `view` into a w x h RGBA8 image (level 0 only) with a transparent background
     // (alpha = coverage, straight alpha). Uses its own command list and waits for the GPU.
     // Must be called outside of frame recording (before ctx.BeginFrame()).
     bool RenderToImage(const FrameView& view, uint32_t w, uint32_t h, ImageRGBA8& out);
+
+    // The final (post-processed, sRGB) image of the last Render() call at output resolution, as an
+    // opaque RGBA8 image. Waits for the GPU; call after the frame was submitted (ctx.EndFrame),
+    // outside frame recording. Used to render videos with the real-time renderers.
+    bool ReadFinalImage(ImageRGBA8& out);
 
     // Blurred copy of the last presented frame for frosted UI panels (ImTextureID, 0 if none)
     // and the back-buffer rectangle the scene image occupies (letterbox), to map UVs.
@@ -79,6 +87,8 @@ public:
     // Final image of a Done job (RGBA8, opaque). Waits for the GPU; call outside frame recording.
     bool ReadOfflineImage(ImageRGBA8& out);
     void CancelOffline();
+    // false: BeginOffline / RenderOffline leave the back buffer alone (a sample render behind the UI).
+    void SetOfflinePresent(bool present) { offlinePresent_ = present; }
 
 private:
     void EnsureTargets(uint32_t width, uint32_t height, uint32_t outWidth, uint32_t outHeight, uint32_t msaa);
@@ -108,6 +118,7 @@ private:
     bool upscalerAvailable_[4] = {true, false, false, false};
     std::unique_ptr<RtScene> rt_;
     std::unique_ptr<OfflineRenderer> offline_;   // null without ray tracing / offline pipelines
+    bool offlinePresent_ = true;
     bool rtSupported_ = false;
     float jitterPx_[2] = {};
     int64_t lastFrameQpc_ = 0;
@@ -129,6 +140,7 @@ private:
     ID3D12Resource* backdropSrvRes_ = nullptr;
     float presentRect_[4] = {};
     bool sceneVisible_ = false;
+    bool hasFinal_ = false;   // targets_.ldr holds a finished Render() image (ReadFinalImage)
     // offscreen rendering
     ComPtr<ID3D12CommandAllocator> offAlloc_;
     ComPtr<ID3D12GraphicsCommandList> offList_;

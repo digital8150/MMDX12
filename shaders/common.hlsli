@@ -26,6 +26,13 @@ cbuffer SceneCB : register(b0) {
     float2 gJitterUv;    float2 gInvViewportSize;
     float gNearZ; float gFarZ; float gFrameIndex; float _cpad;
     float4x4 gPrevInvView;   // offline renderer: camera-to-world at shutter open
+    // offline renderer scene extras (render benchmark): glass box, softboxes, floor
+    float4 gGlassCenter;     // xyz, w = enabled
+    float4 gGlassHalf;       // xyz half extents, w = corner radius
+    float4 gGlassParams;     // cos yaw, sin yaw, ior (green), ior(blue) - ior(red)
+    float4 gGlassAbsorb;     // xyz absorption per unit
+    float4 gSoftbox[8];      // [i * 4 + 0..3]: centre (w = enabled), half U, half V, radiance
+    float4 gFloorParams;     // xyz albedo, w = reflectivity (< 0: default floor)
 };
 
 static const float PI = 3.14159265;

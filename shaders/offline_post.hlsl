@@ -4,6 +4,7 @@
 //   t4 outline accumulation RGBA32F (sum of per-iteration layers: premultiplied linear colour, a = coverage)
 //   t5 denoiser input (CSDenoise, iteration > 0) / denoised result (CSFinalize) / outline layer (CSEdgeAccum)
 //   t6 bloom input (CSBloomBlur) / bloom result at quarter resolution (CSFinalize)
+//   t7 volumetric light at half resolution (CSFinalize, gP2.x > 0.5)
 //   u0 output
 // Root constants:
 //   CSDenoise    gP0 = (step, iteration), gP1.xy = image size
@@ -12,6 +13,7 @@
 //   CSFinalize   gP0 = (useDenoised, useBloom, bloomIntensity, exposure), gP1 = (w, h, vignette, outline layers)
 //   CSEdgeAccum  gP1.xy = image size; u0 = outline accumulation (+= t5)
 #include "common.hlsli"
+#include "offline_glass.hlsli"
 cbuffer PassCB : register(b1) { float4 gP0; float4 gP1; float4 gP2; float4 gP3; };
 SamplerState gPoint : register(s0);
 SamplerState gLinear : register(s1);
@@ -23,6 +25,7 @@ Texture2D<float4> gGbufT : register(t3);
 Texture2D<float4> gEdgeT : register(t4);
 Texture2D<float4> gInT : register(t5);
 Texture2D<float4> gBloomT : register(t6);
+Texture2D<float4> gVolT : register(t7);
 RWTexture2D<float4> gOut : register(u0);
 
 float Perceptual(float3 c) {
@@ -140,6 +143,41 @@ float3 PbrNeutral(float3 color) {
     return lerp(color, newPeak.xxx, g);
 }
 
+// The camera ray through the pixel centre meets the glass box first: the raster outline layer cannot
+// see through it (the traced image shows the refracted characters), so no outlines there.
+bool SeesGlass(int2 p, int2 size) {
+    if (!GlassOn()) return false;
+    float2 uv = (float2(p) + 0.5) / float2(size);
+    float4 v = mul(float4(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0, 1.0, 1.0), gInvProj);
+    float3 d = normalize(mul(normalize(v.xyz / v.w), (float3x3)gInvView));
+    float t;
+    float3 n;
+    bool inside;
+    return GlassIntersect(gInvView[3].xyz, d, 0.0, 1e5, t, n, inside);
+}
+
+// Half-resolution volumetric light, upsampled depth-aware (bilinear weights times a depth similarity).
+float3 VolUpsample(int2 p, int2 size) {
+    const int2 vs = (size + 1) / 2;
+    const float zc = min(gGbufT.Load(int3(p, 0)).w, 1e4);
+    const float2 f = (float2(p) + 0.5) * 0.5 - 0.5;
+    const int2 b = (int2)floor(f);
+    const float2 t = f - (float2)b;
+    float3 sum = 0;
+    float wsum = 0;
+    [unroll] for (int y = 0; y < 2; ++y) {
+        [unroll] for (int x = 0; x < 2; ++x) {
+            int2 q = clamp(b + int2(x, y), int2(0, 0), vs - 1);
+            float zq = min(gGbufT.Load(int3(min(q * 2, size - 1), 0)).w, 1e4);
+            float wl = max((x ? t.x : 1.0 - t.x) * (y ? t.y : 1.0 - t.y), 1e-3);
+            float w = wl / (0.01 + abs(zc - zq) / (0.02 * zc + 0.5));
+            sum += gVolT.Load(int3(q, 0)).rgb * w;
+            wsum += w;
+        }
+    }
+    return sum / wsum;
+}
+
 // HDR -> display: denoised (or raw) radiance, bloom, outlines (MMD ink, composited before the
 // tonemap like the raster edges), a soft filmic grade, sRGB with dithering. Opaque output.
 [numthreads(8, 8, 1)]
@@ -148,8 +186,9 @@ void CSFinalize(uint3 id : SV_DispatchThreadID) {
     int2 p = int2(id.xy);
     if (p.x >= size.x || p.y >= size.y) return;
     float3 c = gP0.x > 0.5 ? gInT.Load(int3(p, 0)).rgb * MeanAlbedo(p) : MeanRadiance(p);
+    if (gP2.x > 0.5) c += VolUpsample(p, size);
     if (gP0.y > 0.5) c += gBloomT.SampleLevel(gLinear, (float2(p) + 0.5) / float2(size), 0).rgb * gP0.z;
-    if (gP1.w > 0.0) {
+    if (gP1.w > 0.0 && !SeesGlass(p, size)) {
         float4 e = gEdgeT.Load(int3(p, 0)) / gP1.w;   // mean outline layer over the iterations
         c = c * (1.0 - e.a) + e.rgb;
     }

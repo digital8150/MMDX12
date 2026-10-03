@@ -23,7 +23,8 @@
 //   Render  iterations (one sample per active pixel each; geometry/outlines at the iteration's
 //           shutter time) until converged or maxSamples; the first frames run 1, 2, 3 ... iterations
 //           so the preview visibly refines from noise
-//   Done    CSDenoise x3, bloom, CSFinalize -> final image; Renderer::ReadOfflineImage copies it
+//   Done    CSDenoise x3, optional volumetric light (offline_volumetric.hlsl), bloom (soft glow or FFT
+//           convolution), CSFinalize -> final image; Renderer::ReadOfflineImage copies it
 // Work is split across app frames with a GPU-time budget so the UI stays responsive and no
 // command list runs long enough to trigger a TDR. Between frames the preview shows the running
 // accumulation (raw, with outlines).
@@ -54,6 +55,16 @@ struct OfflineJobDesc {
     uint32_t width = kOfflineStillWidth, height = kOfflineStillHeight;
     uint32_t minSamples = kOfflineStillMinSamples, maxSamples = kOfflineStillMaxSamples;
     bool prepass = true;     // irradiance cache prepass (the render's indirect diffuse); false: brute force
+    // Adaptive sampling stop (standard error of perceptual luminance). 0 = every pixel takes
+    // maxSamples (fixed workload, the render benchmark).
+    float errorThreshold = kOfflineErrorThreshold;
+    uint32_t prepassRays = 512;   // multi-bounce gather paths per irradiance cache sample
+    uint32_t maxBounces = 12;     // path depth of the render (1..12)
+    // Post effects (applied once the image has converged; the preview shows the plain image).
+    bool bloom = true;
+    bool bloomConvolution = false;   // FFT convolution bloom with the starburst kernel instead of the soft glow
+    bool volumetric = false;         // sun shafts + spotlight cones, sun shadowed with ray queries
+    float volumetricDensity = 1.0f;  // 0.25 .. 4
 };
 
 struct OfflineProgress {

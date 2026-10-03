@@ -18,7 +18,18 @@ progress.md is the session log. Read its latest entry first.
   - Menu screens: `--screen select|bench --frames N --capture ui.png`
   - Offline GI still/video: `--autoplay --seek <sec> --offline-still out.png` (or `--offline-video out.mp4 --offline-range a b`);
     add `--offline-size 960 540 --offline-spp 256` for quick checks. The app quits by itself when done.
+    Video format: `--offline-fps 30 --offline-bitrate 20 --offline-quality 0..3` (default: the saved lobby dialog settings, `AppSettings::video`).
+    Lobby path (select screen -> load -> render -> back to select): `--character c --song s --screen video --offline-video out.mp4 --offline-range a b`.
+    `--screen video` alone opens the lobby's render dialog for a capture.
+    Video renderer: `--offline-renderer raster|rt|pt|gi` (the real-time ones render frame by frame at the video size via `Renderer::Render` +
+    `ReadFinalImage`; PT accumulates several passes per frame). The render dialog measures its time estimate by itself: a headless sample render behind the UI (`--screen video` shows it; log `VIDEO PROBE`,
+    results in `videoProbe=` ini lines). `--offline-probe` runs the same measurement from a play scene.
+    The dialog's effects are `VideoRenderConfig` (bloom, convolution bloom, volumetric, DoF only for the real-time renderers);
+    stills use the effects chosen at scene entry (`AppSettings`). Check `build_dev` builds when `build/` is locked by a running render.
   - Benchmark: `--benchmark dx12-raster-fhd --bench-frames 600 --frames 100000` (result goes to `build/bin/mmdx12.log` as a `BENCHMARK` line)
+  - GI render benchmark: `--benchmark dx12-gi-render` (quits by itself; ~41 s). Quick check: add `--bench-spp 64 --offline-size 960 540`.
+    Add `--frames 100000 --capture out.png` to capture the result screen.
+  - Each run opens a visible window: never launch app runs in parallel or in batches without telling the user.
 - Tools:
   - `asset_probe <library> [--full]`: scan, classify, and load everything
   - `anim_probe <pmx> <vmd> [cam.vmd]`: IK convergence, CPU skinning bounds, NaN scan, physics scan (explosions, cost)

@@ -8,7 +8,7 @@
 namespace mmdx {
 
 inline constexpr uint32_t kShadowCascades = 3;
-inline constexpr uint32_t kSceneCbSize = 1024;
+inline constexpr uint32_t kSceneCbSize = 2048;
 
 struct SceneConstants {               // b0, kSceneCbSize-byte slot per frame
     DirectX::XMFLOAT4X4 view;
@@ -33,6 +33,13 @@ struct SceneConstants {               // b0, kSceneCbSize-byte slot per frame
     DirectX::XMFLOAT2 jitterUv;    DirectX::XMFLOAT2 invViewportSize;      // jitter in uv units
     float nearZ, farZ, frameIndex, _pad;
     DirectX::XMFLOAT4X4 prevInvView;   // offline renderer: camera-to-world at shutter open (motion blur)
+    // Offline renderer scene extras (OfflineSceneProps, zero = none). See shaders/offline_gi.hlsl.
+    DirectX::XMFLOAT4 glassCenter;     // xyz centre, w = enabled (0/1)
+    DirectX::XMFLOAT4 glassHalf;       // xyz half extents (before rounding), w = corner radius
+    DirectX::XMFLOAT4 glassParams;     // x = cos yaw, y = sin yaw, z = ior (green), w = ior(blue) - ior(red)
+    DirectX::XMFLOAT4 glassAbsorb;     // xyz Beer-Lambert absorption per MMD unit (linear rgb)
+    DirectX::XMFLOAT4 softbox[2][4];   // per softbox: centre (w = enabled), half U, half V, radiance
+    DirectX::XMFLOAT4 floorParams;     // studio floor: xyz albedo (linear), w = reflectivity; w < 0: default floor
 };
 static_assert(sizeof(SceneConstants) <= kSceneCbSize, "SceneConstants layout");
 

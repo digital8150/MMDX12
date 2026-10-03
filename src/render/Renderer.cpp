@@ -436,6 +436,20 @@ void Renderer::RecordScene(ID3D12GraphicsCommandList* cmd, const FrameView& view
     }
 }
 
+void Renderer::ClearBackBuffer(ID3D12GraphicsCommandList* cmd) {
+    ID3D12DescriptorHeap* heaps[] = {ctx_->SrvHeap().Heap()};
+    cmd->SetDescriptorHeaps(1, heaps);
+    const float bw = (float)ctx_->Width(), bh = (float)ctx_->Height();
+    D3D12_VIEWPORT fullViewport{0.0f, 0.0f, bw, bh, 0.0f, 1.0f};
+    D3D12_RECT fullScissor{0, 0, (LONG)bw, (LONG)bh};
+    D3D12_CPU_DESCRIPTOR_HANDLE rtv = ctx_->BackBufferRtv();
+    cmd->OMSetRenderTargets(1, &rtv, FALSE, nullptr);
+    const float bg[4] = {0.955f, 0.965f, 0.975f, 1.0f};
+    cmd->ClearRenderTargetView(rtv, bg, 0, nullptr);
+    cmd->RSSetViewports(1, &fullViewport);
+    cmd->RSSetScissorRects(1, &fullScissor);
+}
+
 void Renderer::Render(ID3D12GraphicsCommandList* cmd, const FrameView& view) {
     if (!cmd || !ctx_) return;
     ID3D12DescriptorHeap* heaps[] = {ctx_->SrvHeap().Heap()};
@@ -451,12 +465,7 @@ void Renderer::Render(ID3D12GraphicsCommandList* cmd, const FrameView& view) {
         sceneVisible_ = false;
         havePrev_ = false;
         lastFrameQpc_ = 0;
-        D3D12_CPU_DESCRIPTOR_HANDLE rtv = ctx_->BackBufferRtv();
-        cmd->OMSetRenderTargets(1, &rtv, FALSE, nullptr);
-        const float bg[4] = {0.955f, 0.965f, 0.975f, 1.0f};
-        cmd->ClearRenderTargetView(rtv, bg, 0, nullptr);
-        cmd->RSSetViewports(1, &fullViewport);
-        cmd->RSSetScissorRects(1, &fullScissor);
+        ClearBackBuffer(cmd);
         return;
     }
 
@@ -525,7 +534,8 @@ void Renderer::Render(ID3D12GraphicsCommandList* cmd, const FrameView& view) {
     presentRect_[3] = outH * s;
     presentRect_[0] = (bw - presentRect_[2]) * 0.5f;
     presentRect_[1] = (bh - presentRect_[3]) * 0.5f;
-    sceneVisible_ = true;
+    sceneVisible_ = !settings_.headless;
+    hasFinal_ = true;
 }
 
 bool Renderer::RenderToImage(const FrameView& view, uint32_t w, uint32_t h, ImageRGBA8& out) {
@@ -613,6 +623,60 @@ bool Renderer::RenderToImage(const FrameView& view, uint32_t w, uint32_t h, Imag
     }
     settings_ = saved;
     return ok;
+}
+
+bool Renderer::ReadFinalImage(ImageRGBA8& out) {
+    if (!ctx_ || !targets_.ldr || !hasFinal_) return false;
+    ID3D12Device* device = ctx_->Device();
+    ctx_->WaitForGpu();
+    if (!offAlloc_) {
+        if (!CheckHr(device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&offAlloc_)),
+                     "ReadFinalImage: allocator") ||
+            !CheckHr(device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, offAlloc_.Get(), nullptr,
+                                               IID_PPV_ARGS(&offList_)),
+                     "ReadFinalImage: list"))
+            return false;
+        offList_->Close();
+    }
+    offAlloc_->Reset();
+    offList_->Reset(offAlloc_.Get(), nullptr);
+
+    const uint32_t w = targets_.ldr.width, h = targets_.ldr.height;
+    D3D12_RESOURCE_DESC desc = targets_.ldr.res->GetDesc();
+    UINT64 total = 0;
+    D3D12_PLACED_SUBRESOURCE_FOOTPRINT fp{};
+    device->GetCopyableFootprints(&desc, 0, 1, 0, &fp, nullptr, nullptr, &total);
+    D3D12_HEAP_PROPERTIES rb{D3D12_HEAP_TYPE_READBACK};
+    CD3DX12_RESOURCE_DESC bd = CD3DX12_RESOURCE_DESC::Buffer(total);
+    ComPtr<ID3D12Resource> readback;
+    if (!CheckHr(device->CreateCommittedResource(&rb, D3D12_HEAP_FLAG_NONE, &bd, D3D12_RESOURCE_STATE_COPY_DEST,
+                                                 nullptr, IID_PPV_ARGS(&readback)),
+                 "ReadFinalImage: readback"))
+        return false;
+    targets_.ldr.Transition(offList_.Get(), D3D12_RESOURCE_STATE_COPY_SOURCE);
+    CD3DX12_TEXTURE_COPY_LOCATION dst(readback.Get(), fp), src(targets_.ldr.res.Get(), 0);
+    offList_->CopyTextureRegion(&dst, 0, 0, 0, &src, nullptr);
+    targets_.ldr.Transition(offList_.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+    offList_->Close();
+    ID3D12CommandList* lists[] = {offList_.Get()};
+    ctx_->Queue()->ExecuteCommandLists(1, lists);
+    ctx_->WaitForGpu();
+
+    uint8_t* data = nullptr;
+    D3D12_RANGE range{0, (SIZE_T)(fp.Footprint.RowPitch * h)};
+    if (FAILED(readback->Map(0, &range, (void**)&data))) return false;
+    out = ImageRGBA8{};
+    out.mips.push_back({w, h, std::vector<uint8_t>((size_t)w * h * 4)});
+    for (uint32_t y = 0; y < h; ++y) {
+        const uint8_t* srcRow = data + (size_t)fp.Footprint.RowPitch * y;
+        uint8_t* dstRow = out.mips[0].pixels.data() + (size_t)w * 4 * y;
+        memcpy(dstRow, srcRow, (size_t)w * 4);
+        for (uint32_t x = 0; x < w; ++x) dstRow[x * 4 + 3] = 255;
+    }
+    out.hasAlpha = false;
+    D3D12_RANGE none{0, 0};
+    readback->Unmap(0, &none);
+    return true;
 }
 
 uint64_t Renderer::UiBackdropTexture() const {

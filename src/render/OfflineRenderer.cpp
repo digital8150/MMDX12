@@ -17,8 +17,10 @@ namespace {
 
 constexpr uint32_t kSlots = Dx12Context::kFramesInFlight;
 constexpr uint32_t kLightBytes = Renderer::kMaxPunctualLights * sizeof(GpuLight);
-constexpr uint32_t kPrepassRays = 512;     // multi-bounce gather paths per irradiance cache sample
-constexpr uint32_t kEdgeIterations = 256;  // outline layers averaged for motion blur / depth of field
+constexpr uint32_t kEdgeIterations = 256;
+constexpr uint32_t kOfflineFftSize = 512;            // convolution bloom grid (bloom_fft.hlsl FFT_N)
+constexpr float kConvolutionBloomGain = 6.0f;        // as the real-time convolution bloom output
+constexpr float kConvolutionBloomIntensity = 0.12f;  // CSFinalize multiplier of the convolved bloom  // outline layers averaged for motion blur / depth of field
 constexpr float kLensScale = 0.007f;       // lens radius / focus distance (~8 px background blur at 1080p)
 
 float Halton(uint32_t index, uint32_t base) {
@@ -93,6 +95,13 @@ struct OfflineRenderer::Impl {
     ComputePipeline clearImage, clearCounter, render, prepassLevel, prepassDisplay, prepassSmooth;
     // offline_post.hlsl
     ComputePipeline denoise, bloomDown, bloomBlur, finalize, edgeAccumulate;
+    // offline_volumetric.hlsl, bloom_fft.hlsl (optional effects: empty pipelines disable them)
+    ComputePipeline volMarch, volBlur;
+    ComputePipeline fftInput, fftRows, fftCols, fftKernel, fftOutput;
+    bool fftKernelReady = false;
+    bool volReady = false;             // volA holds this image's volumetric light (CSFinalize adds it)
+    Texture volA, volB;                // half image size RGBA16F
+    Texture gridA, gridB, kernelSpec;  // FFT grids (kFftSize^2 RGBA32F, created once)
     // offline_edge.hlsl (FXC, 4x MSAA raster)
     ComPtr<ID3D12RootSignature> edgeRootSig;
     ComPtr<ID3D12PipelineState> depthCullBack, depthNoCull, edgePso;
@@ -154,6 +163,8 @@ struct OfflineRenderer::Impl {
     D3D12_GPU_DESCRIPTOR_HANDLE GiTable(ID3D12GraphicsCommandList* cmd, TransientDescriptors& t);
     void DispatchPost(PassContext& pc, const ComputePipeline& pipe, Texture* target, Texture* in5, Texture* in6,
                       const float* c, uint32_t groupsX, uint32_t groupsY);
+    void Volumetric(PassContext& pc);
+    void ConvolveBloom(PassContext& pc);
     bool EnsureTargets(uint32_t w, uint32_t h);
     void DrawEdges(ID3D12GraphicsCommandList* cmd, float shutter, float lensX, float lensY);
     void Work(ID3D12GraphicsCommandList* cmd, TransientDescriptors& t, const BuiltinTextures* b, RtScene& rt,
@@ -184,10 +195,13 @@ void OfflineRenderer::Impl::DispatchPost(PassContext& pc, const ComputePipeline&
     if (in5) in5->Transition(cmd, kSrvAll);
     if (in6) in6->Transition(cmd, kSrvAll);
     target->Transition(cmd, kUav);
+    const bool vol = volReady && volA;
+    if (vol) volA.Transition(cmd, kSrvAll);
     D3D12_GPU_DESCRIPTOR_HANDLE srv =
-        pc.transient.SrvTable(*ctx, {&accum, &albedo, &moments, &gbuf, &edgeAccum, in5, in6});
+        pc.transient.SrvTable(*ctx, {&accum, &albedo, &moments, &gbuf, &edgeAccum, in5, in6, vol ? &volA : nullptr});
     D3D12_GPU_DESCRIPTOR_HANDLE uav = pc.transient.UavTable(*ctx, {target});
-    pipe.Dispatch(pc, srv, uav, c, 8, groupsX, groupsY);
+    float c12[12] = {c[0], c[1], c[2], c[3], c[4], c[5], c[6], c[7], vol ? 1.0f : 0.0f, 0.0f, 0.0f, 0.0f};
+    pipe.Dispatch(pc, srv, uav, c12, 12, groupsX, groupsY);
     UavBarrier(cmd);
 }
 
@@ -208,6 +222,8 @@ bool OfflineRenderer::Impl::EnsureTargets(uint32_t w, uint32_t h) {
     ldr.Release(c);
     bloomA.Release(c);
     bloomB.Release(c);
+    volA.Release(c);
+    volB.Release(c);
     edgeColorMsaa.Release(c);
     edgeDepthMsaa.Release(c);
     const D3D12_RESOURCE_FLAGS uav = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
@@ -223,6 +239,10 @@ bool OfflineRenderer::Impl::EnsureTargets(uint32_t w, uint32_t h) {
     ok &= bloomA.Create(c, qw, qh, DXGI_FORMAT_R16G16B16A16_FLOAT, uav, kSrvAll, L"offline.bloomA");
     ok &= bloomB.Create(c, qw, qh, DXGI_FORMAT_R16G16B16A16_FLOAT, uav, kSrvAll, L"offline.bloomB");
     ok &= ldr.Create(c, w, h, DXGI_FORMAT_R8G8B8A8_UNORM, uav, kSrvAll, L"offline.ldr");
+    if (volMarch) {
+        ok &= volA.Create(c, (w + 1) / 2, (h + 1) / 2, DXGI_FORMAT_R16G16B16A16_FLOAT, uav, kSrvAll, L"offline.volA");
+        ok &= volB.Create(c, (w + 1) / 2, (h + 1) / 2, DXGI_FORMAT_R16G16B16A16_FLOAT, uav, kSrvAll, L"offline.volB");
+    }
     ok &= edgeLayer.Create(c, w, h, DXGI_FORMAT_R16G16B16A16_FLOAT, D3D12_RESOURCE_FLAG_NONE, kSrvAll,
                            L"offline.edgeLayer");
     ok &= edgeAccum.Create(c, w, h, DXGI_FORMAT_R32G32B32A32_FLOAT, uav, kUav, L"offline.edgeAccum");
@@ -346,7 +366,7 @@ void OfflineRenderer::Impl::Work(ID3D12GraphicsCommandList* cmd, TransientDescri
     const float studioFloor = view.studioFloor ? 1.0f : 0.0f;
     if (clearPending) {   // the prepass display wrote accum
         const float c[8] = {NextSeed(), studioFloor, 0.0f, (float)job.minSamples, (float)width, (float)height,
-                            0.0f, kOfflineErrorThreshold};
+                            0.0f, job.errorThreshold};
         clearImage.Dispatch(pc, {}, table, c, 8, Groups(width), Groups(height));
         UavBarrier(cmd);
         clearPending = false;
@@ -396,14 +416,14 @@ void OfflineRenderer::Impl::Work(ID3D12GraphicsCommandList* cmd, TransientDescri
         const bool count = (i == items - 1);   // count the last iteration of the frame
         if (count) {
             const float c[8] = {NextSeed(), studioFloor, 0.0f, (float)job.minSamples, (float)width,
-                                (float)height, 0.0f, kOfflineErrorThreshold};
+                                (float)height, 0.0f, job.errorThreshold};
             clearCounter.Dispatch(pc, {}, table, c, 8, 1, 1);
             UavBarrier(cmd);
         }
         const float c[16] = {NextSeed(), studioFloor, (float)s, (float)job.minSamples,
-                             (float)width, (float)height, 0.0f, kOfflineErrorThreshold,
+                             (float)width, (float)height, 0.0f, job.errorThreshold,
                              shutter, focus, lensRadius, icValid ? 1.0f : 0.0f,
-                             0.0f, (float)prepassFine, 0.0f, 0.0f};
+                             (float)job.maxBounces, (float)prepassFine, 0.0f, 0.0f};
         render.Dispatch(pc, icSrv, table, c, 16, Groups(width), Groups(height));
         UavBarrier(cmd);
         ++samples;
@@ -463,7 +483,7 @@ void OfflineRenderer::Impl::Prepass(PassContext& pc, OfflineProgress& pg) {
     D3D12_GPU_DESCRIPTOR_HANDLE srv = pc.transient.SrvTable(
         *ctx, {E[0], E[1], E[2], E[3], E[4], E[5], k > 0 ? &preG[k - 1] : nullptr});
     const float c[16] = {NextSeed(), studioFloor, (float)k, (float)stride,
-                         (float)width, (float)height, (float)(stride * 2), (float)kPrepassRays,
+                         (float)width, (float)height, (float)(stride * 2), (float)job.prepassRays,
                          1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f};
     prepassLevel.Dispatch(pc, srv, uav, c, 16, Groups(preE[k].width), Groups(preE[k].height));
     UavBarrier(cmd);
@@ -502,6 +522,95 @@ void OfflineRenderer::Impl::Prepass(PassContext& pc, OfflineProgress& pg) {
     }
 }
 
+// Sun shafts and spotlight cones: half-resolution ray march (offline_volumetric.hlsl) + depth-aware blur;
+// CSFinalize adds the result (volReady).
+void OfflineRenderer::Impl::Volumetric(PassContext& pc) {
+    ID3D12GraphicsCommandList* cmd = pc.cmd;
+    gbuf.Transition(cmd, kSrvAll);
+    volA.Transition(cmd, kUav);
+    const float c0[16] = {0.005f * job.volumetricDensity, 0.02f, 400.0f, 0.55f,
+                          (float)width, (float)height, 3.0f, 0.3f,
+                          (float)(serial & 0xFFFFu), 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f};
+    volMarch.Dispatch(pc, pc.transient.SrvTable(*ctx, {&gbuf}), pc.transient.UavTable(*ctx, {&volA}), c0, 16,
+                      Groups(volA.width), Groups(volA.height));
+    UavBarrier(cmd);
+    volA.Transition(cmd, kSrvAll);
+    volB.Transition(cmd, kUav);
+    const float ch[8] = {1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f};
+    volBlur.Dispatch(pc, pc.transient.SrvTable(*ctx, {&gbuf, &volA}), pc.transient.UavTable(*ctx, {&volB}), ch, 8,
+                     Groups(volB.width), Groups(volB.height));
+    UavBarrier(cmd);
+    volB.Transition(cmd, kSrvAll);
+    volA.Transition(cmd, kUav);
+    const float cv[8] = {0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f};
+    volBlur.Dispatch(pc, pc.transient.SrvTable(*ctx, {&gbuf, &volB}), pc.transient.UavTable(*ctx, {&volA}), cv, 8,
+                     Groups(volA.width), Groups(volA.height));
+    UavBarrier(cmd);
+    volReady = true;
+}
+
+// FFT convolution bloom: the thresholded quarter-resolution image (bloomA) goes into a kOfflineFftSize^2
+// grid, is multiplied by the spectrum of a starburst kernel and the convolved result replaces bloomA.
+void OfflineRenderer::Impl::ConvolveBloom(PassContext& pc) {
+    ID3D12GraphicsCommandList* cmd = pc.cmd;
+    const uint32_t n = kOfflineFftSize;
+    const float zero[4] = {0, 0, 0, 0};
+    if (!fftKernelReady) {   // kernel spectrum, once
+        const float kernelC[8] = {0.003f, 36.0f, 0.03f, 64.0f, 0.6f, 3.0f, 0.5236f, 0.9f};
+        gridA.Transition(cmd, kUav);
+        fftKernel.Dispatch(pc, {}, pc.transient.UavTable(*ctx, {&gridA}), kernelC, 8, Groups(n), Groups(n));
+        UavBarrier(cmd);
+        gridA.Transition(cmd, kSrvAll);
+        gridB.Transition(cmd, kUav);
+        fftRows.Dispatch(pc, pc.transient.SrvTable(*ctx, {&gridA}), pc.transient.UavTable(*ctx, {&gridB}), zero, 4, 1, n);
+        UavBarrier(cmd);
+        gridB.Transition(cmd, kSrvAll);
+        kernelSpec.Transition(cmd, kUav);
+        fftCols.Dispatch(pc, pc.transient.SrvTable(*ctx, {&gridB}), pc.transient.UavTable(*ctx, {&kernelSpec}), zero, 4, 1, n);
+        UavBarrier(cmd);
+        kernelSpec.Transition(cmd, kSrvAll);
+        fftKernelReady = true;
+    }
+    const float aspect = (float)width / (float)height;
+    float cw, ch;
+    if (aspect >= 1.0f) {
+        cw = 0.75f * n;
+        ch = cw / aspect;
+    } else {
+        ch = 0.75f * n;
+        cw = ch * aspect;
+    }
+    const float ox = (n - cw) * 0.5f, oy = (n - ch) * 0.5f;
+
+    bloomA.Transition(cmd, kSrvAll);
+    gridA.Transition(cmd, kUav);
+    const float inC[4] = {ox, oy, cw, ch};
+    fftInput.Dispatch(pc, pc.transient.SrvTable(*ctx, {&bloomA}), pc.transient.UavTable(*ctx, {&gridA}), inC, 4,
+                      Groups(n), Groups(n));
+    UavBarrier(cmd);
+    gridA.Transition(cmd, kSrvAll);
+    gridB.Transition(cmd, kUav);
+    fftRows.Dispatch(pc, pc.transient.SrvTable(*ctx, {&gridA}), pc.transient.UavTable(*ctx, {&gridB}), zero, 4, 1, n);
+    UavBarrier(cmd);
+    gridB.Transition(cmd, kSrvAll);
+    gridA.Transition(cmd, kUav);
+    const float convC[4] = {1, 0, 0, 0};
+    fftCols.Dispatch(pc, pc.transient.SrvTable(*ctx, {&gridB, &kernelSpec}), pc.transient.UavTable(*ctx, {&gridA}),
+                     convC, 4, 1, n);
+    UavBarrier(cmd);
+    gridA.Transition(cmd, kSrvAll);
+    gridB.Transition(cmd, kUav);
+    fftRows.Dispatch(pc, pc.transient.SrvTable(*ctx, {&gridA}), pc.transient.UavTable(*ctx, {&gridB}), convC, 4, 1, n);
+    UavBarrier(cmd);
+    gridB.Transition(cmd, kSrvAll);
+    bloomA.Transition(cmd, kUav);
+    const float outC[8] = {ox / n, oy / n, cw / n, ch / n, kConvolutionBloomGain, (float)bloomA.width,
+                           (float)bloomA.height, 0.0f};
+    fftOutput.Dispatch(pc, pc.transient.SrvTable(*ctx, {&gridB}), pc.transient.UavTable(*ctx, {&bloomA}), outC, 8,
+                       Groups(bloomA.width), Groups(bloomA.height));
+    UavBarrier(cmd);
+}
+
 void OfflineRenderer::Impl::Finish(PassContext& pc) {
     const uint32_t w = width, h = height;
     const uint32_t qw = bloomA.width, qh = bloomA.height;
@@ -514,16 +623,26 @@ void OfflineRenderer::Impl::Finish(PassContext& pc) {
     const float d2[8] = {4.0f, 2.0f, 0.0f, 0.0f, (float)w, (float)h, 0.0f, 0.0f};
     DispatchPost(pc, denoise, &denoiseA, &denoiseB, nullptr, d2, Groups(w), Groups(h));
 
-    const float bd[8] = {1.0f, 0.0f, 0.0f, 0.0f, (float)w, (float)h, 0.0f, 0.0f};
-    DispatchPost(pc, bloomDown, &bloomA, nullptr, nullptr, bd, Groups(qw), Groups(qh));
-    const float bh[8] = {1.0f, 0.0f, 0.0f, 0.0f, (float)qw, (float)qh, 0.0f, 0.0f};
-    const float bv[8] = {0.0f, 1.0f, 0.0f, 0.0f, (float)qw, (float)qh, 0.0f, 0.0f};
-    DispatchPost(pc, bloomBlur, &bloomB, nullptr, &bloomA, bh, Groups(qw), Groups(qh));
-    DispatchPost(pc, bloomBlur, &bloomA, nullptr, &bloomB, bv, Groups(qw), Groups(qh));
-    DispatchPost(pc, bloomBlur, &bloomB, nullptr, &bloomA, bh, Groups(qw), Groups(qh));
-    DispatchPost(pc, bloomBlur, &bloomA, nullptr, &bloomB, bv, Groups(qw), Groups(qh));
+    if (job.volumetric && volMarch && volA) Volumetric(pc);
 
-    const float fin[8] = {1.0f, 1.0f, 0.08f, 1.0f, (float)w, (float)h, 0.12f, (float)edgeLayers};
+    const bool convolve = job.bloomConvolution && fftRows && gridA;
+    if (job.bloom) {
+        const float bd[8] = {1.0f, 0.0f, 0.0f, 0.0f, (float)w, (float)h, 0.0f, 0.0f};
+        DispatchPost(pc, bloomDown, &bloomA, nullptr, nullptr, bd, Groups(qw), Groups(qh));
+        if (convolve) {
+            ConvolveBloom(pc);
+        } else {
+            const float bh[8] = {1.0f, 0.0f, 0.0f, 0.0f, (float)qw, (float)qh, 0.0f, 0.0f};
+            const float bv[8] = {0.0f, 1.0f, 0.0f, 0.0f, (float)qw, (float)qh, 0.0f, 0.0f};
+            DispatchPost(pc, bloomBlur, &bloomB, nullptr, &bloomA, bh, Groups(qw), Groups(qh));
+            DispatchPost(pc, bloomBlur, &bloomA, nullptr, &bloomB, bv, Groups(qw), Groups(qh));
+            DispatchPost(pc, bloomBlur, &bloomB, nullptr, &bloomA, bh, Groups(qw), Groups(qh));
+            DispatchPost(pc, bloomBlur, &bloomA, nullptr, &bloomB, bv, Groups(qw), Groups(qh));
+        }
+    }
+
+    const float fin[8] = {1.0f, job.bloom ? 1.0f : 0.0f, convolve ? kConvolutionBloomIntensity : 0.08f, 1.0f,
+                          (float)w, (float)h, 0.12f, (float)edgeLayers};
     DispatchPost(pc, finalize, &ldr, &denoiseA, &bloomA, fin, Groups(w), Groups(h));
 }
 
@@ -553,6 +672,37 @@ bool OfflineRenderer::Initialize(Dx12Context& ctx, const std::filesystem::path& 
     if (!ok) {
         LOG_ERROR("offline renderer: compute pipeline creation failed");
         return false;
+    }
+    // Optional effects: a failure only disables the effect.
+    {
+        const std::filesystem::path vol = shaderDir / L"offline_volumetric.hlsl";
+        if (!(m.volMarch.Create(ctx, vol, "CSVolMarch") && m.volBlur.Create(ctx, vol, "CSVolBlur"))) {
+            LOG_WARN("offline renderer: volumetric light unavailable");
+            m.volMarch = {};
+            m.volBlur = {};
+        }
+        const ShaderDefines defs = {{"FFT_N", std::to_string(kOfflineFftSize)}, {"FFT_LOG2", "9"}};
+        const std::filesystem::path ff = shaderDir / L"bloom_fft.hlsl";
+        bool fftOk = m.fftInput.Create(ctx, ff, "CSInput", defs) && m.fftRows.Create(ctx, ff, "CSFftRows", defs) &&
+                     m.fftCols.Create(ctx, ff, "CSFftCols", defs) && m.fftKernel.Create(ctx, ff, "CSKernel", defs) &&
+                     m.fftOutput.Create(ctx, ff, "CSFftOutput", defs);
+        const D3D12_RESOURCE_FLAGS uav = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
+        if (fftOk) {
+            fftOk = m.gridA.Create(ctx, kOfflineFftSize, kOfflineFftSize, DXGI_FORMAT_R32G32B32A32_FLOAT, uav, kSrvAll,
+                                   L"offline.fftA") &&
+                    m.gridB.Create(ctx, kOfflineFftSize, kOfflineFftSize, DXGI_FORMAT_R32G32B32A32_FLOAT, uav, kSrvAll,
+                                   L"offline.fftB") &&
+                    m.kernelSpec.Create(ctx, kOfflineFftSize, kOfflineFftSize, DXGI_FORMAT_R32G32B32A32_FLOAT, uav,
+                                        kSrvAll, L"offline.fftKernel");
+        }
+        if (!fftOk) {
+            LOG_WARN("offline renderer: convolution bloom unavailable");
+            m.fftInput = {};
+            m.fftRows = {};
+            m.fftCols = {};
+            m.fftKernel = {};
+            m.fftOutput = {};
+        }
     }
 
     // Outline layer: raster inverted hull at the offline image size (4x MSAA).
@@ -699,7 +849,7 @@ void OfflineRenderer::Shutdown() {
     for (Texture& tex : m.preG) tex.Release(ctx);
     m.icFinal.Release(ctx);
     for (Texture* t : {&m.accum, &m.albedo, &m.moments, &m.gbuf, &m.edgeLayer, &m.edgeAccum, &m.denoiseA, &m.denoiseB, &m.ldr, &m.bloomA, &m.bloomB, &m.edgeColorMsaa,
-                       &m.edgeDepthMsaa, &m.counter})
+                       &m.edgeDepthMsaa, &m.counter, &m.volA, &m.volB, &m.gridA, &m.gridB, &m.kernelSpec})
         t->Release(ctx);
     if (m.sceneCb && m.sceneCbMapped) m.sceneCb->Unmap(0, nullptr);
     if (m.lightBuf && m.lightMapped) m.lightBuf->Unmap(0, nullptr);
@@ -741,6 +891,7 @@ void OfflineRenderer::Begin(ID3D12GraphicsCommandList* cmd, TransientDescriptors
     m.samples = 0;
     m.lastActive = UINT32_MAX;
     m.edgeLayers = 0;
+    m.volReady = false;
     m.motion = view.motionBlur;
     m.focus = view.focusDistance;
     m.lensRadius = view.focusDistance > 0.0f ? kLensScale * view.focusDistance : 0.0f;
@@ -762,7 +913,7 @@ void OfflineRenderer::Begin(ID3D12GraphicsCommandList* cmd, TransientDescriptors
     const float studioFloor = m.view.studioFloor ? 1.0f : 0.0f;
     {
         const float c[8] = {m.NextSeed(), studioFloor, 0.0f, (float)m.job.minSamples, (float)m.job.width,
-                            (float)m.job.height, 0.0f, kOfflineErrorThreshold};
+                            (float)m.job.height, 0.0f, m.job.errorThreshold};
         m.clearImage.Dispatch(pc, {}, table, c, 8, Groups(m.job.width), Groups(m.job.height));
         m.UavBarrier(cmd);
     }

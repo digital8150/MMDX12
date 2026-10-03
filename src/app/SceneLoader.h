@@ -25,6 +25,10 @@ struct ScenePackage {
     std::shared_ptr<CameraMotion> camera;     // null if the song has no camera vmd
     std::filesystem::path audioPath;          // may be empty
     float endFrame = 0;                       // max(motion end, camera end)
+    // Render benchmark only: performers after `character`, each with its own bound dance
+    // (parallel vectors). Empty for normal scenes.
+    std::vector<LoadedModelCpu> extraCharacters;
+    std::vector<std::shared_ptr<BoundMotion>> extraMotions;
 };
 
 struct LoadProgress {
@@ -45,5 +49,12 @@ void DecodeModelTextures(LoadedModelCpu& m, LoadProgress* progress, float fracBe
 // Textures are decoded in parallel (std::for_each with std::execution::par).
 bool LoadScenePackage(const CharacterAsset& character, const StageAsset* stage, const SongAsset& song,
                       ScenePackage& out, LoadProgress* progress, std::string* error);
+
+// Render benchmark scene: characters[i] posed by the dance of songs[i] (sizes equal, >= 1).
+// out.character / out.motion = index 0, out.extraCharacters / out.extraMotions = the rest.
+// No stage, camera or audio (audioPath empty, camera null); endFrame = 0. Fails (with *error)
+// when any character, its textures' model or its dance VMD cannot be loaded.
+bool LoadRenderBenchPackage(const std::vector<CharacterAsset>& characters, const std::vector<SongAsset>& songs,
+                            ScenePackage& out, LoadProgress* progress, std::string* error);
 
 } // namespace mmdx

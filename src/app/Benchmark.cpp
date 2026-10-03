@@ -83,14 +83,18 @@ BenchmarkResult ComputeBenchmarkResult(const std::vector<float>& frameTimesMs, d
     out.stabilityPct = (int)std::round(stability * 100.0);
     out.score = (int)score;
 
+    AssignBenchmarkTier(out);
+    return out;
+}
+
+void AssignBenchmarkTier(BenchmarkResult& r) {
     for (const Tier& t : kTiers) {
-        if (out.score >= t.threshold) {
-            out.tier = t.tier;
-            out.tierTitle = t.title;
-            break;
+        if (r.score >= t.threshold) {
+            r.tier = t.tier;
+            r.tierTitle = t.title;
+            return;
         }
     }
-    return out;
 }
 
 } // namespace mmdx

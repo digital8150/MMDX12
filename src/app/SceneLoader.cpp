@@ -153,4 +153,75 @@ bool LoadScenePackage(const CharacterAsset& character, const StageAsset* stage, 
     }
 }
 
+bool LoadRenderBenchPackage(const std::vector<CharacterAsset>& characters, const std::vector<SongAsset>& songs,
+                            ScenePackage& out, LoadProgress* progress, std::string* error) {
+    try {
+        if (characters.empty() || characters.size() != songs.size()) {
+            if (error) *error = "렌더 벤치마크 장면 구성이 올바르지 않습니다";
+            return false;
+        }
+        out = ScenePackage{};
+
+        const size_t n = characters.size();
+        for (size_t i = 0; i < n; ++i) {
+            const float fraction = (float)i / (float)n;
+
+            // 1. Character.
+            LoadedModelCpu m;
+            if (progress) progress->SetStatus("캐릭터 로드: " + characters[i].displayName);
+            m.pmx = std::make_shared<PmxModel>();
+            std::string err;
+            if (!LoadPmx(characters[i].pmxPath, *m.pmx, &err)) {
+                if (error) *error = "캐릭터를 불러오지 못했습니다: " + err;
+                return false;
+            }
+
+            // 2. Character textures.
+            DecodeModelTextures(m, progress, fraction, (i + 0.8f) / (float)n, characters[i].displayName.c_str());
+
+            // 3. Dance motion.
+            VmdMotion dance;
+            if (!LoadVmd(songs[i].danceVmd, dance, &err)) {
+                if (error) *error = "모션을 불러오지 못했습니다: " + err;
+                return false;
+            }
+            std::vector<std::unique_ptr<VmdMotion>> extraStorage;
+            std::vector<const VmdMotion*> layers = {&dance};
+            for (const std::filesystem::path& extra : songs[i].extraVmds) {
+                auto vmd = std::make_unique<VmdMotion>();
+                std::string extraErr;
+                if (!LoadVmd(extra, *vmd, &extraErr)) {
+                    LOG_WARN("extra vmd load skipped: %s: %s", PathToUtf8(extra).c_str(), extraErr.c_str());
+                    continue;
+                }
+                layers.push_back(vmd.get());
+                extraStorage.push_back(std::move(vmd));
+            }
+            auto motion = BoundMotion::Bind(*m.pmx, layers);
+
+            if (i == 0) {
+                out.character = std::move(m);
+                out.motion = motion;
+            } else {
+                out.extraCharacters.push_back(std::move(m));
+                out.extraMotions.push_back(motion);
+            }
+        }
+
+        // No stage, camera or audio: endFrame stays 0.
+        // Done (GPU upload happens on the main thread).
+        if (progress) {
+            progress->fraction.store(1.0f, std::memory_order_relaxed);
+            progress->SetStatus("GPU 업로드");
+        }
+        return true;
+    } catch (const std::exception& e) {
+        if (error) *error = std::string("씬 로드 중 오류: ") + e.what();
+        return false;
+    } catch (...) {
+        if (error) *error = "씬 로드 중 알 수 없는 오류";
+        return false;
+    }
+}
+
 } // namespace mmdx

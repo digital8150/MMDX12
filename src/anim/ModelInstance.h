@@ -28,6 +28,9 @@ public:
     void SetBoneAnim(int bone, const XMFLOAT3& translation, const XMFLOAT4& rotation);
     void SetMorphWeight(int morph, float weight);
     void SetIkEnabled(int ikBone, bool enabled);
+    // Placement of the whole model in the world (parent of the root bones; identity by default).
+    // Not touched by ResetPose. Physics follows it (call ResetPhysics after changing it).
+    void SetRootTransform(const XMFLOAT4X4& m);
 
     // Rigid-body physics. Off by default (stages, thumbnails); the world is built on first enable.
     // Models without simulated bodies stay a no-op.
@@ -84,6 +87,7 @@ private:
     std::vector<XMFLOAT3> morphDelta_;
     uint64_t morphVersion_ = 0;
     std::vector<XMFLOAT4X4> skin_;
+    XMFLOAT4X4 root_{1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
 
     std::unique_ptr<PhysicsWorld> physics_;
     bool physicsEnabled_ = false;

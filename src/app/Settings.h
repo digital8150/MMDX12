@@ -1,6 +1,9 @@
 #pragma once
 #include <filesystem>
 #include <string>
+#include <vector>
+
+#include "app/VideoConfig.h"
 
 namespace mmdx {
 
@@ -34,9 +37,14 @@ struct AppSettings {
     bool bloomConvolution = false;
     std::string colorLut;            // ColorLutEntry::id, empty = none
     float lutIntensity = 1.0f;       // 0 .. 1
+    VideoRenderConfig video;         // video render (lobby dialog)
+    std::vector<VideoProbe> videoProbes;  // measured sample renders, oldest first
     std::string leaderboardUrl = "https://home.codingbot.kr/api/benchmark";
     std::string lastCharacter, lastStage, lastSong;  // asset ids
     int windowWidth = 1600, windowHeight = 900;
+
+    const VideoProbe* FindVideoProbe(uint64_t key) const;
+    void SetVideoProbe(uint64_t key, double secondsPerFrame);  // replaces an entry with the same key
 
     bool Load(const std::filesystem::path& file);   // false if missing/unreadable (defaults kept)
     bool Save(const std::filesystem::path& file) const;

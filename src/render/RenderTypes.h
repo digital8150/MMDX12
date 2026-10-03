@@ -57,6 +57,7 @@ struct RenderSettings {
     float vignette = 0.22f;
     float fog = 0.35f;               // 0 = off; distance haze toward the horizon colour
     bool transparentBackground = false;  // thumbnails: no sky, alpha = coverage
+    bool headless = false;               // render without touching the back buffer (background sample renders)
 };
 
 struct CameraParams {
@@ -91,6 +92,33 @@ struct LightParams {
     std::vector<PunctualLight> punctual;  // up to Renderer::kMaxPunctualLights used
 };
 
+// Offline renderer scene extras (the render benchmark scene). Ignored by the real-time passes.
+// An analytic glass box (rounded edges, refraction with dispersion, Beer-Lambert absorption) and
+// rectangular softboxes (emissive quads seen by rays, no next-event estimation).
+struct OfflineGlassBox {
+    bool enabled = false;
+    DirectX::XMFLOAT3 center{};            // world (MMD units)
+    DirectX::XMFLOAT3 halfExtents{5, 5, 5};
+    float yawRadians = 0.0f;               // rotation around +Y
+    float cornerRadius = 0.25f;
+    float ior = 1.52f;                     // green
+    float dispersion = 0.03f;              // ior(blue) - ior(red)
+    DirectX::XMFLOAT3 absorption{};        // per MMD unit, linear rgb
+};
+struct OfflineSoftbox {
+    bool enabled = false;
+    DirectX::XMFLOAT3 center{};
+    DirectX::XMFLOAT3 halfU{}, halfV{};    // half-size edge vectors; emits on the side of cross(halfU, halfV)
+    DirectX::XMFLOAT3 radiance{};          // linear
+};
+struct OfflineSceneProps {
+    OfflineGlassBox glass;
+    OfflineSoftbox softboxes[2];
+    bool customFloor = false;              // studio floor albedo / reflectivity override
+    DirectX::XMFLOAT3 floorAlbedo{0.8f, 0.83f, 0.86f};
+    float floorReflectivity = 0.42f;
+};
+
 struct FrameView {
     CameraParams camera;
     LightParams light;
@@ -102,6 +130,7 @@ struct FrameView {
     // models' previous bone/morph ring entry). Ignored unless motionBlur.
     CameraParams prevCamera;
     bool motionBlur = false;
+    OfflineSceneProps offlineProps;  // offline renderer only
 };
 
 struct RenderStats {

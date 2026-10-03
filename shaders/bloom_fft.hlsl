@@ -112,3 +112,13 @@ void CSKernel(uint3 id : SV_DispatchThreadID) {
     k *= saturate((FFT_N * 0.5 - r) / 32.0);                         // window: no wrap-around at the grid edge
     gOut[id.xy] = float4(k, 0, 0, 0);
 }
+
+// Convolved grid -> a target image (offline renderer): gIn = convolved grid; gP0 = content offset / N (xy),
+// content size / N (zw); gP1.x = gain, gP1.yz = target size in pixels.
+[numthreads(8, 8, 1)]
+void CSFftOutput(uint3 id : SV_DispatchThreadID) {
+    if (id.x >= (uint)gP1.y || id.y >= (uint)gP1.z) return;
+    float2 uv = (float2(id.xy) + 0.5) / gP1.yz;
+    float3 c = gIn.SampleLevel(gLinear, gP0.xy + uv * gP0.zw, 0).xyz;
+    gOut[id.xy] = float4(max(c, 0.0) * gP1.x, 1.0);
+}

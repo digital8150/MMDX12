@@ -47,6 +47,8 @@ AppOptions ParseCommandLine(int argc, wchar_t** argv) {
             opt.benchmarkCategory = WideToUtf8(next());
         } else if (arg == L"--bench-frames") {
             opt.benchFrames = _wtoi(next().c_str());
+        } else if (arg == L"--bench-spp") {
+            opt.benchSpp = _wtoi(next().c_str());
         } else if (arg == L"--frames") {
             opt.quitAfterFrames = _wtoi(next().c_str());
         } else if (arg == L"--capture") {
@@ -103,6 +105,21 @@ AppOptions ParseCommandLine(int argc, wchar_t** argv) {
             opt.offlineRange[1] = _wtof(next().c_str());
         } else if (arg == L"--offline-spp") {
             opt.offlineSpp = _wtoi(next().c_str());
+        } else if (arg == L"--offline-fps") {
+            opt.offlineFps = _wtoi(next().c_str());
+        } else if (arg == L"--offline-bitrate") {
+            opt.offlineBitrate = _wtoi(next().c_str());
+        } else if (arg == L"--offline-quality") {
+            opt.offlineQuality = _wtoi(next().c_str());
+        } else if (arg == L"--offline-renderer") {
+            const std::string v = ToLowerAscii(WideToUtf8(next()));
+            if (v == "raster") opt.offlineRenderer = 0;
+            else if (v == "rt") opt.offlineRenderer = 1;
+            else if (v == "pt") opt.offlineRenderer = 2;
+            else if (v == "gi") opt.offlineRenderer = 3;
+            else LOG_WARN("unknown --offline-renderer value: %s (want raster|rt|pt|gi)", v.c_str());
+        } else if (arg == L"--offline-probe") {
+            opt.offlineProbe = true;
         } else if (arg == L"--offline-size") {
             opt.offlineSize[0] = _wtoi(next().c_str());
             opt.offlineSize[1] = _wtoi(next().c_str());
@@ -194,6 +211,7 @@ int App::Run(HINSTANCE instance, const AppOptions& options) {
     MainLoop();
 
     ctx_.WaitForGpu();
+    ReleaseRenderBenchImage();
     UnloadScene();
     thumbs_.Shutdown();
     ShutdownImGui();
@@ -393,17 +411,22 @@ void App::RenderFrame() {
 
     PollScan();
     PollLoad();
+    PollProbeScene();
 
     switch (screen_) {
     case Screen::Scanning: DrawScanning(); break;
-    case Screen::Select: DrawSelect(); break;
+    case Screen::Select:
+        UpdateVideoProbe();
+        DrawSelect();
+        DrawVideoRenderDialog();
+        DrawToast();
+        break;
     case Screen::Loading: DrawLoading(); break;
     case Screen::Play:
         UpdatePlay(dt);
         UpdateOffline();          // CLI trigger (may switch to Screen::Offline)
         if (screen_ == Screen::Play) {
             DrawPlayOverlay();
-            DrawOfflineConfirm();
             DrawToast();
         }
         break;
@@ -414,6 +437,7 @@ void App::RenderFrame() {
     case Screen::BenchLobby: DrawBenchLobby(); break;
     case Screen::BenchRun: DrawBenchRunOverlay(); break;
     case Screen::BenchResult: DrawBenchResult(); break;
+    case Screen::BenchRender: DrawRenderBenchOverlay(); break;
     }
 
     ImGui::Render();
@@ -426,6 +450,11 @@ void App::RenderFrame() {
     const bool inScene = scene_ && (screen_ == Screen::Play || screen_ == Screen::BenchRun);
     if (screen_ == Screen::Offline && scene_) {
         RecordOfflineFrame(cmd);
+    } else if (screen_ == Screen::BenchRender && scene_) {
+        RecordRenderBenchFrame(cmd);
+    } else if (offline_.background && scene_ && screen_ == Screen::Select) {
+        RecordOfflineFrame(cmd);          // the sample render behind the dialog: nothing is presented
+        renderer_.ClearBackBuffer(cmd);   // the UI draws on a clean surface as usual
     } else {
         if (inScene) {
             const float frame = (float)(playTime_ * kMmdFps);
@@ -447,7 +476,8 @@ void App::RenderFrame() {
         }
     }
     ctx_.EndFrame(renderer_.Settings().vsync);
-    if (screen_ == Screen::Offline) AfterOfflineFrame();
+    if (screen_ == Screen::Offline || (offline_.background && screen_ == Screen::Select)) AfterOfflineFrame();
+    else if (screen_ == Screen::BenchRender) AfterRenderBenchFrame();
 
     if (quit) {
         ctx_.WaitForGpu();
@@ -515,8 +545,9 @@ void App::PollScan() {
     ApplyCommandLinePreselection();
 
     screen_ = Screen::Select;
-    if (options_.startScreen == "bench") {
+    if (options_.startScreen == "bench" || options_.startScreen == "bench-gi") {
         screen_ = Screen::BenchLobby;
+        if (options_.startScreen == "bench-gi") benchCategory_ = kBenchGiRender;
         RefreshLeaderboard();
     } else if (options_.startScreen == "stages") {
         libraryTab_ = 1;
@@ -524,6 +555,18 @@ void App::PollScan() {
         libraryTab_ = 2;
     } else if (options_.startScreen == "settings") {
         advancedOpen_ = true;
+    } else if (options_.startScreen == "video") {
+        // needs --character and --song; with --offline-video <file> it starts the render without the dialog
+        videoDialogOpen_ = true;
+        if (!options_.offlineVideo.empty() && selCharacter_ >= 0 && selSong_ >= 0) {
+            if (!renderer_.OfflineSupported()) {
+                LOG_ERROR("offline render unavailable (needs DXR)");
+                running_ = false;
+                return;
+            }
+            StartVideoRenderLoad();
+            return;
+        }
     }
 
     // One-shot command line auto-actions.
@@ -535,6 +578,18 @@ void App::PollScan() {
         int cat = 0;
         for (size_t i = 0; i < std::size(kBenchCategories); ++i)
             if (ToLowerAscii(kBenchCategories[i].id) == ToLowerAscii(options_.benchmarkCategory)) { cat = (int)i; break; }
+        if (kBenchCategories[cat].offline) {
+            benchCategory_ = cat;
+            options_.benchmarkCategory.clear();
+            if (!renderer_.OfflineSupported()) {
+                LOG_ERROR("render benchmark needs DXR (offline renderer unavailable)");
+                running_ = false;
+                return;
+            }
+            renderBench_.fromCli = true;
+            StartRenderBenchLoad();
+            return;
+        }
         if (kBenchCategories[cat].path != RenderPath::Raster && !renderer_.RayTracingSupported()) {
             LOG_ERROR("benchmark %s needs DXR 1.1", kBenchCategories[cat].id);
             options_.benchmarkCategory.clear();
@@ -651,6 +706,7 @@ void App::ApplyRenderSettings() {
     rs.bloomConvolution = settings_.bloomConvolution;
     rs.lutIntensity = settings_.lutIntensity;
     rs.fixedResolution = false;
+    rs.headless = false;
     renderer_.SetSettings(rs);
 }
 
@@ -715,6 +771,7 @@ void App::ApplyColorLut() {
 
 void App::StartLoad(LoadTarget target, const CharacterAsset* ch, const StageAsset* st,
                     const SongAsset* song) {
+    StopVideoProbe(false);
     UnloadScene();
     screen_ = Screen::Loading;
     loadTarget_ = target;
@@ -777,6 +834,33 @@ void App::PollLoad() {
         return;
     }
 
+    if (loadTarget_ == LoadTarget::OfflineVideo) {
+        // Rendered straight away from the select screen: paused scene, no audio playback (the encoder
+        // decodes the song itself)
+        playTime_ = 0;
+        playing_ = false;
+        useMotionCamera_ = scene_->camera != nullptr && !options_.freeCamera;
+        framesInScene_ = 0;
+        screen_ = Screen::Play;
+        const double duration = scene_->endFrame / kMmdFps;
+        StartOfflineVideo(options_.offlineRange[0] >= 0 ? options_.offlineRange[0] : 0.0,
+                          options_.offlineRange[1] >= 0 ? options_.offlineRange[1] : duration, true);
+        return;
+    }
+
+    if (loadTarget_ == LoadTarget::RenderBench) {
+        PoseRenderBench();
+        framesInScene_ = 0;
+        renderBench_.beginPending = true;
+        renderBench_.cancelRequested = false;
+        renderBench_.elapsed = 0;
+        RenderSettings rs = renderer_.Settings();
+        rs.vsync = false;               // presents must not throttle the GPU-bound render
+        renderer_.SetSettings(rs);
+        screen_ = Screen::BenchRender;
+        return;
+    }
+
     // Benchmark run begin.
     benchFrameTimes_.clear();
     benchFrameTimes_.reserve(options_.benchFrames > 0 ? (size_t)options_.benchFrames
@@ -827,6 +911,15 @@ bool App::BuildSceneRuntime(ScenePackage& pkg) {
     s->characterGpu = renderer_.CreateModel(batch, *pkg.character.pmx, pkg.character.textures);
     if (!s->characterGpu) return false;
 
+    for (size_t i = 0; i < pkg.extraCharacters.size(); ++i) {
+        SceneRuntime::Performer perf;
+        perf.instance = std::make_unique<ModelInstance>(pkg.extraCharacters[i].pmx);
+        perf.gpu = renderer_.CreateModel(batch, *pkg.extraCharacters[i].pmx, pkg.extraCharacters[i].textures);
+        if (!perf.gpu) return false;
+        perf.motion = i < pkg.extraMotions.size() ? pkg.extraMotions[i] : nullptr;
+        s->extras.push_back(std::move(perf));
+    }
+
     for (LoadedModelCpu& part : pkg.stageParts) {
         auto inst = std::make_unique<ModelInstance>(part.pmx);
         inst->UpdatePose();
@@ -852,6 +945,8 @@ bool App::BuildSceneRuntime(ScenePackage& pkg) {
 
 void App::UnloadScene() {
     if (!scene_) return;
+    if (offline_.background) CancelBackgroundProbe();
+    bgProbe_.sceneKey = 0;
     if (offline_.mode != OfflineMode::None) {
         renderer_.CancelOffline();
         offline_.encoder.reset();

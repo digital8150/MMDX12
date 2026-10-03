@@ -741,7 +741,7 @@ void BackdropPass::ReleaseTargets(Dx12Context& ctx) {
 }
 
 void BackdropPass::Execute(PassContext& pc) {
-    if (pc.offscreen || !a_) return;
+    if (pc.offscreen || pc.settings.headless || !a_) return;
     RenderTargets& t = pc.targets;
     ID3D12GraphicsCommandList* cmd = pc.cmd;
     const float down[4] = {1.0f / t.ldr.width, 1.0f / t.ldr.height, 0, 0};
@@ -798,7 +798,7 @@ bool PresentPass::CreatePipelines(Dx12Context& ctx, const std::filesystem::path&
 }
 
 void PresentPass::Execute(PassContext& pc) {
-    if (pc.offscreen) return;
+    if (pc.offscreen || pc.settings.headless) return;
     ID3D12GraphicsCommandList* cmd = pc.cmd;
     Dx12Context& ctx = pc.ctx;
     RenderTargets& t = pc.targets;

@@ -31,6 +31,7 @@
 //   gP2 = (shutter time 0..1, focus distance (view z, <= 0: pinhole), lens radius, 0)
 #include "rt_common.hlsli"   // includes common.hlsli
 #include "offline_common.hlsli"
+#include "offline_glass.hlsli"
 cbuffer PassCB : register(b1) { float4 gP0; float4 gP1; float4 gP2; float4 gP3; };
 SamplerState gPoint : register(s0);
 SamplerState gLinear : register(s1);
@@ -91,38 +92,157 @@ float2 ConcentricDisk(float2 u) {
     return r * float2(cos(phi), sin(phi));
 }
 
+// ---- analytic props: glass box and softboxes (render benchmark scene) ------------------------
+// The glass box (geometry in offline_glass.hlsli) is a smooth dielectric with dispersion (one hero
+// colour channel per path once it refracts) and Beer-Lambert absorption inside.
+
+float FresnelDielectric(float cosI, float eta) {   // eta = n(transmitted side) / n(incident side)
+    float sinT2 = (1.0 - cosI * cosI) / (eta * eta);
+    if (sinT2 >= 1.0) return 1.0;
+    float cosT = sqrt(1.0 - sinT2);
+    float rs = (cosI - eta * cosT) / (cosI + eta * cosT);
+    float rp = (eta * cosI - cosT) / (eta * cosI + cosT);
+    return 0.5 * (rs * rs + rp * rp);
+}
+
+// Index of refraction for the path's hero channel (-1: none chosen yet, green).
+float GlassIor(int ch) { return gGlassParams.z + gGlassParams.w * 0.5 * (float)((ch < 0 ? 1 : ch) - 1); }
+
+// Smooth dielectric scattering at a glass crossing (n faces the incoming ray): Fresnel-weighted
+// choice between mirror reflection and refraction. The first refraction of a path picks its hero
+// colour channel (dispersion): the throughput keeps that channel only, x3.
+float3 GlassScatter(float3 d, float3 n, bool inside, inout int ch, inout float3 T, inout uint rng, out bool refracted) {
+    refracted = false;
+    float cosI = saturate(dot(-d, n));
+    float eta = inside ? 1.0 / GlassIor(ch) : GlassIor(ch);
+    if (Rand(rng) < FresnelDielectric(cosI, eta)) return reflect(d, n);
+    if (ch < 0 && gGlassParams.w > 0.0) {
+        ch = min((int)(Rand(rng) * 3.0), 2);
+        T *= float3(ch == 0, ch == 1, ch == 2) * 3.0;
+        eta = inside ? 1.0 / GlassIor(ch) : GlassIor(ch);
+    }
+    float3 t = refract(d, n, 1.0 / eta);
+    if (dot(t, t) < 1e-8) return reflect(d, n);   // total internal reflection
+    refracted = true;
+    return normalize(t);
+}
+
+// Transparent shadow of the glass along a shadow ray: interface transmission at both crossings and
+// Beer-Lambert absorption over the chord (the light is attenuated, not bent).
+float3 GlassShadow(float3 o, float3 d, float tMax) {
+    if (!GlassOn()) return 1.0;
+    float tE, tX;
+    float3 nE, nX;
+    bool inE, inX;
+    float3 tr = 1.0;
+    if (!GlassIntersect(o, d, 0.0, tMax, tE, nE, inE)) return 1.0;
+    float ior = gGlassParams.z;
+    if (inE) {   // starts inside: only the exit
+        tr *= 1.0 - FresnelDielectric(saturate(dot(d, nE)), 1.0 / ior);
+        return tr * exp(-gGlassAbsorb.xyz * tE);
+    }
+    tr *= 1.0 - FresnelDielectric(saturate(-dot(d, nE)), ior);
+    float3 p = o + d * (tE + kGlassEps * 4.0);
+    if (GlassIntersect(p, d, 0.0, max(tMax - tE, 0.0), tX, nX, inX)) {
+        tr *= 1.0 - FresnelDielectric(saturate(dot(d, nX)), 1.0 / ior);
+        tr *= exp(-gGlassAbsorb.xyz * tX);
+    } else {
+        tr *= exp(-gGlassAbsorb.xyz * max(tMax - tE, 0.0));
+    }
+    return tr;
+}
+
+// Closest softbox (one-sided emissive rectangle, emitting on the side of cross(U, V)) in (tMin, tMax).
+bool SoftboxIntersect(float3 o, float3 d, float tMin, float tMax, out float tHit, out float3 L) {
+    tHit = tMax;
+    L = 0;
+    bool hit = false;
+    [unroll] for (int i = 0; i < 2; ++i) {
+        float4 c = gSoftbox[i * 4];
+        if (c.w < 0.5) continue;
+        float3 U = gSoftbox[i * 4 + 1].xyz, V = gSoftbox[i * 4 + 2].xyz;
+        float3 n = cross(U, V);
+        float dn = dot(d, n);
+        if (dn >= 0.0) continue;
+        float th = dot(c.xyz - o, n) / dn;
+        if (th <= tMin || th >= tHit) continue;
+        float3 p = o + d * th - c.xyz;
+        if (abs(dot(p, U)) > dot(U, U) || abs(dot(p, V)) > dot(V, V)) continue;
+        tHit = th;
+        L = gSoftbox[i * 4 + 3].xyz;
+        hit = true;
+    }
+    return hit;
+}
+
 // ---- scene ------------------------------------------------------------------------------
 
 struct Surf {
     float3 pos, n, faceN;   // normals face the incoming ray
     float3 albedo;          // linear
-    float3 emission;        // linear radiance (stage ambient)
+    float3 emission;        // linear radiance (stage ambient, softboxes)
     float refl, rough;
     bool character, flat, receive;
-    RtGeometry g;           // undefined for the studio floor
+    bool glass, inside;     // glass crossing; inside = leaving the glass body
+    bool emitter;           // softbox: the path ends here with `emission`
+    RtGeometry g;           // undefined for the studio floor and the props
     float4 tex;
     float2 uv;
 };
 
-// Closest surface along a ray: meshes (stochastic alpha) and the analytic studio floor.
-bool TraceScene(float3 o, float3 d, float tMin, inout uint rng, float lod, out Surf s, out float t) {
+// Closest surface along a ray: meshes (stochastic alpha), the analytic studio floor, the glass box
+// (unless skipGlass: the prepass sees straight through it) and the softboxes.
+bool TraceScene(float3 o, float3 d, float tMin, inout uint rng, float lod, out Surf s, out float t,
+                bool skipGlass = false) {
     s = (Surf)0;
     t = 1e5;
     float tMax = 1e5;
     bool floorHit = false;
+    float tProp;
+    float3 propN, propL;
+    bool propInside;
+    int prop = 0;   // 1 glass, 2 softbox
+    if (!skipGlass && GlassIntersect(o, d, tMin, tMax, tProp, propN, propInside)) {
+        tMax = tProp;
+        prop = 1;
+    }
+    float tBox;
+    if (SoftboxIntersect(o, d, tMin, tMax, tBox, propL)) {
+        tMax = tBox;
+        tProp = tBox;
+        prop = 2;
+    }
     if (gP0.y > 0.5 && d.y < -1e-5) {
         float tf = -o.y / d.y;
         // The floor dissolves into the sky with distance like the raster cyclorama (mmd.hlsl
         // PSFloor): stochastic coverage, so camera rays and GI see the same seamless fade.
         float r = length((o + d * tf).xz);
-        if (tf > tMin && r < kFloorExtent && Rand(rng) >= smoothstep(260.0, 820.0, r)) {
+        if (tf > tMin && tf < tMax && r < kFloorExtent && Rand(rng) >= smoothstep(260.0, 820.0, r)) {
             tMax = tf;
             floorHit = true;
         }
     }
     RtHit hit;
     bool mesh = TraceClosest(o, d, tMin, tMax, max(Rand(rng), 0.004), hit);
-    if (!mesh && !floorHit) return false;
+    if (!mesh && !floorHit && prop == 0) return false;
+    if (!mesh && !floorHit) {
+        t = tProp;
+        s.pos = o + d * t;
+        if (prop == 2) {
+            s.emitter = true;
+            s.emission = propL;
+            s.n = -d;
+            s.faceN = -d;
+            return true;
+        }
+        s.glass = true;
+        s.inside = propInside;
+        s.n = dot(propN, d) > 0.0 ? -propN : propN;   // toward the incoming ray
+        s.faceN = s.n;
+        s.albedo = 1.0;
+        s.refl = 1.0;
+        return true;
+    }
     if (mesh) {
         t = hit.t;
         RtGeometry g = LoadGeometry(hit.instanceId, hit.geometryIndex);
@@ -151,8 +271,9 @@ bool TraceScene(float3 o, float3 d, float tMin, inout uint rng, float lod, out S
         s.n = float3(0, 1, 0);
         s.faceN = s.n;
         float r = length(s.pos.xz);
-        s.albedo = lerp(float3(0.80, 0.83, 0.86), gSkyHorizon * 0.95, smoothstep(40.0, 420.0, r));
-        s.refl = 0.42 * (1.0 - smoothstep(120.0, 600.0, r));
+        const bool custom = gFloorParams.w >= 0.0;
+        s.albedo = lerp(custom ? gFloorParams.xyz : float3(0.80, 0.83, 0.86), gSkyHorizon * 0.95, smoothstep(40.0, 420.0, r));
+        s.refl = (custom ? gFloorParams.w : 0.42) * (1.0 - smoothstep(120.0, 600.0, r));
         s.rough = 0.12;
         s.receive = true;
     }
@@ -218,17 +339,22 @@ float3 PunctualIrradiance(Surf s, bool toon, inout uint rng) {
         if (w <= 0.0) continue;
         u -= w;
         if (u <= 0.0 || j == nl - 1u) {
-            float vis = TraceShadowRayMasked(OffsetRayOrigin(s.pos, s.faceN), ld, max(dist - 0.05, 0.0), RT_MASK_CHARACTER);
+            float3 po = OffsetRayOrigin(s.pos, s.faceN);
+            float3 vis = TraceShadowRayMasked(po, ld, max(dist - 0.05, 0.0), RT_MASK_CHARACTER) *
+                         GlassShadow(po, ld, max(dist - 0.05, 0.0));
             return e * (total / w) * vis;
         }
     }
     return 0.0;
 }
 
-float SunVisibility(Surf s, inout uint rng) {
+// Sun visibility (soft cone sample), tinted by the glass it passes through.
+float3 SunVisibility(Surf s, inout uint rng) {
     if (!s.receive) return 1.0;
     float3 sd = SampleCone(float2(Rand(rng), Rand(rng)), -gLightDir, kSunCosMax);
-    return TraceShadowRay(OffsetRayOrigin(s.pos, s.faceN), sd, 1e5);
+    float3 po = OffsetRayOrigin(s.pos, s.faceN);
+    float v = TraceShadowRay(po, sd, 1e5);
+    return v > 0.0 ? GlassShadow(po, sd, 1e5) : 0.0;
 }
 
 // Lambert irradiance from the sun and the punctual lights (one shadow ray each).
@@ -271,7 +397,9 @@ float3 SkinSunVisibility(Surf s, float skin, inout uint rng) {
         float phi = 6.2831853 * Rand(rng);
         float3 p = s.pos + (t * cos(phi) + b * sin(phi)) * r;
         float3 sd = SampleCone(float2(Rand(rng), Rand(rng)), -gLightDir, kSunCosMax);
-        vis[c] = TraceShadowRay(OffsetRayOrigin(p, s.faceN), sd, 1e5);
+        float3 po = OffsetRayOrigin(p, s.faceN);
+        vis[c] = TraceShadowRay(po, sd, 1e5);
+        if (vis[c] > 0.0) vis[c] *= GlassShadow(po, sd, 1e5)[c];
     }
     return vis;
 }
@@ -306,7 +434,7 @@ float3 SkinTransmittance(Surf s, float3 dir, float lightDist) {
     if (Luminance(trans) < 1e-3) return 0.0;
     float3 exitP = inside + dir * (d + 0.01);
     float vis = TraceShadowRay(exitP, dir, max(lightDist - d, 0.0));
-    return trans * vis;
+    return vis > 0.0 ? trans * GlassShadow(exitP, dir, max(lightDist - d, 0.0)) : 0.0;
 }
 
 // Translucency of thin skin (ears, fingers) lit from behind by the sun and one punctual light
@@ -382,6 +510,39 @@ float3 ToonSun(Surf s, float3 V, float3 sh, float skin) {
     return color;
 }
 
+// Glass crossing seen by the camera (or a mirror): delta lights have no mirror image in a smooth
+// dielectric, so the sun and the spots add a tight normalized Blinn-Phong glint weighted by Fresnel.
+float3 GlassGlint(Surf s, float3 V, inout uint rng) {
+    const float e = 1200.0, norm = (e + 8.0) / (8.0 * PI);
+    float3 c = 0;
+    float3 L = -gLightDir;
+    float3 h = normalize(L + V);
+    float ndl = dot(s.n, L);
+    if (ndl > 0.0) {
+        float spec = norm * pow(saturate(dot(s.n, h)), e) * FresnelDielectric(saturate(dot(h, V)), gGlassParams.z);
+        if (spec > 1e-3) {
+            float3 po = OffsetRayOrigin(s.pos, s.faceN);
+            c += spec * SunIrradiance() * ndl * TraceShadowRay(po, L, 1e5);
+        }
+    }
+    uint nl = (uint)gNumLights;
+    for (uint i = 0; i < nl; ++i) {
+        PtLight l = gPtLights[i];
+        float3 dl = l.pos - s.pos;
+        float dist = length(dl);
+        float3 ld = dl / max(dist, 1e-4);
+        float x = saturate(1.0 - pow(dist * l.invRange, 4.0));
+        float atten = x * x / (1.0 + dist * dist * 0.0004);
+        if (l.cosOuter > -1.0) atten *= smoothstep(l.cosOuter, l.cosInner, dot(-ld, l.dir));
+        float nl2 = dot(s.n, ld);
+        if (atten <= 0.0 || nl2 <= 0.0) continue;
+        float3 hh = normalize(ld + V);
+        c += norm * pow(saturate(dot(s.n, hh)), e) * FresnelDielectric(saturate(dot(hh, V)), gGlassParams.z) *
+             PI * l.color * atten * nl2;
+    }
+    return c;
+}
+
 // Direct light toward the camera (or a mirror): toon key for characters, Lambert sun for the
 // stage, the punctual lights. `pSpec` is the probability of the specular continuation.
 float3 CameraDirect(Surf s, float3 V, float pSpec, inout uint rng) {
@@ -392,7 +553,7 @@ float3 CameraDirect(Surf s, float3 V, float pSpec, inout uint rng) {
             c += ToonSun(s, V, SkinSunVisibility(s, skin, rng), skin);
             c += SkinTranslucency(s, skin, rng);
         } else {
-            c += ToonSun(s, V, SunVisibility(s, rng).xxx, 0.0);
+            c += ToonSun(s, V, SunVisibility(s, rng), 0.0);
         }
     } else {
         float3 L = -gLightDir;
@@ -425,7 +586,7 @@ float3 CameraDirect(Surf s, float3 V, float pSpec, inout uint rng) {
 //                    the scene lit by direct light + the cache, sample points as white dots
 //   CSPrepassSmooth  t5 finest level irradiance, t6 its geometry; u6 = the final cache
 //   CSRender         t6 finest level geometry, t7 final cache, gP2.w = 1 when the cache is valid,
-//                    gP3.y = finest level stride
+//                    gP3.x = max path depth (0: kMaxDepth), gP3.y = finest level stride
 Texture2D<float4> gLevelE[6] : register(t0);
 Texture2D<float4> gLevelG : register(t6);
 Texture2D<float4> gIcFinal : register(t7);
@@ -438,12 +599,26 @@ static const uint kGatherDepth = 4u;   // diffuse bounces of a cache sample's ga
 // next-event estimation at every vertex (Russian roulette from the second bounce).
 float3 GatherPath(float3 o, float3 d, float tMin, inout uint rng) {
     float3 L = 0, T = 1;
+    int ch = -1;
+    uint glassEvents = 0u;
     [loop] for (uint depth = 0; depth < kGatherDepth; ++depth) {
         Surf y;
         float t;
         if (!TraceScene(o, d, depth == 0u ? tMin : 0.0, rng, 1.0, y, t)) {
             L += T * Background(d);
             break;
+        }
+        if (y.emitter) {
+            L += T * y.emission;
+            break;
+        }
+        if (y.glass) {   // crossings do not count as diffuse bounces (at most 8 per path)
+            if (y.inside) T *= exp(-gGlassAbsorb.xyz * t);
+            bool refr;
+            d = GlassScatter(d, y.n, y.inside, ch, T, rng, refr);
+            o = OffsetRayOrigin(y.pos, refr ? -y.faceN : y.faceN);
+            if (++glassEvents < 8u) --depth;
+            continue;
         }
         L += T * (y.emission + y.albedo / PI * DirectIrradiance(y, rng));
         float3 nd = CosineSampleHemisphere(float2(Rand(rng), Rand(rng)), y.n);
@@ -523,7 +698,7 @@ void CSPrepassLevel(uint3 id : SV_DispatchThreadID) {
     CameraRay(q, float2(0.5, 0.5), o, d);
     Surf sf;
     float t;
-    if (!TraceScene(o, d, gNearZ, rng, 0.0, sf, t)) {
+    if (!TraceScene(o, d, gNearZ, rng, 0.0, sf, t, true) || sf.emitter) {
         gPreG[id.xy] = float4(0, 0, 1e6, 0);
         gPreE[id.xy] = 0;
         return;
@@ -572,8 +747,10 @@ void CSPrepassDisplay(uint3 id : SV_DispatchThreadID) {
     Surf sf;
     float t;
     float3 color;
-    if (!TraceScene(o, d, gNearZ, rng, 0.0, sf, t)) {
+    if (!TraceScene(o, d, gNearZ, rng, 0.0, sf, t, true)) {
         color = Background(d);
+    } else if (sf.emitter) {
+        color = sf.emission;
     } else {
         float3 vn = normalize(mul(sf.n, (float3x3)gView));
         float z = mul(float4(sf.pos, 1.0), gView).z;
@@ -670,23 +847,44 @@ void CSRender(uint3 id : SV_DispatchThreadID) {
 
     float3 radiance = 0, T = 1;
     bool diffuseChain = false;   // a diffuse bounce happened: plain Lambert NEE from here on
+    bool specChain = true;       // only glass crossings so far: the next opaque hit is the "primary" one
+    int ch = -1;                 // hero colour channel once the path refracted (dispersion)
     float tMinNext = 0.0;
     bool primHit = false;
     float3 primAlbedo = 1, primN = 0;
-    float primZ = 1e6, primT = 0.0;
-    [loop] for (uint depth = 0; depth <= kMaxDepth; ++depth) {
+    float primZ = 1e6, primT = 0.0, chainT = 0.0;
+    const uint maxDepth = gP3.x >= 1.0 ? min((uint)gP3.x, kMaxDepth) : kMaxDepth;
+    [loop] for (uint depth = 0; depth <= maxDepth; ++depth) {
         Surf s;
         float t;
-        if (!TraceScene(o, d, depth == 0u ? gNearZ : tMinNext, rng, depth == 0u ? 0.0 : 1.0, s, t)) {
+        if (!TraceScene(o, d, depth == 0u ? gNearZ : tMinNext, rng, specChain ? 0.0 : 1.0, s, t)) {
             radiance += T * Background(d);
             break;
         }
-        if (depth == 0u) {
+        if (s.emitter) {   // softboxes are seen by rays only (no light sampling), so every hit counts
+            radiance += T * s.emission;
+            break;
+        }
+        if (specChain) chainT += t;
+        if (s.glass) {
+            if (s.inside) T *= exp(-gGlassAbsorb.xyz * t);
+            else if (!diffuseChain) radiance += T * GlassGlint(s, -d, rng);
+            if (depth == maxDepth) break;
+            bool refr;
+            d = GlassScatter(d, s.n, s.inside, ch, T, rng, refr);
+            o = OffsetRayOrigin(s.pos, refr ? -s.faceN : s.faceN);
+            tMinNext = 0.0;
+            continue;
+        }
+        const bool viaGlass = specChain && depth > 0u;
+        if (specChain) {
             primHit = true;
             primAlbedo = s.albedo;
             primN = s.n;
-            primZ = mul(float4(s.pos, 1.0), gView).z;
-            primT = t;
+            // virtual depth along the glass chain (a reflection may hit something behind the camera)
+            primZ = max(chainT * dot(d0, gInvView[2].xyz), gNearZ);
+            primT = chainT;
+            specChain = false;
         }
 
         float3 V = -d;
@@ -696,10 +894,10 @@ void CSRender(uint3 id : SV_DispatchThreadID) {
             radiance += T * CameraDirect(s, V, pSpec, rng);
         else
             radiance += T * (s.emission + (1.0 - pSpec) * s.albedo / PI * DirectIrradiance(s, rng));
-        if (depth == kMaxDepth) break;
+        if (depth == maxDepth) break;
 
         // indirect diffuse from the irradiance cache (the prepass); mirror lobe still traced
-        if (depth == 0u && gP2.w > 0.5) {
+        if ((depth == 0u || viaGlass) && gP2.w > 0.5) {
             float3 Eic;
             if (IcLookup(s, Eic)) {
                 if (s.character && s.flat) {
@@ -744,7 +942,7 @@ void CSRender(uint3 id : SV_DispatchThreadID) {
         }
     }
 
-    if (any(isnan(radiance))) radiance = 0;
+    if (any(isnan(radiance)) || any(isinf(radiance))) radiance = 0;   // also guards the firefly clamp (inf * 0)
     if (primHit) {
         // aerial perspective toward the horizon colour, same curve as the raster haze
         float f = (1.0 - exp(-primT * kHaze * 0.0011)) * 0.85;

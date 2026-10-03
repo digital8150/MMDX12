@@ -212,3 +212,43 @@ every frame and encodes an MP4, 3) GI with a Pixar/Disney-like look while keepin
 - Temporal stability for video GI (reuse / blend the cache between frames, flicker test on a long clip).
 - Test more characters and stages; tune the SSS / skin detection per rig.
 - Bucket overlay in the preview, optional.
+
+## 2026-10-03/04 — Video dialog: renderer choice, measured estimate, GI effects
+
+### Done
+- Render dialog (`UiVideoDialog.cpp`, delegated to a Gemini 3.8 Flash worker, reviewed and re-laid out by Claude): renderer cards
+  (래스터 / 실시간 RT / 실시간 PT / 오프라인 GI), quality, effects (bloom, convolution bloom, volumetric + density, DoF + aperture only
+  for the real-time renderers), format, pinned estimate with a 실측/추정 badge and a progress bar while measuring.
+- Real-time renderers as video sources: `RecordRealtimeVideoFrame` renders at the video size (`fixedResolution`, no vsync), PT frames
+  accumulate `ptPasses` app frames; `Renderer::ReadFinalImage` reads `targets_.ldr`.
+- Sample render, automatic and in the background (no button): while the dialog is open, every new combination of assets + renderer /
+  resolution / quality / bloom / convolution / volumetric / DoF (not density, fps, bitrate) is measured after 0.8 s without changes
+  (`UpdateVideoProbe`): the scene loads once on a worker thread (`bgProbe_`, held in `scene_` while the dialog is open), then one frame
+  renders headless behind the UI (`RenderSettings::headless`, `Renderer::SetOfflinePresent(false)`, `Renderer::ClearBackBuffer`).
+  A settings change cancels the running sample; known combinations are reused from the saved results, never re-rendered; closing the
+  dialog or starting a render stops it. GI measures one frame with motion blur from the previous video frame's
+  pose; real-time renderers render 3 frames and average the last 2 (the first is a cold start, 1.5 s vs 0.01 s). Stored as
+  `videoProbe=<key>:<s/frame>` in mmdx12.ini, key = assets + renderer/resolution/quality/effects. ETA now includes the encode time and uses
+  `steady_clock` (the old per-app-frame clock measured 0 s for single-frame images).
+- GI effects (`offline_volumetric.hlsl`, `bloom_fft.hlsl` CSFftOutput, `offline_post.hlsl`): volumetric light with ray-query sun shadows
+  (half-res march + depth-aware blur, added in CSFinalize), FFT convolution bloom on the quarter-res thresholded image, bloom on/off.
+  GI stills take bloom/convolution/volumetric from the settings chosen at scene entry; videos from the dialog.
+- Checked headlessly (960x540): raster / RT (+DoF, volumetric) / PT video frames, GI stills with and without effects, probes.
+
+### Pitfalls found
+- Another app render held `build/bin/MMDX12.exe`: all verification used `build_dev` (git-ignored) and the running process was never touched.
+- The dialog grew beyond the window: effects sit before the format controls and a fade + caret marks hidden rows.
+
+### Not verified / not done
+- Measured GI times were taken while another 4K render shared the GPU (inflated); re-measure on an idle GPU.
+- Convolution bloom strength in GI (`kConvolutionBloomIntensity`) is a first guess; volumetric shafts are subtle indoors.
+- The dialog was only exercised through captures (`--screen video`, ini presets); settings changes mid-measurement (cancel and restart) were not clicked, only reasoned.
+
+
+### Next
+- Re-measure the GI times and tune `kConvolutionBloomIntensity` on an idle GPU; click through the dialog (change settings mid-measurement).
+- Optional: scale a tentative estimate from the nearest measured combination (same assets, other resolution) while a new one is measured.
+
+### Session close
+- The temporary build directories (`build_dev`, `build_w1..3`) and a stray `%TEMP%mmdx_build.log` were removed; `build/` was rebuilt clean
+  (the render that had locked it had ended). Working tree committed.

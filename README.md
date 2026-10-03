@@ -36,7 +36,10 @@ Rendering features:
   ray march through height fog: sun via the shadow map, stage spotlight cones; 안개 밀도), FFT
   convolution bloom with a starburst kernel, and colour LUTs (six built-in looks plus any `.cube`
   file in `<exe>/luts` or `<library>/luts`, with an intensity slider).
-- **Offline GI renders** (play bar: 카메라 = 고품질 스크린샷 / P key, 필름 = 고품질 영상 렌더; needs DXR):
+- **Offline GI renders** (play bar: 카메라 = 고품질 스크린샷 / P key; 고품질 영상 렌더 = the select screen's "영상 렌더" button next to
+  "플레이", which opens a dialog for resolution (720p–4K), frame rate (24/30/60), GI quality (draft / standard / high / best:
+  samples per pixel, irradiance-cache gather rays, max bounces), and bit rate, with a time and file size estimate; videos
+  only, stills stay 4K; needs DXR):
   a non-real-time renderer independent of the graphics settings, always at maximum quality, built
   like Cinema 4D's irradiance-cache GI. Prepass: six adaptive coarse-to-fine passes of screen-grid
   indirect-irradiance samples (512 multi-bounce gather paths each, denser at geometric edges), shown
@@ -53,6 +56,14 @@ Rendering features:
   `Videos\MMDX12` (~10 s per frame, about a day for a full song); Esc stops and keeps the frames so far.
 - **Benchmark categories**: `dx12-rt-fhd`, `dx12-rt-4k`, `dx12-pt-fhd`, `dx12-pt-4k` alongside the
   raster ones.
+- **GI render benchmark** (`dx12-gi-render`, Cinebench style; 벤치마크 → GI 렌더): one 3840×2160 image of a
+  dedicated scene ("Prism") rendered by the offline GI renderer with exactly 4096 samples per pixel,
+  scored by the total render time (score = 6.25 × million samples per second; ~5,200 / 41 s on an RTX
+  3060 Laptop). Three Sour Miku models (White, Breath You, ChunWeiLai) hold poses taken from dance
+  motions (with a physics pre-roll) behind a rounded glass cube: refraction with dispersion,
+  Beer-Lambert absorption and transparent shadows, two softboxes and teal/pink rim spots on a dark
+  cyclorama. Scene and score: `src/app/RenderBench.*`; glass in `shaders/offline_glass.hlsli` /
+  `offline_gi.hlsl`. The image is saved to `Pictures\MMDX12` and shown on the result screen.
 
 Physics: the character's PMX rigid bodies and joints run in Bullet (hair, skirts, accessories),
 stepped by the motion clock at 120 Hz. Seeks, loops and teleports in the motion reset the bodies to
@@ -65,14 +76,19 @@ F1 (hide UI), mouse drag (orbit), right drag (pan), wheel (zoom), Esc (back).
 Command line (also used for automated checks):
 ```
 --library <dir>  --character <s> --stage <s|none> --song <s>  --autoplay  --seek <sec>
---benchmark dx12-raster-fhd|dx12-raster-4k|dx12-rt-fhd|dx12-rt-4k|dx12-pt-fhd|dx12-pt-4k  --bench-frames <n>
+--benchmark dx12-raster-fhd|dx12-raster-4k|dx12-rt-fhd|dx12-rt-4k|dx12-pt-fhd|dx12-pt-4k|dx12-gi-render  --bench-frames <n>
+--bench-spp <n>  (GI render benchmark testing: samples per pixel; with --offline-size the result is unofficial)
 --frames <n>  --capture <out.png>  --width <w> --height <h>  --debug
 --free-camera  --camera tx,ty,tz,yaw,pitch,dist  --paused  --lighting 0..3  --quality 0..3  --no-physics
 --render raster|rt|pt  --upscaler none|dlss|fsr|xess  --upscale-quality native|quality|balanced|performance|ultra
 --dof 0|1  --volumetric 0|1  --bloom-conv 0|1  --lut <name|none>
 --offline-still <out.png> | --offline-video <out.mp4> [--offline-range <a> <b>]   (offline GI render, then quit)
+--offline-fps 24|30|60  --offline-bitrate <mbps>  --offline-quality 0..3   (video format for this run; default: the select screen dialog's)
+--offline-renderer raster|rt|pt|gi   (video renderer for this run; default: the dialog's; --dof/--volumetric/--bloom-conv also apply to the video)
+--offline-probe   (the dialog's time measurement from a play scene; logs "VIDEO PROBE", then quits)
 --offline-spp <n>  --offline-size <w> <h>   (testing: cap samples / override the output size)
---screen select|stages|songs|settings|bench   (UI capture testing)
+--screen select|stages|songs|settings|video|bench|bench-gi   (UI capture testing; video = the render dialog, or with
+                                                              --offline-video renders straight from the select screen)
 ```
 
 ## Library classification (src/asset/AssetLibrary.cpp)

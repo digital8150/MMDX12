@@ -1,6 +1,9 @@
 #include "app/App.h"
 
+#include <shellapi.h>
+
 #include <algorithm>
+#include <cmath>
 #include <cstring>
 
 #include "core/Log.h"
@@ -98,6 +101,16 @@ const char* ShortLabel(int category) { return kBenchCategories[category].resLabe
 
 std::string CategoryTag(int c) { return std::string(kBenchCategories[c].pathLabel) + " · " + kBenchCategories[c].resLabel; }
 
+bool IsGi(int c) { return kBenchCategories[c].offline; }
+
+// "1:23.4" (minutes:seconds with tenths) for render times.
+std::string RenderTime(double sec) {
+    if (sec < 0) sec = 0;
+    char buf[32];
+    std::snprintf(buf, sizeof(buf), "%d:%04.1f", (int)(sec / 60.0), std::fmod(sec, 60.0));
+    return buf;
+}
+
 } // namespace
 
 void App::StartBenchmarkLoad() {
@@ -145,8 +158,13 @@ void App::DrawBenchLobby() {
         PushFont(Font::Regular, size::Small);
         ImGui::PushStyleColor(ImGuiCol_Text, ImGui::ColorConvertU32ToFloat4(p.ink2));
         ImGui::PushTextWrapPos(lx + leftW);
-        ImGui::TextUnformatted("같은 장면, 같은 작업량(프레임당 1/60초)으로 GPU 성능을 비교합니다. 음소거, 수직 동기화와 "
-                               "업스케일러 끔, 높음 품질. 래스터·RT는 MSAA 4x, PT는 1 spp · 3회 반사.");
+        if (IsGi(benchCategory_))
+            ImGui::TextUnformatted("시네벤치처럼 고정된 장면 한 장을 오프라인 GI 렌더러로 그리고, 끝까지 걸린 시간으로 "
+                                   "점수를 매깁니다. 유리 큐브의 굴절·분산·투과와 소프트박스 조명을 이래디언스 캐시와 "
+                                   "패스 트레이싱으로 계산합니다. 4K · 픽셀당 4096 샘플 고정.");
+        else
+            ImGui::TextUnformatted("같은 장면, 같은 작업량(프레임당 1/60초)으로 GPU 성능을 비교합니다. 음소거, 수직 동기화와 "
+                                   "업스케일러 끔, 높음 품질. 래스터·RT는 MSAA 4x, PT는 1 spp · 3회 반사.");
         ImGui::PopTextWrapPos();
         ImGui::PopStyleColor();
         PopFont();
@@ -156,14 +174,19 @@ void App::DrawBenchLobby() {
     Text(dl, Font::Semibold, size::Small, ImVec2(lx, y), p.ink2, "렌더링 방식");
     y += Dp(26.0f);
     {
-        int pathIdx = benchCategory_ / 2;
+        const int curPath = IsGi(benchCategory_) ? kBenchPathCount : benchCategory_ / 2;
+        int pathIdx = curPath;
         ImGui::SetCursorScreenPos(ImVec2(lx, y));
-        const char* benchPaths[] = {"래스터", "레이 트레이싱", "패스 트레이싱"};
-        if (Segmented("##benchpath", benchPaths, 3, &pathIdx, leftW / Dpi(), 36.0f)) {
-            if (pathIdx != 0 && !renderer_.RayTracingSupported()) {
-                pathIdx = benchCategory_ / 2;
+        const char* benchPaths[] = {"래스터", "레이 트레이싱", "패스 트레이싱", "GI 렌더"};
+        if (Segmented("##benchpath", benchPaths, kBenchPathCount + 1, &pathIdx, leftW / Dpi(), 36.0f)) {
+            const bool ok = pathIdx == 0 || (pathIdx == kBenchPathCount ? renderer_.OfflineSupported()
+                                                                         : renderer_.RayTracingSupported());
+            if (!ok) {
+                pathIdx = curPath;
             } else {
-                benchCategory_ = pathIdx * 2 + benchCategory_ % 2;
+                benchCategory_ = pathIdx == kBenchPathCount
+                                     ? kBenchGiRender
+                                     : pathIdx * 2 + (IsGi(benchCategory_) ? 0 : benchCategory_ % 2);
                 RefreshLeaderboard();
             }
         }
@@ -179,9 +202,23 @@ void App::DrawBenchLobby() {
         y += Dp(22.0f);
     }
 
-    Text(dl, Font::Semibold, size::Small, ImVec2(lx, y), p.ink2, "해상도");
+    Text(dl, Font::Semibold, size::Small, ImVec2(lx, y), p.ink2, IsGi(benchCategory_) ? "렌더 설정" : "해상도");
     y += Dp(26.0f);
-    {
+    if (IsGi(benchCategory_)) {
+        // the single fixed workload
+        const float chh = Dp(60.0f);
+        const ImVec2 a(lx, y), b(lx + leftW, y + chh);
+        dl->AddRectFilled(a, b, Mix(p.surface, p.accentSoft, 0.6f), Dp(14.0f));
+        dl->AddRect(a, b, p.accent, Dp(14.0f), 0, Dp(2.0f));
+        Text(dl, Font::Bold, 24.0f, ImVec2(a.x + Dp(18.0f), a.y + Dp(14.0f)), p.accentInk,
+             kBenchCategories[kBenchGiRender].resLabel);
+        char res[64];
+        std::snprintf(res, sizeof(res), "%u × %u  ·  %u spp  ·  GI", kRenderBenchWidth, kRenderBenchHeight,
+                      kRenderBenchSamples);
+        const ImVec2 rs = TextSize(Font::Regular, size::Small, res);
+        Text(dl, Font::Regular, size::Small, ImVec2(b.x - Dp(18.0f) - rs.x, a.y + (chh - rs.y) * 0.5f), p.ink2, res);
+        y += chh + Dp(26.0f);
+    } else {
         const float cw = (leftW - Dp(12.0f)) * 0.5f, chh = Dp(60.0f);
         for (int r = 0; r < 2; ++r) {
             const int i = (benchCategory_ / 2) * 2 + r;
@@ -213,7 +250,22 @@ void App::DrawBenchLobby() {
 
     Text(dl, Font::Semibold, size::Small, ImVec2(lx, y), p.ink2, "측정 장면");
     y += Dp(26.0f);
-    {
+    int rbChars[kRenderBenchPerformerCount], rbSongs[kRenderBenchPerformerCount];
+    const bool rbAssets = FindRenderBenchAssets(rbChars, rbSongs);
+    if (IsGi(benchCategory_)) {
+        const float ph = Dp(116.0f);
+        const ImVec2 a(lx, y), b(lx + leftW, y + ph + Dp(64.0f));
+        Panel(dl, a, b, Dp(14.0f), 0.8f);
+        DrawRenderBenchPreview(a.x + Dp(8.0f), a.y + Dp(8.0f), b.x - Dp(8.0f), a.y + ph, Dp(10.0f));
+        TextEllipsis(dl, Font::Semibold, size::Small, ImVec2(a.x + Dp(16.0f), a.y + ph + Dp(12.0f)), b.x - Dp(16.0f), p.ink,
+                     "Prism  ·  Sour 미쿠 3인  ·  유리 큐브 스튜디오");
+        if (rbAssets)
+            Badge(dl, ImVec2(a.x + Dp(16.0f), a.y + ph + Dp(36.0f)), "공식 프리셋", WithAlpha(p.accent, 0.16f), p.accentInk);
+        else
+            Badge(dl, ImVec2(a.x + Dp(16.0f), a.y + ph + Dp(36.0f)), "Sour 미쿠 모델 또는 모션 에셋이 없습니다", p.warnSoft,
+                  p.warn);
+        y = b.y + Dp(24.0f);
+    } else {
         const CharacterAsset* ch = benchOfficial_ ? &library_.characters[(size_t)presetChar]
                                                   : (hasSelection ? &library_.characters[(size_t)selCharacter_] : nullptr);
         const StageAsset* st = benchOfficial_ ? &library_.stages[(size_t)presetStage]
@@ -242,12 +294,21 @@ void App::DrawBenchLobby() {
     TextField("##nick", "닉네임", nicknameEdit_, sizeof(nicknameEdit_), leftW / Dpi(), "리더보드에 표시될 이름");
     ImGui::PopItemWidth();
     y = ImGui::GetCursorScreenPos().y + Dp(18.0f);
-    const bool rtUnavailable =
-        kBenchCategories[benchCategory_].path != RenderPath::Raster && !renderer_.RayTracingSupported();
+    const bool gi = IsGi(benchCategory_);
+    const bool rtUnavailable = gi ? !renderer_.OfflineSupported()
+                                  : kBenchCategories[benchCategory_].path != RenderPath::Raster &&
+                                        !renderer_.RayTracingSupported();
     ImGui::SetCursorScreenPos(ImVec2(lx, y));
-    ImGui::BeginDisabled((!benchOfficial_ && !hasSelection) || rtUnavailable);
-    if (Button("##start", "측정 시작", icon::Lightning, ButtonKind::Primary, ImVec2(leftW / Dpi(), 52.0f)))
-        StartBenchmarkLoad();
+    ImGui::BeginDisabled((gi ? !rbAssets : (!benchOfficial_ && !hasSelection)) || rtUnavailable);
+    if (Button("##start", gi ? "렌더 시작" : "측정 시작", gi ? icon::Image : icon::Lightning, ButtonKind::Primary,
+               ImVec2(leftW / Dpi(), 52.0f))) {
+        if (gi) {
+            settings_.Save(settingsPath_);
+            StartRenderBenchLoad();
+        } else {
+            StartBenchmarkLoad();
+        }
+    }
     ImGui::EndDisabled();
 
     // ---- right: leaderboard
@@ -273,6 +334,10 @@ void App::DrawBenchLobby() {
         const float widths[8] = {colRank, colNick, colScore, colTier, colFps, colLow, colGpu, colDate};
         for (int i = 0; i < 8; ++i) cx[i + 1] = cx[i] + widths[i];
         const char* heads[8] = {"순위", "닉네임", "점수", "등급", "평균 FPS", "1% Low", "GPU", "날짜"};
+        if (IsGi(benchCategory_)) {
+            heads[4] = "M샘플/초";
+            heads[5] = "렌더 시간";
+        }
         const bool rightAlign[8] = {false, false, true, false, true, true, false, false};
         float hy = a.y + ip + Dp(50.0f);
         for (int i = 0; i < 8; ++i) {
@@ -345,10 +410,14 @@ void App::DrawBenchLobby() {
                 Badge(rl, ImVec2(cx[3] + dx + Dp(4.0f), ry + rowH * 0.5f - Dp(11.0f)), e.tier.c_str(), WithAlpha(p.accent, 0.16f),
                       p.accentInk);
                 char buf[32];
-                std::snprintf(buf, sizeof(buf), "%.1f", e.avgFps);
+                const bool giRow = IsGi(benchCategory_);
+                std::snprintf(buf, sizeof(buf), giRow ? "%.2f" : "%.1f", e.avgFps);
                 ImVec2 bs = TextSize(Font::Regular, size::Body, buf);
                 Text(rl, Font::Regular, size::Body, ImVec2(cx[5] + dx - Dp(14.0f) - bs.x, ty), p.ink2, buf);
-                std::snprintf(buf, sizeof(buf), "%.1f", e.low1Fps);
+                if (giRow)
+                    std::snprintf(buf, sizeof(buf), "%s", RenderTime(e.frametimeStd).c_str());
+                else
+                    std::snprintf(buf, sizeof(buf), "%.1f", e.low1Fps);
                 bs = TextSize(Font::Regular, size::Body, buf);
                 Text(rl, Font::Regular, size::Body, ImVec2(cx[6] + dx - Dp(14.0f) - bs.x, ty), p.ink2, buf);
                 TextEllipsis(rl, Font::Regular, size::Small, ImVec2(cx[6] + dx, ty + Dp(1.0f)), cx[7] + dx - Dp(12.0f), p.ink2,
@@ -367,6 +436,157 @@ void App::DrawBenchLobby() {
     EndScreen();
 }
 
+
+// ---------------------------------------------------------------------------
+// Render benchmark (GI): scene card and progress overlay
+// ---------------------------------------------------------------------------
+
+void App::DrawRenderBenchPreview(float x0, float y0, float x1, float y1, float rounding) {
+    using namespace ui;
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    const Palette& p = P();
+    const ImVec2 a(x0, y0), b(x1, y1);
+    if (renderBenchImage_ && renderBenchImageW_ && renderBenchImageH_) {
+        // the last finished render, cover-fit
+        const float aspect = (x1 - x0) / (y1 - y0), src = (float)renderBenchImageW_ / (float)renderBenchImageH_;
+        ImVec2 uv0(0, 0), uv1(1, 1);
+        if (aspect > src) {
+            const float v = src / aspect;
+            uv0.y = (1 - v) * 0.5f;
+            uv1.y = 1 - uv0.y;
+        } else {
+            const float u = aspect / src;
+            uv0.x = (1 - u) * 0.5f;
+            uv1.x = 1 - uv0.x;
+        }
+        dl->AddImageRounded(ImTextureRef(renderBenchImage_), a, b, uv0, uv1, IM_COL32_WHITE, rounding);
+        dl->AddRect(a, b, WithAlpha(p.ink, 0.06f), rounding);
+        return;
+    }
+    // dark studio: backdrop, a pool of light on the floor, the three performers behind a glass cube
+    const float w = x1 - x0, h = y1 - y0;
+    const float hy = y0 + h * 0.62f;
+    dl->AddRectFilled(a, b, IM_COL32(18, 21, 30, 255), rounding);
+    dl->PushClipRect(a, b, true);
+    dl->AddRectFilledMultiColor(ImVec2(x0, y0), ImVec2(x1, hy), IM_COL32(16, 18, 27, 255), IM_COL32(16, 18, 27, 255),
+                                IM_COL32(34, 38, 52, 255), IM_COL32(34, 38, 52, 255));
+    dl->AddRectFilledMultiColor(ImVec2(x0, hy), ImVec2(x1, y1), IM_COL32(52, 56, 70, 255), IM_COL32(52, 56, 70, 255),
+                                IM_COL32(26, 29, 40, 255), IM_COL32(26, 29, 40, 255));
+    const ImVec2 pool((x0 + x1) * 0.5f, hy + h * 0.16f);
+    for (int i = 6; i >= 1; --i)
+        dl->AddEllipseFilled(pool, ImVec2(w * 0.07f * (float)i, h * 0.035f * (float)i), IM_COL32(150, 170, 190, 9));
+    // rim light glows (teal left, pink right)
+    dl->AddCircleFilled(ImVec2(x0 + w * 0.12f, y0 + h * 0.18f), h * 0.45f, IM_COL32(60, 200, 190, 14), 40);
+    dl->AddCircleFilled(ImVec2(x1 - w * 0.12f, y0 + h * 0.22f), h * 0.42f, IM_COL32(240, 100, 170, 14), 40);
+    int chars[kRenderBenchPerformerCount], songs[kRenderBenchPerformerCount];
+    FindRenderBenchAssets(chars, songs);
+    const float xs[3] = {0.5f, 0.28f, 0.72f}, hs[3] = {0.98f, 0.86f, 0.86f};
+    for (int k = 2; k >= 0; --k) {   // sides first, the centre performer on top
+        if (chars[k] < 0) continue;
+        const uint64_t tex = CharacterThumb(chars[k]);
+        if (!tex) continue;
+        const float th = h * hs[k], tw = th * 0.75f, cx = x0 + w * xs[k];
+        const float by = y1 - h * (k == 0 ? 0.04f : 0.10f);
+        dl->AddImage(ImTextureRef(tex), ImVec2(cx - tw * 0.5f, by - th), ImVec2(cx + tw * 0.5f, by),
+                     ImVec2(0, 0), ImVec2(1, 1), k == 0 ? IM_COL32_WHITE : IM_COL32(215, 220, 230, 255));
+    }
+    // the glass cube in front (a rotated cube: two visible faces and the top)
+    {
+        const float s = h * 0.30f, cx = (x0 + x1) * 0.5f + w * 0.02f, base = y1 - h * 0.02f;
+        const ImVec2 f0(cx - s * 0.62f, base - s * 0.08f), f1(cx + s * 0.08f, base), f2(cx + s * 0.62f, base - s * 0.12f);
+        const ImVec2 up(0, -s * 0.95f), back(s * 0.04f, -s * 0.14f);
+        const ImVec2 t0(f0.x + up.x, f0.y + up.y), t1(f1.x + up.x, f1.y + up.y), t2(f2.x + up.x, f2.y + up.y);
+        const ImVec2 t3(t0.x + (t2.x - t1.x) + back.x, t0.y + (t2.y - t1.y) + back.y);
+        dl->AddQuadFilled(f0, f1, t1, t0, IM_COL32(170, 235, 230, 34));
+        dl->AddQuadFilled(f1, f2, t2, t1, IM_COL32(170, 235, 230, 22));
+        dl->AddQuadFilled(t0, t1, t2, t3, IM_COL32(220, 250, 248, 40));
+        const ImU32 edge = IM_COL32(225, 250, 250, 150);
+        dl->AddLine(f0, f1, edge, Dp(1.2f));
+        dl->AddLine(f1, f2, edge, Dp(1.2f));
+        dl->AddLine(f0, t0, edge, Dp(1.2f));
+        dl->AddLine(f1, t1, IM_COL32(255, 255, 255, 210), Dp(1.6f));
+        dl->AddLine(f2, t2, edge, Dp(1.2f));
+        dl->AddLine(t0, t1, edge, Dp(1.2f));
+        dl->AddLine(t1, t2, edge, Dp(1.2f));
+        dl->AddLine(t2, t3, WithAlpha(edge, 0.4f), Dp(1.0f));
+        dl->AddLine(t3, t0, WithAlpha(edge, 0.4f), Dp(1.0f));
+    }
+    dl->PopClipRect();
+    dl->AddRect(a, b, WithAlpha(p.ink, 0.06f), rounding);
+}
+
+void App::DrawRenderBenchOverlay() {
+    using namespace ui;
+    ImGuiIO& io = ImGui::GetIO();
+    const OfflineProgress& pr = renderer_.OfflineStatus();
+    const Palette& p = P();
+    const float rect0[4] = {0, 0, 0, 0};
+
+    ImGui::SetNextWindowPos(ImVec2(0, 0));
+    ImGui::SetNextWindowSize(io.DisplaySize);
+    ImGui::Begin("##renderbench", nullptr,
+                 ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoBackground | ImGuiWindowFlags_NoMove |
+                     ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoBringToFrontOnFocus |
+                     ImGuiWindowFlags_NoScrollWithMouse | ImGuiWindowFlags_NoNav);
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    const ImVec2 ds = io.DisplaySize;
+
+    // ---- bottom panel: title, live timer, phase, progress
+    const float w = std::min(ds.x - Dp(40.0f), Dp(720.0f)), h = Dp(132.0f);
+    const ImVec2 a((ds.x - w) * 0.5f, ds.y - Dp(24.0f) - h), b(a.x + w, a.y + h);
+    FrostedPanel(dl, a, b, Dp(20.0f), (ImTextureID)0, rect0);
+    const float x0 = a.x + Dp(20.0f), x1 = b.x - Dp(20.0f);
+    Icon(dl, icon::Image, Dp(20.0f), ImVec2(x0 + Dp(10.0f), a.y + Dp(28.0f)), p.accent);
+    Text(dl, Font::Semibold, size::Title, ImVec2(x0 + Dp(30.0f), a.y + Dp(18.0f)), p.ink, "GI 렌더 벤치마크");
+    {
+        const char* label = "취소";
+        const float cw = Dp(32.0f + 26.0f) + TextSize(Font::Semibold, size::Body, label).x;
+        ImGui::SetCursorScreenPos(ImVec2(x1 - cw, a.y + Dp(14.0f)));
+        if (Button("##rbcancel", label, icon::X, ButtonKind::Secondary, ImVec2(0, 34)))
+            renderBench_.cancelRequested = true;
+    }
+    // timer, large, left of the cancel button
+    {
+        const std::string t = RenderTime(renderBench_.beginPending ? 0.0 : renderBench_.elapsed);
+        const ImVec2 ts = TextSize(Font::Bold, size::Heading, t.c_str());
+        Text(dl, Font::Bold, size::Heading, ImVec2(x1 - Dp(100.0f) - ts.x, a.y + Dp(17.0f)), p.accentInk, t.c_str());
+    }
+    std::string status;
+    float frac = 0.0f;
+    const uint32_t spp = std::max(1u, pr.maxSamples);
+    if (renderBench_.beginPending || pr.phase == OfflinePhase::Idle) {
+        status = "장면 준비 중…";
+    } else if (pr.phase == OfflinePhase::Prepass) {
+        status = "이래디언스 캐시 프리패스 (" + std::to_string(pr.prepassStep + 1) + "/" +
+                 std::to_string(pr.prepassSteps) + ")";
+        frac = 0.08f * (float)pr.prepassStep / (float)std::max(1u, pr.prepassSteps);
+    } else if (pr.phase == OfflinePhase::Render) {
+        status = "패스 트레이싱 · " + std::to_string(pr.samples) + " / " + std::to_string(spp) + " spp";
+        frac = 0.08f + 0.92f * (float)pr.samples / (float)spp;
+    } else {
+        status = "마무리 중…";
+        frac = 1.0f;
+    }
+    Text(dl, Font::Regular, size::Body, ImVec2(x0, a.y + Dp(58.0f)), p.ink2, status.c_str());
+    ProgressBar(dl, ImVec2(x0, a.y + Dp(86.0f)), ImVec2(x1, a.y + Dp(92.0f)), std::min(frac, 0.995f));
+    {
+        char line[96];
+        std::snprintf(line, sizeof(line), "%u×%u · %u spp · Prism", pr.width, pr.height, spp);
+        const ImVec2 ts = TextSize(Font::Regular, size::Caption, line);
+        Text(dl, Font::Regular, size::Caption, ImVec2((a.x + b.x - ts.x) * 0.5f, b.y - Dp(28.0f)), p.ink3, line);
+    }
+
+    // ---- top-left pill
+    {
+        const char* label = "벤치마크 측정 중 · 다른 작업은 점수를 낮춥니다 · Esc 취소";
+        const ImVec2 ts = TextSize(Font::Semibold, size::Caption, label);
+        const float pw = ts.x + Dp(28.0f), ph = Dp(30.0f);
+        const ImVec2 pa(Dp(20.0f), Dp(20.0f)), pb(pa.x + pw, pa.y + ph);
+        FrostedPanel(dl, pa, pb, ph * 0.5f, (ImTextureID)0, rect0);
+        Text(dl, Font::Semibold, size::Caption, ImVec2(pa.x + Dp(14.0f), pa.y + (ph - ts.y) * 0.5f), p.ink2, label);
+    }
+    ImGui::End();
+}
 
 // ---------------------------------------------------------------------------
 // Run
@@ -486,7 +706,8 @@ void App::DrawBenchResult() {
     const float mainW = W - sideW - gap;
 
     // ---- score card
-    const ImVec2 a(x0, top), b(x0 + mainW, std::min(ds.y - Dp(28.0f), top + Dp(520.0f)));
+    const bool gi = IsGi(benchCategory_);
+    const ImVec2 a(x0, top), b(x0 + mainW, gi ? ds.y - Dp(28.0f) : std::min(ds.y - Dp(28.0f), top + Dp(520.0f)));
     Panel(dl, a, b, Dp(20.0f), 1.0f);
     const float ip = Dp(32.0f);
     const std::string head = std::string("벤치마크 결과  ·  ") + CategoryTag(benchCategory_) +
@@ -505,8 +726,41 @@ void App::DrawBenchResult() {
         Text(dl, Font::Semibold, size::Title, ImVec2(c.x + d * 0.5f + Dp(14.0f), c.y - Dp(12.0f)), p.ink,
              benchResult_.tierTitle.c_str());
     }
+    if (gi) {
+        // one row of tiles, then the rendered image
+        char v[4][40];
+        std::snprintf(v[0], 40, "%s", RenderTime(benchResult_.durationSec).c_str());
+        std::snprintf(v[1], 40, "%.2f M/s", benchResult_.avgFps);
+        std::snprintf(v[2], 40, "%d spp", benchResult_.totalFrames);
+        std::snprintf(v[3], 40, "%ux%u", benchResult_.width, benchResult_.height);
+        const char* k[4] = {"렌더 시간", "샘플 처리량", "픽셀당 샘플", "해상도"};
+        const float gy = a.y + ip + Dp(22.0f) + ss.y + Dp(26.0f);
+        const float tw = (mainW - ip * 2.0f - Dp(12.0f) * 3.0f) / 4.0f, th = Dp(72.0f);
+        for (int i = 0; i < 4; ++i) {
+            const ImVec2 ta(a.x + ip + i * (tw + Dp(12.0f)), gy);
+            dl->AddRectFilled(ta, ImVec2(ta.x + tw, ta.y + th), WithAlpha(p.sunken, 0.75f), Dp(12.0f));
+            Text(dl, Font::Regular, size::Caption, ImVec2(ta.x + Dp(14.0f), ta.y + Dp(12.0f)), p.ink3, k[i]);
+            Text(dl, Font::Bold, size::Title + 2.0f, ImVec2(ta.x + Dp(14.0f), ta.y + Dp(32.0f)), p.ink, v[i]);
+        }
+        const float sysY = b.y - ip - Dp(18.0f);
+        const float iy0 = gy + th + Dp(16.0f), iy1 = sysY - Dp(14.0f);
+        if (renderBenchImage_ && iy1 - iy0 > Dp(40.0f)) {
+            const float aw = mainW - ip * 2.0f, ah = iy1 - iy0;
+            const float src = (float)renderBenchImageW_ / (float)std::max(1u, renderBenchImageH_);
+            float iw = aw, ih = aw / src;
+            if (ih > ah) {
+                ih = ah;
+                iw = ah * src;
+            }
+            const ImVec2 ia(a.x + ip + (aw - iw) * 0.5f, iy0), ib(ia.x + iw, ia.y + ih);
+            dl->AddImageRounded(ImTextureRef(renderBenchImage_), ia, ib, ImVec2(0, 0), ImVec2(1, 1), IM_COL32_WHITE,
+                                Dp(12.0f));
+            dl->AddRect(ia, ib, WithAlpha(p.ink, 0.08f), Dp(12.0f));
+        }
+        const std::string sys = ctx_.Caps().adapterName + "  ·  " + OsVersionString() + "  ·  오프라인 GI (이래디언스 캐시 + 패스 트레이싱)";
+        TextEllipsis(dl, Font::Regular, size::Small, ImVec2(a.x + ip, sysY), b.x - ip, p.ink2, sys.c_str());
+    } else {
     // stats grid (4 x 2 tiles)
-    {
         char v[8][40];
         std::snprintf(v[0], 40, "%.1f", benchResult_.avgFps);
         std::snprintf(v[1], 40, "%.1f", benchResult_.low1Fps);
@@ -566,6 +820,10 @@ void App::DrawBenchResult() {
                 req.avgFps = benchResult_.avgFps;
                 req.low1Fps = benchResult_.low1Fps;
                 req.frametimeStd = benchResult_.frametimeStdMs;
+                if (gi) {  // GI render: avgFps = million samples per second, frametimeStd = render seconds
+                    req.low1Fps = 0.0f;
+                    req.frametimeStd = benchResult_.durationSec;
+                }
                 submitFuture_ = std::async(std::launch::async, [url, req] {
                     LeaderboardClient c(url);
                     return c.Submit(req);
@@ -587,15 +845,27 @@ void App::DrawBenchResult() {
             PushFont(Font::Regular, size::Small);
             ImGui::PushStyleColor(ImGuiCol_Text, ImGui::ColorConvertU32ToFloat4(p.ink2));
             ImGui::PushTextWrapPos(sb.x - sp);
-            ImGui::TextUnformatted("공식 프리셋 에셋(Project DIVA 미쿠, theater, World is Mine)으로 측정한 결과만 "
-                                   "리더보드에 제출할 수 있습니다.");
+            ImGui::TextUnformatted(gi ? "기본 설정(4K · 4096 spp)으로 렌더한 결과만 리더보드에 제출할 수 있습니다."
+                                      : "공식 프리셋 에셋(Project DIVA 미쿠, theater, World is Mine)으로 측정한 결과만 "
+                                        "리더보드에 제출할 수 있습니다.");
             ImGui::PopTextWrapPos();
             ImGui::PopStyleColor();
             PopFont();
         }
+        if (gi && !renderBenchSaved_.empty()) {
+            ImGui::SetCursorScreenPos(ImVec2(sa.x + sp, sb.y - sp - Dp(42.0f) * 3.0f - Dp(20.0f)));
+            if (Button("##openimg", "렌더 이미지 보기", icon::FolderOpen, ButtonKind::Ghost, ImVec2(innerW / Dpi(), 42.0f))) {
+                const std::wstring arg = L"/select,\"" + renderBenchSaved_.wstring() + L"\"";
+                ShellExecuteW(nullptr, L"open", L"explorer.exe", arg.c_str(), nullptr, SW_SHOWNORMAL);
+            }
+        }
         ImGui::SetCursorScreenPos(ImVec2(sa.x + sp, sb.y - sp - Dp(42.0f) * 2.0f - Dp(10.0f)));
-        if (Button("##again", "다시 측정", icon::ArrowCcw, ButtonKind::Secondary, ImVec2(innerW / Dpi(), 42.0f)))
-            StartBenchmarkLoad();
+        if (Button("##again", "다시 측정", icon::ArrowCcw, ButtonKind::Secondary, ImVec2(innerW / Dpi(), 42.0f))) {
+            if (gi)
+                StartRenderBenchLoad();
+            else
+                StartBenchmarkLoad();
+        }
         ImGui::SetCursorScreenPos(ImVec2(sa.x + sp, sb.y - sp - Dp(42.0f)));
         if (Button("##lobby", "벤치마크 로비", icon::ArrowLeft, ButtonKind::Ghost, ImVec2(innerW / Dpi(), 42.0f))) {
             screen_ = Screen::BenchLobby;

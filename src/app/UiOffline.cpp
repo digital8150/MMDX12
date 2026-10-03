@@ -5,6 +5,7 @@
 #include <shellapi.h>
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstring>
 #include <ctime>
@@ -23,12 +24,25 @@ namespace mmdx {
 
 namespace {
 
-OfflineJobDesc MakeJobDesc(const AppOptions& o, bool video, bool prepass) {
+OfflineJobDesc MakeJobDesc(const AppOptions& o, const AppSettings& st, const VideoRenderConfig& v, bool video,
+                           bool prepass) {
     OfflineJobDesc j;
-    j.width = video ? kOfflineVideoWidth : kOfflineStillWidth;
-    j.height = video ? kOfflineVideoHeight : kOfflineStillHeight;
-    j.minSamples = video ? kOfflineVideoMinSamples : kOfflineStillMinSamples;
-    j.maxSamples = video ? kOfflineVideoMaxSamples : kOfflineStillMaxSamples;
+    // Effects: a video takes the render dialog's; a still takes the ones chosen when entering the scene.
+    j.bloom = video ? v.bloom : st.bloom;
+    j.bloomConvolution = video ? v.bloomConvolution : st.bloomConvolution;
+    j.volumetric = video ? v.volumetric : st.volumetric;
+    j.volumetricDensity = video ? v.volumetricDensity : st.volumetricDensity;
+    if (video) {
+        const VideoResolution& r = kVideoResolutions[v.resolution];
+        const VideoQualityPreset& q = kVideoQualities[v.quality];
+        j.width = r.width;
+        j.height = r.height;
+        j.minSamples = q.minSamples;
+        j.maxSamples = q.maxSamples;
+        j.errorThreshold = q.errorThreshold;
+        j.prepassRays = q.prepassRays;
+        j.maxBounces = q.maxBounces;
+    }
     if (o.offlineSize[0] > 0 && o.offlineSize[1] > 0) {
         j.width = (uint32_t)(o.offlineSize[0] & ~1);
         j.height = (uint32_t)(o.offlineSize[1] & ~1);
@@ -121,50 +135,99 @@ void App::StartOfflineStill() {
     offline_.frameCount = 1;
     offline_.startWall = timeSeconds_;
     offline_.beginPending = true;
-    offlineConfirmOpen_ = false;
     screen_ = Screen::Offline;
     LOG_INFO("offline still: %s", PathToUtf8(offline_.output).c_str());
 }
 
-void App::StartOfflineVideo(double startSeconds, double endSeconds) {
-    if (!scene_ || !renderer_.OfflineSupported() || offline_.mode != OfflineMode::None) return;
-    SetPlaying(false);
+void App::StartOfflineVideo(double startSeconds, double endSeconds, bool fromLobby, bool probe, bool background) {
+    if (!scene_ || offline_.mode != OfflineMode::None) return;
+    const VideoRenderConfig cfg = ActiveVideoConfig();
+    const bool cli = !options_.offlineVideo.empty() || (probe && options_.offlineProbe);
+    // Leaves a render that cannot start: back to the lobby (with the dialog open again after a probe).
+    const auto abort = [&](const char* title, const std::string& detail) {
+        if (background) {   // a sample render behind the dialog fails quietly; the estimate stays a rough one
+            bgProbe_.failedKey = CurrentVideoProbeKey();
+            offline_ = OfflineJob{};
+            return;
+        }
+        toast_ = {title, detail, {}, true, timeSeconds_ + 8.0};
+        offline_ = OfflineJob{};
+        if (fromLobby) {
+            UnloadScene();
+            screen_ = Screen::Select;
+            videoDialogOpen_ = probe;
+        }
+        if (cli) running_ = false;
+    };
+    if (cfg.Gi() && !renderer_.OfflineSupported()) {
+        abort("영상 렌더를 시작할 수 없습니다", "이 그래픽 카드에서는 오프라인 GI 렌더를 사용할 수 없습니다");
+        return;
+    }
+    if ((cfg.Renderer() == VideoRenderer::RayTraced || cfg.Renderer() == VideoRenderer::PathTraced) &&
+        !renderer_.RayTracingSupported()) {
+        abort("영상 렌더를 시작할 수 없습니다", "이 그래픽 카드에서는 레이 트레이싱을 사용할 수 없습니다");
+        return;
+    }
+    if (!background) SetPlaying(false);
     const double duration = scene_->endFrame / kMmdFps;
     startSeconds = std::clamp(startSeconds, 0.0, duration);
     endSeconds = std::clamp(endSeconds, startSeconds, duration);
     offline_ = OfflineJob{};
-    offline_.mode = OfflineMode::Video;
-    offline_.fromCli = !options_.offlineVideo.empty();
+    offline_.mode = probe ? OfflineMode::Probe : OfflineMode::Video;
+    offline_.background = background;
+    offline_.fromCli = cli;
+    offline_.fromLobby = fromLobby;
+    offline_.video = cfg;
+    offline_.realtime = !cfg.Gi();
     const std::string song = selSong_ >= 0 ? library_.songs[selSong_].displayName : "render";
-    offline_.output =
-        offline_.fromCli
-            ? options_.offlineVideo
-            : OfflineOutputDir(true) / Utf8ToPath("MMDX12_" + SanitizeFileName(song) + "_" + Timestamp() + ".mp4");
+    if (probe)
+        offline_.output = std::filesystem::temp_directory_path() / L"mmdx12_probe.mp4";
+    else
+        offline_.output =
+            offline_.fromCli
+                ? options_.offlineVideo
+                : OfflineOutputDir(true) / Utf8ToPath("MMDX12_" + SanitizeFileName(song) + "_" + Timestamp() + ".mp4");
     offline_.startSeconds = startSeconds;
-    offline_.frameCount = std::max(1, (int)std::floor((endSeconds - startSeconds) * kOfflineVideoFps + 1e-6));
-    const OfflineJobDesc jd = MakeJobDesc(options_, true, false);
+    offline_.frameCount =
+        probe ? (offline_.realtime ? 3 : 1)
+              : std::max(1, (int)std::floor((endSeconds - startSeconds) * offline_.video.fps + 1e-6));
+    if (probe) offline_.probeKey = CurrentVideoProbeKey();
+    const OfflineJobDesc jd = MakeJobDesc(options_, settings_, offline_.video, true, false);
     VideoEncoder::Desc d;
     d.width = jd.width;
     d.height = jd.height;
-    d.fps = kOfflineVideoFps;
-    d.videoBitrate = jd.height >= 2000 ? 100'000'000 : 40'000'000;
-    if (scene_->hasAudio && selSong_ >= 0) d.audioPath = library_.songs[selSong_].audioPath;
+    d.fps = (uint32_t)offline_.video.fps;
+    d.videoBitrate = (uint32_t)offline_.video.bitrateMbps * 1000000u;
+    if (!probe && scene_->hasAudio && selSong_ >= 0) d.audioPath = library_.songs[selSong_].audioPath;
     d.audioStartSeconds = startSeconds;
     offline_.encoder = std::make_unique<VideoEncoder>();
     std::string err;
     if (!offline_.encoder->Open(offline_.output, d, &err)) {
-        toast_ = {"영상 렌더를 시작할 수 없습니다", err, {}, true, timeSeconds_ + 8.0};
-        const bool cli = offline_.fromCli;
-        offline_ = OfflineJob{};
-        if (cli) running_ = false;
+        abort(probe ? "시간을 측정할 수 없습니다" : "영상 렌더를 시작할 수 없습니다", err);
         return;
+    }
+    if (offline_.realtime) {
+        // the real-time renderer produces the frames at the video's resolution; a path tracer frame
+        // accumulates several passes so its denoiser history converges
+        RenderSettings rs = VideoRealtimeSettings(cfg);
+        rs.fixedWidth = jd.width;
+        rs.fixedHeight = jd.height;
+        rs.headless = background;
+        renderer_.SetSettings(rs);
+        offline_.iterCount =
+            cfg.Renderer() == VideoRenderer::PathTraced ? (int)kVideoRealtimeQualities[cfg.quality].ptPasses : 1;
+        lastRenderedTime_ = -1.0;  // the first frame has no temporal history
     }
     scene_->physicsFrame = -1.0f;  // physics restarts from the animated pose at frame 0 of the video
     offline_.startWall = timeSeconds_;
     offline_.beginPending = true;
-    offlineConfirmOpen_ = false;
+    if (background) {
+        renderer_.SetOfflinePresent(false);   // nothing may reach the back buffer: the dialog is on screen
+        return;
+    }
     screen_ = Screen::Offline;
-    LOG_INFO("offline video: %d frames -> %s", offline_.frameCount, PathToUtf8(offline_.output).c_str());
+    LOG_INFO("offline %s: %s, %d frames -> %s", probe ? "probe" : "video", kVideoRenderers[cfg.renderer].label,
+             offline_.frameCount, PathToUtf8(offline_.output).c_str());
 }
 
 // ---------------------------------------------------------------------------
@@ -197,15 +260,17 @@ void App::UploadOfflinePrevPose(uint64_t slot) {
 
 void App::UpdateOffline() {
     if (screen_ == Screen::Play && !cliOfflineStarted_ && scene_ &&
-        (!options_.offlineStill.empty() || !options_.offlineVideo.empty())) {
+        (!options_.offlineStill.empty() || !options_.offlineVideo.empty() || options_.offlineProbe)) {
         cliOfflineStarted_ = true;
-        if (!renderer_.OfflineSupported()) {
-            LOG_ERROR("offline render unavailable (needs DXR)");
-            running_ = false;
-            return;
-        }
         if (!options_.offlineStill.empty()) {
+            if (!renderer_.OfflineSupported()) {
+                LOG_ERROR("offline render unavailable (needs DXR)");
+                running_ = false;
+                return;
+            }
             StartOfflineStill();
+        } else if (options_.offlineVideo.empty()) {
+            StartOfflineProbe();
         } else {
             const double duration = scene_->endFrame / kMmdFps;
             const double a = options_.offlineRange[0] >= 0 ? options_.offlineRange[0] : 0.0;
@@ -218,18 +283,51 @@ void App::UpdateOffline() {
         offline_.cancelRequested = true;
 }
 
+void App::RecordRealtimeVideoFrame(ID3D12GraphicsCommandList* cmd) {
+    if (offline_.beginPending) {
+        // a new video frame: pose it once; its further passes (path tracer history) re-upload the same pose
+        playTime_ = offline_.startSeconds + (double)offline_.frame / offline_.video.fps;
+        offline_.frameMmd = (float)(playTime_ * kMmdFps);
+        UpdateScene(offline_.frameMmd);
+        SaveOfflinePose();
+        offline_.iter = 0;
+        offline_.beginPending = false;
+        offline_.imageStartWall = timeSeconds_;
+        offline_.imageStartClock = std::chrono::steady_clock::now();
+    } else {
+        UploadOfflinePrevPose(ctx_.FrameNumber());
+    }
+    FrameView view;
+    BuildFrameView(offline_.frameMmd, view);   // a camera cut (first frame, seek) discards temporal history
+    renderer_.Render(cmd, view);
+}
+
 void App::RecordOfflineFrame(ID3D12GraphicsCommandList* cmd) {
+    if (offline_.realtime) {
+        RecordRealtimeVideoFrame(cmd);
+        return;
+    }
     if (!offline_.beginPending) {
         renderer_.RenderOffline(cmd);
         return;
     }
-    const bool video = offline_.mode == OfflineMode::Video;
-    playTime_ = offline_.startSeconds + (video ? (double)offline_.frame / kOfflineVideoFps : 0.0);
+    const bool probe = offline_.mode == OfflineMode::Probe;
+    const bool video = offline_.mode == OfflineMode::Video || probe;
+    playTime_ = offline_.startSeconds + (video ? (double)offline_.frame / offline_.video.fps : 0.0);
     const float frame = (float)(playTime_ * kMmdFps);
+    if (probe) {
+        // a sample frame from the middle of a video: the shutter opens at the previous video frame's pose
+        const float prevFrame = frame - kMmdFps / (float)offline_.video.fps;
+        UpdateScene(prevFrame);
+        FrameView pv;
+        BuildFrameView(prevFrame, pv);
+        offline_.prevCamera = pv.camera;
+        SaveOfflinePose();
+    }
     // Motion blur opens the shutter at the previous pose, held in the models' previous ring entry:
     // video re-uploads the previous video frame's pose there; a still taken during playback finds
     // the last live frame there already.
-    const bool blur = video ? offline_.frame > 0 : (offline_.wasPlaying && haveLastLiveCamera_);
+    const bool blur = video ? (offline_.frame > 0 || probe) : (offline_.wasPlaying && haveLastLiveCamera_);
     if (video && blur) {
         ctx_.WaitForGpu();   // the ring entry may still be read by in-flight offline work
         UploadOfflinePrevPose(ctx_.FrameNumber() - 1);
@@ -244,16 +342,19 @@ void App::RecordOfflineFrame(ID3D12GraphicsCommandList* cmd) {
         offline_.prevCamera = view.camera;
     }
     // the irradiance cache prepass is the render's GI: every image, video frames included
-    if (!renderer_.BeginOffline(cmd, view, MakeJobDesc(options_, video, true))) {
-        renderer_.Render(cmd, view);  // keep this frame valid
-        toast_ = {"고품질 렌더를 시작할 수 없습니다", "레이 트레이싱 장면을 만들지 못했습니다", {}, true,
-                  timeSeconds_ + 8.0};
+    if (!renderer_.BeginOffline(cmd, view, MakeJobDesc(options_, settings_, offline_.video, video, true))) {
+        if (!offline_.background) {
+            renderer_.Render(cmd, view);  // keep this frame valid
+            toast_ = {"고품질 렌더를 시작할 수 없습니다", "레이 트레이싱 장면을 만들지 못했습니다", {}, true,
+                      timeSeconds_ + 8.0};
+        }
         offline_.cancelRequested = true;  // AfterOfflineFrame finishes the job
         offline_.beginPending = false;
         return;
     }
     offline_.beginPending = false;
     offline_.imageStartWall = timeSeconds_;
+    offline_.imageStartClock = std::chrono::steady_clock::now();
 }
 
 void App::AfterOfflineFrame() {
@@ -263,14 +364,24 @@ void App::AfterOfflineFrame() {
         FinishOffline(true);
         return;
     }
-    if (offline_.beginPending || renderer_.OfflineStatus().phase != OfflinePhase::Done) return;
+    if (offline_.beginPending) return;
     ImageRGBA8 img;
-    if (!renderer_.ReadOfflineImage(img)) {
-        toast_ = {"렌더 결과를 읽을 수 없습니다", "", {}, true, timeSeconds_ + 8.0};
-        FinishOffline(true);
-        return;
+    if (offline_.realtime) {
+        if (++offline_.iter < offline_.iterCount) return;   // more passes accumulate into this frame
+        if (!renderer_.ReadFinalImage(img)) {
+            toast_ = {"렌더 결과를 읽을 수 없습니다", "", {}, true, timeSeconds_ + 8.0};
+            FinishOffline(true);
+            return;
+        }
+    } else {
+        if (renderer_.OfflineStatus().phase != OfflinePhase::Done) return;
+        if (!renderer_.ReadOfflineImage(img)) {
+            toast_ = {"렌더 결과를 읽을 수 없습니다", "", {}, true, timeSeconds_ + 8.0};
+            FinishOffline(true);
+            return;
+        }
     }
-    const double secs = std::max(0.0, timeSeconds_ - offline_.imageStartWall);
+    const double secs = std::chrono::duration<double>(std::chrono::steady_clock::now() - offline_.imageStartClock).count();
     offline_.avgImageSeconds =
         offline_.frame == 0 ? secs : (offline_.avgImageSeconds * offline_.frame + secs) / (offline_.frame + 1);
     if (offline_.mode == OfflineMode::Still) {
@@ -284,12 +395,25 @@ void App::AfterOfflineFrame() {
         FinishOffline(!ok);
         return;
     }
-    if (!offline_.encoder || !offline_.encoder->AddFrame(img)) {
+    const auto encodeStart = std::chrono::steady_clock::now();
+    const bool added = offline_.encoder && offline_.encoder->AddFrame(img);
+    const double encodeSecs = std::chrono::duration<double>(std::chrono::steady_clock::now() - encodeStart).count();
+    offline_.avgEncodeSeconds = offline_.frame == 0 ? encodeSecs
+                                                    : (offline_.avgEncodeSeconds * offline_.frame + encodeSecs) /
+                                                          (offline_.frame + 1);
+    if (!added) {
         toast_ = {"영상 인코딩에 실패했습니다", "", {}, true, timeSeconds_ + 8.0};
         FinishOffline(true);
         return;
     }
-    LOG_INFO("offline video: frame %d/%d (%.1f s)", offline_.frame + 1, offline_.frameCount, secs);
+    // a sample render measures the frames after the first of the real-time renderers (the first one warms
+    // the GPU up); the GI renderer's single image is long enough that warming up does not matter
+    if (offline_.mode == OfflineMode::Probe && (!offline_.realtime || offline_.frame >= 1)) {
+        offline_.probeSum += secs + encodeSecs;
+        ++offline_.probeN;
+    }
+    LOG_INFO("offline video: frame %d/%d (%.3f s, encode %.3f s)", offline_.frame + 1, offline_.frameCount, secs,
+             encodeSecs);
     if (++offline_.frame >= offline_.frameCount)
         FinishOffline(false);
     else
@@ -297,13 +421,32 @@ void App::AfterOfflineFrame() {
 }
 
 void App::FinishOffline(bool cancelled) {
+    if (offline_.background) {
+        // a sample render behind the dialog: keep the measurement, leave the screen and the scene alone
+        if (!cancelled && offline_.probeN >= 1) {
+            const double perFrame = offline_.probeSum / offline_.probeN;
+            settings_.SetVideoProbe(offline_.probeKey, perFrame);
+            settings_.Save(settingsPath_);
+            LOG_INFO("VIDEO PROBE %s: %.3f s per frame (%d measured)", kVideoRenderers[offline_.video.renderer].label,
+                     perFrame, offline_.probeN);
+        } else {
+            bgProbe_.failedKey = offline_.probeKey;
+        }
+        CancelBackgroundProbe();
+        return;
+    }
+    const bool probe = offline_.mode == OfflineMode::Probe;
     const bool video = offline_.mode == OfflineMode::Video;
     const bool cli = offline_.fromCli;
-    if (video && offline_.encoder) {
+    const bool lobby = (video || probe) && offline_.fromLobby;
+    if (offline_.realtime) ApplyRenderSettings();   // back from the video's fixed-resolution settings
+    if ((video || probe) && offline_.encoder) {
         const uint32_t written = offline_.encoder->FramesWritten();
         offline_.encoder->Finish();
         std::error_code ec;
-        if (written == 0) {
+        if (probe) {
+            std::filesystem::remove(offline_.output, ec);   // the sample frame is only measured, never kept
+        } else if (written == 0) {
             std::filesystem::remove(offline_.output, ec);
             if (!toast_.error || toast_.until < timeSeconds_)  // keep an error toast set just before
                 toast_ = {"영상 렌더를 취소했습니다", "", {}, false, timeSeconds_ + 6.0};
@@ -316,15 +459,37 @@ void App::FinishOffline(bool cancelled) {
             toast_ = {"고품질 영상을 저장했습니다", PathToUtf8(offline_.output.filename()), offline_.output, false,
                       timeSeconds_ + 10.0};
         }
-    } else if (!video && cancelled && (!toast_.error || toast_.until < timeSeconds_)) {
+    } else if (!video && !probe && cancelled && (!toast_.error || toast_.until < timeSeconds_)) {
         toast_ = {"스크린샷 렌더를 취소했습니다", "", {}, false, timeSeconds_ + 5.0};
+    }
+    if (probe) {
+        if (!cancelled && offline_.probeN >= 1) {
+            const double perFrame = offline_.probeSum / offline_.probeN;
+            settings_.SetVideoProbe(offline_.probeKey, perFrame);
+            settings_.Save(settingsPath_);
+            LOG_INFO("VIDEO PROBE %s: %.3f s per frame (%d measured)", kVideoRenderers[offline_.video.renderer].label,
+                     perFrame, offline_.probeN);
+            if (!toast_.error || toast_.until < timeSeconds_) {
+                char detail[96];
+                std::snprintf(detail, sizeof(detail), "프레임당 %.1f초 기준으로 예상 시간을 계산했습니다", perFrame);
+                toast_ = {"시간 측정을 마쳤습니다", detail, {}, false, timeSeconds_ + 6.0};
+            }
+        } else if (!toast_.error || toast_.until < timeSeconds_) {
+            toast_ = {"시간 측정을 취소했습니다", "", {}, false, timeSeconds_ + 5.0};
+        }
     }
     LOG_INFO("offline render %s: %s", cancelled ? "cancelled" : "finished", PathToUtf8(offline_.output).c_str());
     playTime_ = offline_.startSeconds;
     if (scene_ && scene_->hasAudio) audio_.Seek(playTime_);
     lastRenderedTime_ = -1.0;  // next real-time frame is a camera cut (no stale history)
     offline_ = OfflineJob{};
-    screen_ = Screen::Play;
+    if (lobby) {
+        UnloadScene();   // a render started from the select screen goes back to it
+        screen_ = Screen::Select;
+        if (probe) videoDialogOpen_ = true;   // the measurement answers the dialog it came from
+    } else {
+        screen_ = Screen::Play;
+    }
     if (cli) running_ = false;
 }
 
@@ -336,9 +501,17 @@ void App::DrawOfflineOverlay() {
     using namespace ui;
     ImGuiIO& io = ImGui::GetIO();
     if (!scene_) return;
-    const OfflineProgress& pr = renderer_.OfflineStatus();
+    OfflineProgress pr = renderer_.OfflineStatus();
     const Palette& p = P();
     const bool video = offline_.mode == OfflineMode::Video;
+    const bool probe = offline_.mode == OfflineMode::Probe;
+    if (offline_.realtime) {   // the real-time renderers report their own progress
+        pr = {};
+        pr.phase = OfflinePhase::Render;
+        pr.width = renderer_.Stats().outputWidth;
+        pr.height = renderer_.Stats().outputHeight;
+        pr.fraction = offline_.iterCount > 0 ? (float)offline_.iter / (float)offline_.iterCount : 0.0f;
+    }
 
     ImGui::SetNextWindowPos(ImVec2(0, 0));
     ImGui::SetNextWindowSize(io.DisplaySize);
@@ -367,13 +540,17 @@ void App::DrawOfflineOverlay() {
             offline_.cancelRequested = true;
         Icon(dl, video ? icon::FilmStrip : icon::Image, Dp(20.0f), ImVec2(x0 + Dp(10.0f), y + Dp(28.0f)), p.accent);
         Text(dl, Font::Semibold, size::Title, ImVec2(x0 + Dp(30.0f), y + Dp(18.0f)), p.ink,
-             video ? "고품질 영상 렌더링" : "고품질 스크린샷 렌더링");
+             video ? "고품질 영상 렌더링" : probe ? "샘플 렌더링으로 시간 측정 중" : "고품질 스크린샷 렌더링");
     }
 
     // row 2: status + elapsed
     std::string status;
     if (offline_.beginPending || pr.phase == OfflinePhase::Idle) {
         status = "장면 준비 중…";
+    } else if (offline_.realtime) {
+        status = offline_.iterCount > 1 ? "프레임 렌더링 · " + std::to_string(std::min(offline_.iter + 1, offline_.iterCount)) +
+                                              "/" + std::to_string(offline_.iterCount)
+                                        : "프레임 렌더링 중";
     } else if (pr.phase == OfflinePhase::Prepass) {
         status = "이래디언스 캐시 프리패스 · 메인 패스 (" + std::to_string(pr.prepassStep + 1) + "/" +
                  std::to_string(pr.prepassSteps) + ")";
@@ -402,7 +579,7 @@ void App::DrawOfflineOverlay() {
             std::to_string(offline_.frameCount);
         Text(dl, Font::Semibold, size::Body, ImVec2(x0, y + Dp(102.0f)), p.ink, left.c_str());
         const double elapsed = timeSeconds_ - offline_.startWall;
-        const double eta = offline_.avgImageSeconds *
+        const double eta = (offline_.avgImageSeconds + offline_.avgEncodeSeconds) *
                            (offline_.frameCount - offline_.frame - (double)pr.fraction);
         const std::string right = "경과 " + Hms(elapsed) + " · 남은 시간 " +
                                   (offline_.frame >= 1 ? "약 " + Hms(eta) : "계산 중");
@@ -416,15 +593,20 @@ void App::DrawOfflineOverlay() {
 
     // last line: format + output file name
     {
-        const std::string line = std::to_string(pr.width) + "×" + std::to_string(pr.height) + " · " +
-                                 PathToUtf8(offline_.output.filename());
+        std::string line = std::to_string(pr.width) + "×" + std::to_string(pr.height) + " · ";
+        if (video)
+            line += std::to_string(offline_.video.fps) + " fps · " + std::to_string(offline_.video.bitrateMbps) + " Mbps · ";
+        line += PathToUtf8(offline_.output.filename());
         const ImVec2 ts = TextSize(Font::Regular, size::Caption, line.c_str());
         Text(dl, Font::Regular, size::Caption, ImVec2(cx - ts.x * 0.5f, b.y - Dp(26.0f)), p.ink3, line.c_str());
     }
 
     // ---- top-left pill
     {
-        const char* label = "비실시간 렌더 · 전역 조명(GI) · Esc 취소";
+        const std::string labelText =
+            offline_.realtime ? std::string("영상 렌더 · ") + kVideoRenderers[offline_.video.renderer].label + " · Esc 취소"
+                              : "비실시간 렌더 · 전역 조명(GI) · Esc 취소";
+        const char* label = labelText.c_str();
         const ImVec2 ts = TextSize(Font::Semibold, size::Caption, label);
         const float pw = ts.x + Dp(28.0f), ph = Dp(30.0f);
         const ImVec2 pa(Dp(20.0f), Dp(20.0f)), pb(pa.x + pw, pa.y + ph);
@@ -435,79 +617,234 @@ void App::DrawOfflineOverlay() {
     ImGui::End();
 }
 
-void App::DrawOfflineConfirm() {
-    using namespace ui;
-    if (!offlineConfirmOpen_) return;
-    ImGuiIO& io = ImGui::GetIO();
+VideoRenderConfig App::ActiveVideoConfig() const {
+    VideoRenderConfig c = settings_.video;
+    if (options_.offlineFps == 24 || options_.offlineFps == 30 || options_.offlineFps == 60) c.fps = options_.offlineFps;
+    if (options_.offlineBitrate > 0) c.bitrateMbps = options_.offlineBitrate;
+    if (options_.offlineQuality >= 0) c.quality = options_.offlineQuality;
+    if (options_.offlineRenderer >= 0) c.renderer = options_.offlineRenderer;
+    if (options_.dof >= 0) c.dof = options_.dof != 0;
+    if (options_.volumetric >= 0) c.volumetric = options_.volumetric != 0;
+    if (options_.bloomConv >= 0) c.bloomConvolution = options_.bloomConv != 0;
+    c.Clamp();
+    return c;
+}
 
-    ImGui::SetNextWindowPos(ImVec2(0, 0));
-    ImGui::SetNextWindowSize(io.DisplaySize);
-    ImGui::SetNextWindowFocus();
-    ImGui::PushStyleColor(ImGuiCol_WindowBg, IM_COL32(16, 24, 32, 90));
-    ImGui::Begin("##offlineconfirm", nullptr,
-                 ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings |
-                     ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoScrollWithMouse);
-    ImGui::PopStyleColor();
-    ImDrawList* dl = ImGui::GetWindowDrawList();
-    const ImVec2 ds = io.DisplaySize;
+RenderSettings App::VideoRealtimeSettings(const VideoRenderConfig& cfg) const {
+    const VideoResolution& res = kVideoResolutions[std::clamp(cfg.resolution, 0, kVideoResolutionCount - 1)];
+    const VideoRealtimeQuality& q = kVideoRealtimeQualities[std::clamp(cfg.quality, 0, kVideoQualityCount - 1)];
+    RenderSettings rs = renderer_.Settings();
+    rs.fixedResolution = true;
+    rs.fixedWidth = res.width;
+    rs.fixedHeight = res.height;
+    rs.vsync = false;                    // frames are rendered as fast as they complete
+    rs.upscaler = UpscalerKind::None;
+    rs.renderScale = 1.0f;
+    rs.taa = false;
+    rs.renderPath = cfg.Renderer() == VideoRenderer::PathTraced  ? RenderPath::PathTraced
+                    : cfg.Renderer() == VideoRenderer::RayTraced ? RenderPath::RayTraced
+                                                                  : RenderPath::Raster;
+    rs.msaaSamples = q.msaa;
+    rs.shadows = true;
+    rs.shadowMapSize = q.shadowMapSize;
+    rs.ssao = true;
+    rs.ssr = true;
+    rs.ptSamples = q.ptSamples;
+    rs.ptBounces = q.ptBounces;
+    rs.bloom = cfg.bloom;
+    rs.bloomConvolution = cfg.bloomConvolution;
+    rs.volumetric = cfg.volumetric;
+    rs.volumetricDensity = cfg.volumetricDensity;
+    rs.dof = cfg.dof;
+    rs.dofAperture = cfg.dofAperture;
+    return rs;
+}
 
-    const double duration = scene_ ? scene_->endFrame / kMmdFps : 0.0;
-    const int frames = (int)std::floor(duration * kOfflineVideoFps);
-    const std::filesystem::path dir = OfflineOutputDir(true);
+void App::StartVideoRenderLoad() {
+    if (selCharacter_ < 0 || selSong_ < 0 || !VideoRendererAvailable(settings_.video.Renderer())) return;
+    settings_.video.Clamp();
+    settings_.Save(settingsPath_);
+    videoDialogOpen_ = false;
+    StartLoad(LoadTarget::OfflineVideo, &library_.characters[(size_t)selCharacter_],
+              selStage_ >= 0 ? &library_.stages[(size_t)selStage_] : nullptr, &library_.songs[(size_t)selSong_]);
+}
 
-    const Palette& p = P();
-    const float w = Dp(480.0f), h = Dp(236.0f);
-    const ImVec2 a((ds.x - w) * 0.5f, (ds.y - h) * 0.5f), b(a.x + w, a.y + h);
-    Panel(dl, a, b, Dp(20.0f));
-    const float x0 = a.x + Dp(28.0f), x1 = b.x - Dp(28.0f);
-    const float innerW = x1 - x0;
+void App::StartOfflineProbe() {
+    if (!scene_) return;
+    const double t = scene_->endFrame / kMmdFps * 0.45;   // a representative moment: neither the intro nor the outro
+    StartOfflineVideo(t, t + 1.0 / std::max(1, ActiveVideoConfig().fps), /*fromLobby*/ false, /*probe*/ true);
+}
 
-    Text(dl, Font::Bold, size::Heading, ImVec2(x0, a.y + Dp(24.0f)), p.ink, "고품질 영상 렌더링");
+// ---------------------------------------------------------------------------
+// Background sample render for the time estimate of the render dialog
+// ---------------------------------------------------------------------------
 
-    const std::string body1 = "곡 전체를 프레임마다 전역 조명(GI) 기반 비실시간 렌더링으로 그린 뒤, MP4 영상(" +
-                              std::to_string(kOfflineVideoWidth) + "×" + std::to_string(kOfflineVideoHeight) +
-                              " · " + std::to_string(kOfflineVideoFps) + "fps · H.264 + 음원)으로 저장합니다.";
-    // ~10 s per 4K frame on an RTX 3060 Laptop (irradiance cache + path tracing, motion blur, DoF)
-    const double days = frames * 10.0 / 86400.0;
-    char est[64];
-    if (days >= 1.0)
-        std::snprintf(est, sizeof(est), "약 %.1f일", days);
-    else
-        std::snprintf(est, sizeof(est), "약 %.0f시간", std::max(1.0, days * 24.0));
-    const std::string body2 =
-        "총 " + std::to_string(frames) + "프레임 · 프레임당 10초 안팎이 걸려 전체 렌더는 " + est +
-        "(GPU에 따라 다름) 걸릴 수 있습니다. 렌더 중에는 Esc로 언제든 중단할 수 있고, 그때까지의 영상은 저장됩니다.";
-    float y = a.y + Dp(60.0f);
+void App::CancelBackgroundProbe() {
+    if (!offline_.background) return;
+    const bool realtime = offline_.realtime;
+    if (!realtime) renderer_.CancelOffline();
+    if (offline_.encoder) {
+        offline_.encoder->Finish();
+        std::error_code ec;
+        std::filesystem::remove(offline_.output, ec);   // the sample frame is only measured, never kept
+    }
+    offline_ = OfflineJob{};
+    renderer_.SetOfflinePresent(true);
+    if (realtime) {
+        RenderSettings rs = renderer_.Settings();
+        rs.headless = false;
+        renderer_.SetSettings(rs);
+        ApplyRenderSettings();
+    }
+    lastRenderedTime_ = -1.0;
+}
 
-    auto drawWrapped = [&](const std::string& text, float yy) {
-        PushFont(Font::Regular, size::Body);
-        const float wrappedH = ImGui::CalcTextSize(text.c_str(), nullptr, false, innerW).y;
-        dl->AddText(nullptr, ImGui::GetFontSize(), ImVec2(x0, yy), p.ink2, text.c_str(), nullptr, innerW);
-        PopFont();
-        return yy + std::max(wrappedH, ImGui::GetTextLineHeight());
-    };
-    y = drawWrapped(body1, y) + Dp(10.0f);
-    y = drawWrapped(body2, y);
+void App::StopVideoProbe(bool unloadScene) {
+    CancelBackgroundProbe();
+    bgProbe_.pendingKey = 0;
+    if (unloadScene && scene_ && bgProbe_.sceneKey != 0 && screen_ == Screen::Select) UnloadScene();
+    if (!scene_) bgProbe_.sceneKey = 0;
+}
 
-    const std::string loc = "저장 위치: " + PathToUtf8(dir);
-    Text(dl, Font::Regular, size::Caption, ImVec2(x0, b.y - Dp(76.0f)), p.ink3, loc.c_str());
+void App::PollProbeScene() {
+    if (!bgProbe_.loading || !bgProbe_.loadFuture.valid()) return;
+    if (bgProbe_.loadFuture.wait_for(std::chrono::seconds(0)) != std::future_status::ready) return;
+    bool ok = bgProbe_.loadFuture.get();
+    bgProbe_.loading = false;
+    const bool wanted = videoDialogOpen_ && screen_ == Screen::Select && !scene_;
+    if (ok && wanted) {
+        bgProbe_.package->audioPath.clear();   // the sample render needs no sound
+        ok = BuildSceneRuntime(*bgProbe_.package);
+        if (ok) {
+            bgProbe_.sceneKey = bgProbe_.loadingSceneKey;
+            playing_ = false;
+            useMotionCamera_ = scene_->camera != nullptr && !options_.freeCamera;
+        }
+    } else if (!wanted) {
+        ok = true;   // nobody waits for it any more: just drop the package
+    }
+    if (!ok) {
+        LOG_WARN("video probe: scene unavailable (%s)", bgProbe_.error.c_str());
+        bgProbe_.failedKey = CurrentVideoProbeKey();
+    }
+    bgProbe_.package.reset();
+}
 
-    const float startW = ButtonWidth("렌더링 시작", true), cancelW = ButtonWidth("취소", false);
-    ImGui::SetCursorScreenPos(ImVec2(x1 - startW - Dp(10.0f) - cancelW, b.y - Dp(56.0f)));
-    bool cancel = false, start = false;
-    cancel = Button("##confcancel", "취소", nullptr, ButtonKind::Secondary, ImVec2(0, 40));
-    ImGui::SameLine(0.0f, Dp(10.0f));
-    start = Button("##confstart", "렌더링 시작", icon::FilmStrip, ButtonKind::Primary, ImVec2(0, 40));
-    ImGui::End();
+void App::StartBackgroundProbe(uint64_t key) {
+    (void)key;
+    if (!scene_ || offline_.mode != OfflineMode::None) return;
+    useMotionCamera_ = scene_->camera != nullptr && !options_.freeCamera;
+    const double t = scene_->endFrame / kMmdFps * 0.45;
+    StartOfflineVideo(t, t + 1.0 / std::max(1, ActiveVideoConfig().fps), /*fromLobby*/ false, /*probe*/ true,
+                      /*background*/ true);
+}
 
-    if (cancel || ImGui::IsKeyPressed(ImGuiKey_Escape)) {
-        offlineConfirmOpen_ = false;
+void App::UpdateVideoProbe() {
+    const bool want = videoDialogOpen_ && screen_ == Screen::Select && selCharacter_ >= 0 && selSong_ >= 0;
+    if (!want) {
+        if (offline_.background || bgProbe_.sceneKey != 0) StopVideoProbe(true);
+        bgProbe_.pendingKey = 0;
         return;
     }
-    if (start) {
-        offlineConfirmOpen_ = false;
-        StartOfflineVideo(0.0, duration);
+    if (offline_.mode != OfflineMode::None && !offline_.background) return;   // a real render owns the renderer
+    if (!VideoRendererAvailable(ActiveVideoConfig().Renderer())) {
+        CancelBackgroundProbe();
+        bgProbe_.pendingKey = 0;
+        return;
     }
+    const uint64_t key = CurrentVideoProbeKey();
+    if (settings_.FindVideoProbe(key)) {   // this combination was measured before: reuse it
+        CancelBackgroundProbe();
+        bgProbe_.pendingKey = 0;
+        return;
+    }
+    if (offline_.background) {
+        if (offline_.probeKey == key) return;   // already measuring exactly this
+        CancelBackgroundProbe();                // the settings changed meanwhile: start over
+    }
+    if (bgProbe_.failedKey == key) return;
+
+    // the scene is loaded once, at the first combination that needs measuring
+    const CharacterAsset& ch = library_.characters[(size_t)selCharacter_];
+    const std::string stageId = selStage_ >= 0 ? library_.stages[(size_t)selStage_].id : std::string();
+    const SongAsset& song = library_.songs[(size_t)selSong_];
+    const uint64_t sceneKey = VideoProbeKey(VideoRenderConfig{}, ch.id, stageId, song.id) | 1u;
+    if (!scene_ || bgProbe_.sceneKey != sceneKey) {
+        if (scene_ && bgProbe_.sceneKey != 0) UnloadScene();
+        if (bgProbe_.loading || scene_) return;
+        bgProbe_.package = std::make_unique<ScenePackage>();
+        bgProbe_.error.clear();
+        bgProbe_.progress.fraction.store(0.0f, std::memory_order_relaxed);
+        bgProbe_.loadingSceneKey = sceneKey;
+        bgProbe_.loading = true;
+        const CharacterAsset c = ch;
+        const bool hasStage = selStage_ >= 0;
+        const StageAsset st = hasStage ? library_.stages[(size_t)selStage_] : StageAsset{};
+        const SongAsset so = song;
+        bgProbe_.loadFuture = std::async(std::launch::async, [=, pkg = bgProbe_.package.get(), this] {
+            return LoadScenePackage(c, hasStage ? &st : nullptr, so, *pkg, &bgProbe_.progress, &bgProbe_.error);
+        });
+        return;
+    }
+
+    // let a slider drag or a quick series of clicks settle before spending GPU time on a sample
+    if (key != bgProbe_.pendingKey) {
+        bgProbe_.pendingKey = key;
+        bgProbe_.pendingSince = timeSeconds_;
+        return;
+    }
+    if (timeSeconds_ - bgProbe_.pendingSince < 0.8) return;
+    StartBackgroundProbe(key);
+}
+
+App::VideoProbeStatus App::ProbeStatus() const {
+    VideoProbeStatus st;
+    if (!videoDialogOpen_ || selCharacter_ < 0 || selSong_ < 0) return st;
+    if (offline_.background) {
+        st.phase = VideoProbeStatus::Phase::Measuring;
+        const double image = offline_.realtime
+                                 ? (offline_.iterCount > 0 ? (double)offline_.iter / offline_.iterCount : 0.0)
+                                 : (double)renderer_.OfflineStatus().fraction;
+        st.fraction = offline_.frameCount > 0
+                          ? (float)std::clamp((offline_.frame + image) / offline_.frameCount, 0.0, 1.0)
+                          : 0.0f;
+        return st;
+    }
+    const uint64_t key = CurrentVideoProbeKey();
+    if (settings_.FindVideoProbe(key) || bgProbe_.failedKey == key) return st;
+    if (!VideoRendererAvailable(ActiveVideoConfig().Renderer())) return st;
+    st.phase = VideoProbeStatus::Phase::Preparing;
+    return st;
+}
+
+bool App::VideoRendererAvailable(VideoRenderer r) const {
+    switch (r) {
+    case VideoRenderer::Raster: return true;
+    case VideoRenderer::RayTraced:
+    case VideoRenderer::PathTraced: return renderer_.RayTracingSupported();
+    case VideoRenderer::OfflineGI: return renderer_.OfflineSupported();
+    }
+    return false;
+}
+
+uint64_t App::CurrentVideoProbeKey() const {
+    const std::string ch = selCharacter_ >= 0 ? library_.characters[(size_t)selCharacter_].id : std::string();
+    const std::string st = selStage_ >= 0 ? library_.stages[(size_t)selStage_].id : std::string();
+    const std::string so = selSong_ >= 0 ? library_.songs[(size_t)selSong_].id : std::string();
+    return VideoProbeKey(ActiveVideoConfig(), ch, st, so);
+}
+
+App::VideoEstimate App::EstimateVideoRender() const {
+    VideoEstimate e;
+    const VideoRenderConfig cfg = ActiveVideoConfig();
+    const double duration = selSong_ >= 0 ? library_.songs[(size_t)selSong_].durationSec : 0.0;
+    e.frames = std::max(1, (int)std::floor(duration * cfg.fps));
+    const VideoProbe* probe = settings_.FindVideoProbe(CurrentVideoProbeKey());
+    e.measured = probe != nullptr;
+    e.secondsPerFrame = probe ? probe->secondsPerFrame : EstimatedSecondsPerFrame(cfg);
+    e.totalSeconds = e.frames * e.secondsPerFrame;
+    e.fileGigabytes = (double)cfg.bitrateMbps * duration / 8.0 / 1000.0;
+    return e;
 }
 
 void App::DrawToast() {

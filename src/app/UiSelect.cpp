@@ -685,15 +685,22 @@ void App::DrawSelect() {
         }
         ImGui::SetCursorScreenPos(ImVec2(pa.x + ip, by));
         ImGui::BeginDisabled(!canPlay);
-        if (Button("##play", "플레이", icon::Play, ButtonKind::Primary, ImVec2(innerW / Dpi(), 52.0f))) {
+        const float videoW = 138.0f;  // dp
+        if (Button("##play", "플레이", icon::Play, ButtonKind::Primary, ImVec2(innerW / Dpi() - videoW - 10.0f, 52.0f))) {
             settings_.Save(settingsPath_);
             StartLoad(LoadTarget::Play, ch, st, song);
+        }
+        ImGui::SameLine(0.0f, Dp(10.0f));
+        if (Button("##video", "영상 렌더", icon::FilmStrip, ButtonKind::Secondary, ImVec2(videoW, 52.0f))) {
+            settings_.Save(settingsPath_);
+            videoDialogOpen_ = true;
         }
         ImGui::EndDisabled();
     }
 
     // keyboard: Enter starts playback
-    if (selCharacter_ >= 0 && selSong_ >= 0 && !ImGui::GetIO().WantTextInput && ImGui::IsKeyPressed(ImGuiKey_Enter, false))
+    if (selCharacter_ >= 0 && selSong_ >= 0 && !videoDialogOpen_ && !ImGui::GetIO().WantTextInput &&
+        ImGui::IsKeyPressed(ImGuiKey_Enter, false))
         StartLoad(LoadTarget::Play, &library_.characters[(size_t)selCharacter_],
                   selStage_ >= 0 ? &library_.stages[(size_t)selStage_] : nullptr, &library_.songs[(size_t)selSong_]);
     EndScreen();
@@ -713,14 +720,20 @@ void App::DrawLoading() {
     const ImVec2 a(c.x - w * 0.5f, c.y - h * 0.5f), b(c.x + w * 0.5f, c.y + h * 0.5f);
     Panel(dl, a, b, Dp(18.0f), 1.2f);
 
-    const CharacterAsset* ch = selCharacter_ >= 0 && loadTarget_ == LoadTarget::Play ? &library_.characters[(size_t)selCharacter_] : nullptr;
-    const StageAsset* st = selStage_ >= 0 && loadTarget_ == LoadTarget::Play ? &library_.stages[(size_t)selStage_] : nullptr;
-    const SongAsset* song = selSong_ >= 0 && loadTarget_ == LoadTarget::Play ? &library_.songs[(size_t)selSong_] : nullptr;
+    const bool sceneLoad = loadTarget_ == LoadTarget::Play || loadTarget_ == LoadTarget::OfflineVideo;
+    const CharacterAsset* ch = selCharacter_ >= 0 && sceneLoad ? &library_.characters[(size_t)selCharacter_] : nullptr;
+    const StageAsset* st = selStage_ >= 0 && sceneLoad ? &library_.stages[(size_t)selStage_] : nullptr;
+    const SongAsset* song = selSong_ >= 0 && sceneLoad ? &library_.songs[(size_t)selSong_] : nullptr;
     const float ip = Dp(14.0f);
-    DrawScenePreview(ch, st, a.x + ip, a.y + ip, b.x - ip, a.y + ip + prevH - ip, Dp(12.0f));
+    if (loadTarget_ == LoadTarget::RenderBench)
+        DrawRenderBenchPreview(a.x + ip, a.y + ip, b.x - ip, a.y + ip + prevH - ip, Dp(12.0f));
+    else
+        DrawScenePreview(ch, st, a.x + ip, a.y + ip, b.x - ip, a.y + ip + prevH - ip, Dp(12.0f));
 
     float y = a.y + prevH + Dp(16.0f);
-    const char* title = loadTarget_ == LoadTarget::Benchmark ? "벤치마크 준비 중" : (song ? song->displayName.c_str() : "불러오는 중");
+    const char* title = loadTarget_ == LoadTarget::Benchmark     ? "벤치마크 준비 중"
+                        : loadTarget_ == LoadTarget::RenderBench ? "GI 렌더 벤치마크 준비 중"
+                                                                 : (song ? song->displayName.c_str() : "불러오는 중");
     TextEllipsis(dl, Font::Bold, size::Title + 2.0f, ImVec2(a.x + Dp(24.0f), y), b.x - Dp(24.0f), p.ink, title);
     y += Dp(34.0f);
     const bool failed = !loadError_.empty() && !loadFuture_.valid();
@@ -731,7 +744,7 @@ void App::DrawLoading() {
                      loadError_.c_str());
         ImGui::SetCursorScreenPos(ImVec2(b.x - Dp(24.0f) - Dp(120.0f), b.y - Dp(24.0f) - Dp(40.0f)));
         if (Button("##back", "돌아가기", icon::ArrowLeft, ButtonKind::Secondary, ImVec2(120.0f, 40.0f)))
-            screen_ = loadTarget_ == LoadTarget::Benchmark ? Screen::BenchLobby : Screen::Select;
+            screen_ = sceneLoad ? Screen::Select : Screen::BenchLobby;
     } else {
         const std::string status = loadProgress_.Status();
         TextEllipsis(dl, Font::Regular, size::Small, ImVec2(a.x + Dp(24.0f), y), b.x - Dp(24.0f), p.ink2,

@@ -13,7 +13,8 @@ struct BenchmarkCategory {
     uint32_t width, height;
     RenderPath path;
     const char* resLabel;  // "FHD" / "4K"
-    const char* pathLabel; // "Raster" / "RT" / "PT" (short, Latin)
+    const char* pathLabel; // "Raster" / "RT" / "PT" / "GI" (short, Latin)
+    bool offline = false;  // render benchmark: one offline GI image of the RenderBench scene (app/RenderBench.h)
 };
 
 inline constexpr BenchmarkCategory kBenchCategories[] = {
@@ -23,9 +24,12 @@ inline constexpr BenchmarkCategory kBenchCategories[] = {
     {"dx12-rt-4k",      "DX12 Ray Tracing · 4K (3840x2160)",  3840, 2160, RenderPath::RayTraced, "4K", "RT"},
     {"dx12-pt-fhd",     "DX12 Path Tracing · FHD (1920x1080)", 1920, 1080, RenderPath::PathTraced, "FHD", "PT"},
     {"dx12-pt-4k",      "DX12 Path Tracing · 4K (3840x2160)",  3840, 2160, RenderPath::PathTraced, "4K", "PT"},
+    {"dx12-gi-render",  "DX12 GI Render · 4K (3840x2160)",     3840, 2160, RenderPath::PathTraced, "4K", "GI", true},
 };
-// Index helpers: category = pathIndex * 2 + resIndex (pathIndex 0 raster, 1 RT, 2 PT; resIndex 0 FHD, 1 4K).
+// Index helpers: real-time category = pathIndex * 2 + resIndex (pathIndex 0 raster, 1 RT, 2 PT;
+// resIndex 0 FHD, 1 4K). kBenchGiRender is the render benchmark (single resolution).
 inline constexpr int kBenchPathCount = 3;
+inline constexpr int kBenchGiRender = 6;
 
 // Fixed workload: the animation advances exactly kBenchSimStep MMD-seconds per rendered
 // frame (independent of wall time), audio muted, vsync off, no upscaler, TAA off.
@@ -61,6 +65,9 @@ struct BenchmarkResult {
 //   score = round((avg*0.6 + low1*0.4) * resolutionFactor * stabilityFactor * 100)
 //   tier: >=18000 SSS, >=12000 SS, >=8000 S, >=5000 A, >=3000 B, >=1500 C, else D
 //   (tierTitle strings identical to the web version). Empty input -> score 0, tier "D".
+// Sets result.tier / tierTitle from result.score (thresholds above).
+void AssignBenchmarkTier(BenchmarkResult& result);
+
 BenchmarkResult ComputeBenchmarkResult(const std::vector<float>& frameTimesMs, double durationSec,
                                        const BenchmarkCategory& category);
 
