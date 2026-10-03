@@ -8,6 +8,7 @@
     <img src="https://img.shields.io/badge/Language-C%2B%2B20-39C5BB" alt="Language">
     <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-39C5BB" alt="License"></a>
     <a href="https://youtu.be/7S7D670HbIM"><img src="https://img.shields.io/badge/YouTube-Introduction-39C5BB?logo=youtube&logoColor=white" alt="YouTube"></a>
+    <a href="#support"><img src="https://img.shields.io/badge/Donate-Bitcoin-0f3b21?logo=bitcoin&logoColor=white" alt="Donate"></a>
   </p>
   <a href="https://youtu.be/vNztzqvVV4M">
     <img src="docs/media/promo-preview.webp" width="100%" alt="MMDX12 preview">
@@ -202,6 +203,16 @@ Conventions: MMD native space (left-handed, +Y up) everywhere. It matches D3D, s
 | [Phosphor Icons](https://github.com/phosphor-icons/core) | MIT |
 
 *Note: "MikuMikuDance" is by Yu Higuchi (樋口優) and Hatsune Miku is a Crypton Future Media character; MMDX12 is an unofficial fan project, not affiliated with either.*
+
+## Support
+
+If MMDX12 is useful to you, you can buy the author a coffee with Bitcoin (through a self-hosted BTCPay Server):
+
+<p>
+  <a href="https://pay.digitalism.site/api/v1/invoices?storeId=63rqo9gJMgSoEn8N59SfUmBLrU6KFeLrXVAxtJQh6fgT&price=5&currency=USD"><img src="https://img.shields.io/badge/Donate%20%245-0f3b21?style=for-the-badge&logo=bitcoin&logoColor=white" alt="Donate $5"></a>
+  <a href="https://pay.digitalism.site/api/v1/invoices?storeId=63rqo9gJMgSoEn8N59SfUmBLrU6KFeLrXVAxtJQh6fgT&price=10&currency=USD"><img src="https://img.shields.io/badge/Donate%20%2410-0f3b21?style=for-the-badge&logo=bitcoin&logoColor=white" alt="Donate $10"></a>
+  <a href="https://pay.digitalism.site/api/v1/invoices?storeId=63rqo9gJMgSoEn8N59SfUmBLrU6KFeLrXVAxtJQh6fgT&price=25&currency=USD"><img src="https://img.shields.io/badge/Donate%20%2425-0f3b21?style=for-the-badge&logo=bitcoin&logoColor=white" alt="Donate $25"></a>
+</p>
 
 ## License
 

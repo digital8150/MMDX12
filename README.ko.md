@@ -8,6 +8,7 @@
     <img src="https://img.shields.io/badge/Language-C%2B%2B20-39C5BB" alt="Language">
     <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-39C5BB" alt="License"></a>
     <a href="https://youtu.be/7S7D670HbIM"><img src="https://img.shields.io/badge/YouTube-Introduction-39C5BB?logo=youtube&logoColor=white" alt="YouTube"></a>
+    <a href="#후원"><img src="https://img.shields.io/badge/%ED%9B%84%EC%9B%90-Bitcoin-0f3b21?logo=bitcoin&logoColor=white" alt="후원"></a>
   </p>
   <a href="https://youtu.be/vNztzqvVV4M">
     <img src="docs/media/promo-preview.webp" width="100%" alt="MMDX12 미리보기">
@@ -202,6 +203,16 @@ tools       asset_probe, anim_probe, render_smoke (headless-ish self tests)
 | [Phosphor Icons](https://github.com/phosphor-icons/core) | MIT |
 
 *"MikuMikuDance"는 樋口優(Yu Higuchi)가 만들었고, 하츠네 미쿠는 Crypton Future Media의 캐릭터입니다. MMDX12는 비공식 팬 프로젝트이며 어느 쪽과도 관련이 없습니다.*
+
+## 후원
+
+MMDX12가 마음에 드셨다면 비트코인으로 커피 한 잔 사 주세요 (직접 운영하는 BTCPay Server로 결제됩니다):
+
+<p>
+  <a href="https://pay.digitalism.site/api/v1/invoices?storeId=63rqo9gJMgSoEn8N59SfUmBLrU6KFeLrXVAxtJQh6fgT&price=5000&currency=KRW"><img src="https://img.shields.io/badge/%ED%9B%84%EC%9B%90%20%E2%82%A95%2C000-0f3b21?style=for-the-badge&logo=bitcoin&logoColor=white" alt="후원 ₩5,000"></a>
+  <a href="https://pay.digitalism.site/api/v1/invoices?storeId=63rqo9gJMgSoEn8N59SfUmBLrU6KFeLrXVAxtJQh6fgT&price=10000&currency=KRW"><img src="https://img.shields.io/badge/%ED%9B%84%EC%9B%90%20%E2%82%A910%2C000-0f3b21?style=for-the-badge&logo=bitcoin&logoColor=white" alt="후원 ₩10,000"></a>
+  <a href="https://pay.digitalism.site/api/v1/invoices?storeId=63rqo9gJMgSoEn8N59SfUmBLrU6KFeLrXVAxtJQh6fgT&price=30000&currency=KRW"><img src="https://img.shields.io/badge/%ED%9B%84%EC%9B%90%20%E2%82%A930%2C000-0f3b21?style=for-the-badge&logo=bitcoin&logoColor=white" alt="후원 ₩30,000"></a>
+</p>
 
 ## 라이선스
 
