@@ -8,3 +8,5 @@ mmdx12.ini
 /external/dlss/bin/
 /external/xess/bin/
 /external/ffx/bin/
+# promo film kit (Remotion), kept local
+/videos/

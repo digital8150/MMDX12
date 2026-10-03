@@ -252,3 +252,25 @@ every frame and encodes an MP4, 3) GI with a Pixar/Disney-like look while keepin
 ### Session close
 - The temporary build directories (`build_dev`, `build_w1..3`) and a stray `%TEMP%mmdx_build.log` were removed; `build/` was rebuilt clean
   (the render that had locked it had ended). Working tree committed.
+
+## 2026-10-04 — Release prep: library-picked benchmarks, README, MIT licence
+
+### Done
+- Benchmarks no longer need an "official preset" (MMD assets can't ship): `PickBenchmarkScene` (Benchmark.h) takes the character and
+  stage with the most vertices and the song whose dance is closest to 2:30 (camera songs first). Every default run is submittable
+  (`benchSubmittable_`, was `benchOfficial_`); GI runs with `--bench-spp` / `--offline-size` still can't be submitted.
+- GI render benchmark cast (`PickRenderBenchCast`, RenderBench.h): the three characters with the most vertices (fewer repeat), each
+  posed from a library dance chosen by a seed hashed from the asset ids (same library = same scene). `PoseRenderBench` tries up to 8
+  frames in the middle 50 % of the dance and keeps the first standing one (head >= 85 % of rest height), and turns the upper body
+  (左腕 -> 右腕) toward the camera before the slot yaw.
+- Lobby: scene cards show the picked assets with a "라이브러리에서 자동 선택" badge; an info icon next to the leaderboard tag explains
+  that scores depend on the library (tooltip).
+- README rewritten for the public repo (animated preview -> release mp4, GI gallery, bring-your-own-assets notice, benchmark, third-party
+  table); media in `docs/media/`. MIT `LICENSE`. `videos/` (Remotion promo kit) is git-ignored and stays local.
+- Delegation: benchmark code by an opencode/GLM worker (one dangling `c_str()` of a temporary fixed by Claude), README by an
+  Antigravity/Gemini worker (video timing misattributed to all renderers, fixed; wording polished by Claude).
+- Checked: build; `--benchmark dx12-gi-render --bench-spp 64 --offline-size 960 540` (cast IA / Breath You / CWL, standing, facing
+  the camera); `--screen bench` capture; `--benchmark dx12-raster-fhd --bench-frames 240`.
+
+### Not verified
+- The leaderboard tooltip was not hovered (headless captures can't hover); the icon placement was checked in the capture.

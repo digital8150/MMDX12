@@ -18,28 +18,6 @@ namespace mmdx {
 
 namespace {
 
-// First index whose ToLowerAscii(id) contains ToLowerAscii(key), else -1.
-int FindPresetIndexChars(const std::vector<CharacterAsset>& v, const char* key) {
-    const std::string needle = ToLowerAscii(key);
-    for (size_t i = 0; i < v.size(); ++i)
-        if (ToLowerAscii(v[i].id).find(needle) != std::string::npos) return (int)i;
-    return -1;
-}
-
-int FindPresetIndexStages(const std::vector<StageAsset>& v, const char* key) {
-    const std::string needle = ToLowerAscii(key);
-    for (size_t i = 0; i < v.size(); ++i)
-        if (ToLowerAscii(v[i].id).find(needle) != std::string::npos) return (int)i;
-    return -1;
-}
-
-int FindPresetIndexSongs(const std::vector<SongAsset>& v, const char* key) {
-    const std::string needle = ToLowerAscii(key);
-    for (size_t i = 0; i < v.size(); ++i)
-        if (ToLowerAscii(v[i].id).find(needle) != std::string::npos) return (int)i;
-    return -1;
-}
-
 // "Windows 11 (build N)" / "Windows 10 (build N)".
 std::string OsVersionString() {
     using RtlGetVersionFn = LONG(WINAPI*)(PRTL_OSVERSIONINFOW);
@@ -114,17 +92,16 @@ std::string RenderTime(double sec) {
 } // namespace
 
 void App::StartBenchmarkLoad() {
-    const int presetChar = FindPresetIndexChars(library_.characters, kBenchPresetCharacter);
-    const int presetStage = FindPresetIndexStages(library_.stages, kBenchPresetStage);
-    const int presetSong = FindPresetIndexSongs(library_.songs, kBenchPresetSong);
-    benchOfficial_ = presetChar >= 0 && presetStage >= 0 && presetSong >= 0;
+    const BenchmarkScene sc = PickBenchmarkScene(library_);
+    benchSubmittable_ = sc.Runnable();
     settings_.Save(settingsPath_);
-    if (benchOfficial_) {
-        StartLoad(LoadTarget::Benchmark, &library_.characters[(size_t)presetChar], &library_.stages[(size_t)presetStage],
-                  &library_.songs[(size_t)presetSong]);
-    } else if (selCharacter_ >= 0 && selSong_ >= 0) {
-        StartLoad(LoadTarget::Benchmark, &library_.characters[(size_t)selCharacter_],
-                  selStage_ >= 0 ? &library_.stages[(size_t)selStage_] : nullptr, &library_.songs[(size_t)selSong_]);
+    if (sc.Runnable()) {
+        LOG_INFO("benchmark scene: %s / %s / %s",
+                 library_.characters[(size_t)sc.character].id.c_str(),
+                 sc.stage >= 0 ? library_.stages[(size_t)sc.stage].id.c_str() : "studio",
+                 library_.songs[(size_t)sc.song].id.c_str());
+        StartLoad(LoadTarget::Benchmark, &library_.characters[(size_t)sc.character],
+                  sc.stage >= 0 ? &library_.stages[(size_t)sc.stage] : nullptr, &library_.songs[(size_t)sc.song]);
     }
 }
 
@@ -143,11 +120,10 @@ void App::DrawBenchLobby() {
     const float leftW = Dp(420.0f);
     const float lx = pad;
 
-    const int presetChar = FindPresetIndexChars(library_.characters, kBenchPresetCharacter);
-    const int presetStage = FindPresetIndexStages(library_.stages, kBenchPresetStage);
-    const int presetSong = FindPresetIndexSongs(library_.songs, kBenchPresetSong);
-    benchOfficial_ = presetChar >= 0 && presetStage >= 0 && presetSong >= 0;
-    const bool hasSelection = selCharacter_ >= 0 && selSong_ >= 0;
+    const BenchmarkScene sc = PickBenchmarkScene(library_);
+    benchSubmittable_ = sc.Runnable();
+    RenderBenchCast cast;
+    const bool rbAssets = PickRenderBenchCast(library_, cast);
 
     // ---- left column
     float y = top;
@@ -159,12 +135,14 @@ void App::DrawBenchLobby() {
         ImGui::PushStyleColor(ImGuiCol_Text, ImGui::ColorConvertU32ToFloat4(p.ink2));
         ImGui::PushTextWrapPos(lx + leftW);
         if (IsGi(benchCategory_))
-            ImGui::TextUnformatted("시네벤치처럼 고정된 장면 한 장을 오프라인 GI 렌더러로 그리고, 끝까지 걸린 시간으로 "
-                                   "점수를 매깁니다. 유리 큐브의 굴절·분산·투과와 소프트박스 조명을 이래디언스 캐시와 "
-                                   "패스 트레이싱으로 계산합니다. 4K · 픽셀당 4096 샘플 고정.");
+            ImGui::TextUnformatted("시네벤치처럼 장면 한 장을 오프라인 GI 렌더러로 그리고, 끝까지 걸린 시간으로 점수를 매깁니다. "
+                                   "내 라이브러리에서 정점이 가장 많은 캐릭터 3명이 춤 동작의 한 순간을 취하고, 유리 큐브의 "
+                                   "굴절·분산·투과와 소프트박스 조명을 이래디언스 캐시와 패스 트레이싱으로 계산합니다. 4K · "
+                                   "픽셀당 4096 샘플 고정.");
         else
-            ImGui::TextUnformatted("같은 장면, 같은 작업량(프레임당 1/60초)으로 GPU 성능을 비교합니다. 음소거, 수직 동기화와 "
-                                   "업스케일러 끔, 높음 품질. 래스터·RT는 MSAA 4x, PT는 1 spp · 3회 반사.");
+            ImGui::TextUnformatted("내 라이브러리에서 정점이 가장 많은 캐릭터와 무대, 길이가 2분 30초에 가장 가까운 곡을 자동으로 "
+                                   "골라 같은 작업량(프레임당 1/60초)으로 측정합니다. 음소거, 수직 동기화와 업스케일러 끔, 높음 "
+                                   "품질. 래스터·RT는 MSAA 4x, PT는 1 spp · 3회 반사.");
         ImGui::PopTextWrapPos();
         ImGui::PopStyleColor();
         PopFont();
@@ -213,7 +191,7 @@ void App::DrawBenchLobby() {
         Text(dl, Font::Bold, 24.0f, ImVec2(a.x + Dp(18.0f), a.y + Dp(14.0f)), p.accentInk,
              kBenchCategories[kBenchGiRender].resLabel);
         char res[64];
-        std::snprintf(res, sizeof(res), "%u × %u  ·  %u spp  ·  GI", kRenderBenchWidth, kRenderBenchHeight,
+        std::snprintf(res, sizeof(res), "%u × %u  ·  %u spp  ·  GI 렌더", kRenderBenchWidth, kRenderBenchHeight,
                       kRenderBenchSamples);
         const ImVec2 rs = TextSize(Font::Regular, size::Small, res);
         Text(dl, Font::Regular, size::Small, ImVec2(b.x - Dp(18.0f) - rs.x, a.y + (chh - rs.y) * 0.5f), p.ink2, res);
@@ -250,28 +228,28 @@ void App::DrawBenchLobby() {
 
     Text(dl, Font::Semibold, size::Small, ImVec2(lx, y), p.ink2, "측정 장면");
     y += Dp(26.0f);
-    int rbChars[kRenderBenchPerformerCount], rbSongs[kRenderBenchPerformerCount];
-    const bool rbAssets = FindRenderBenchAssets(rbChars, rbSongs);
     if (IsGi(benchCategory_)) {
         const float ph = Dp(116.0f);
         const ImVec2 a(lx, y), b(lx + leftW, y + ph + Dp(64.0f));
         Panel(dl, a, b, Dp(14.0f), 0.8f);
         DrawRenderBenchPreview(a.x + Dp(8.0f), a.y + Dp(8.0f), b.x - Dp(8.0f), a.y + ph, Dp(10.0f));
+        const std::string names = rbAssets
+                                      ? (library_.characters[(size_t)cast.characters[0]].displayName + "  ·  " +
+                                         library_.characters[(size_t)cast.characters[1]].displayName + "  ·  " +
+                                         library_.characters[(size_t)cast.characters[2]].displayName)
+                                      : std::string("-");
         TextEllipsis(dl, Font::Semibold, size::Small, ImVec2(a.x + Dp(16.0f), a.y + ph + Dp(12.0f)), b.x - Dp(16.0f), p.ink,
-                     "Prism  ·  Sour 미쿠 3인  ·  유리 큐브 스튜디오");
+                     names.c_str());
         if (rbAssets)
-            Badge(dl, ImVec2(a.x + Dp(16.0f), a.y + ph + Dp(36.0f)), "공식 프리셋", WithAlpha(p.accent, 0.16f), p.accentInk);
+            Badge(dl, ImVec2(a.x + Dp(16.0f), a.y + ph + Dp(36.0f)), "라이브러리에서 자동 선택",
+                  WithAlpha(p.accent, 0.16f), p.accentInk);
         else
-            Badge(dl, ImVec2(a.x + Dp(16.0f), a.y + ph + Dp(36.0f)), "Sour 미쿠 모델 또는 모션 에셋이 없습니다", p.warnSoft,
-                  p.warn);
+            Badge(dl, ImVec2(a.x + Dp(16.0f), a.y + ph + Dp(36.0f)), "캐릭터 또는 모션이 없습니다", p.warnSoft, p.warn);
         y = b.y + Dp(24.0f);
     } else {
-        const CharacterAsset* ch = benchOfficial_ ? &library_.characters[(size_t)presetChar]
-                                                  : (hasSelection ? &library_.characters[(size_t)selCharacter_] : nullptr);
-        const StageAsset* st = benchOfficial_ ? &library_.stages[(size_t)presetStage]
-                                              : (hasSelection && selStage_ >= 0 ? &library_.stages[(size_t)selStage_] : nullptr);
-        const SongAsset* song = benchOfficial_ ? &library_.songs[(size_t)presetSong]
-                                               : (hasSelection ? &library_.songs[(size_t)selSong_] : nullptr);
+        const CharacterAsset* ch = sc.character >= 0 ? &library_.characters[(size_t)sc.character] : nullptr;
+        const StageAsset* st = sc.stage >= 0 ? &library_.stages[(size_t)sc.stage] : nullptr;
+        const SongAsset* song = sc.song >= 0 ? &library_.songs[(size_t)sc.song] : nullptr;
         const float ph = Dp(116.0f);
         const ImVec2 a(lx, y), b(lx + leftW, y + ph + Dp(64.0f));
         Panel(dl, a, b, Dp(14.0f), 0.8f);
@@ -281,11 +259,11 @@ void App::DrawBenchLobby() {
                                   (song ? song->displayName : std::string("-"));
         TextEllipsis(dl, Font::Semibold, size::Small, ImVec2(a.x + Dp(16.0f), a.y + ph + Dp(12.0f)), b.x - Dp(16.0f), p.ink,
                      names.c_str());
-        if (benchOfficial_)
-            Badge(dl, ImVec2(a.x + Dp(16.0f), a.y + ph + Dp(36.0f)), "공식 프리셋", WithAlpha(p.accent, 0.16f), p.accentInk);
+        if (sc.Runnable())
+            Badge(dl, ImVec2(a.x + Dp(16.0f), a.y + ph + Dp(36.0f)), "라이브러리에서 자동 선택",
+                  WithAlpha(p.accent, 0.16f), p.accentInk);
         else
-            Badge(dl, ImVec2(a.x + Dp(16.0f), a.y + ph + Dp(36.0f)),
-                  hasSelection ? "현재 선택으로 측정, 기록 제출 불가" : "공식 프리셋 에셋이 없습니다", p.warnSoft, p.warn);
+            Badge(dl, ImVec2(a.x + Dp(16.0f), a.y + ph + Dp(36.0f)), "캐릭터 또는 모션이 없습니다", p.warnSoft, p.warn);
         y = b.y + Dp(24.0f);
     }
 
@@ -299,7 +277,7 @@ void App::DrawBenchLobby() {
                                   : kBenchCategories[benchCategory_].path != RenderPath::Raster &&
                                         !renderer_.RayTracingSupported();
     ImGui::SetCursorScreenPos(ImVec2(lx, y));
-    ImGui::BeginDisabled((gi ? !rbAssets : (!benchOfficial_ && !hasSelection)) || rtUnavailable);
+    ImGui::BeginDisabled((gi ? !rbAssets : !sc.Runnable()) || rtUnavailable);
     if (Button("##start", gi ? "렌더 시작" : "측정 시작", gi ? icon::Image : icon::Lightning, ButtonKind::Primary,
                ImVec2(leftW / Dpi(), 52.0f))) {
         if (gi) {
@@ -318,8 +296,19 @@ void App::DrawBenchLobby() {
         const float ip = Dp(24.0f);
         Text(dl, Font::Bold, size::Heading, ImVec2(a.x + ip, a.y + ip - Dp(2.0f)), p.ink, "리더보드");
         const ImVec2 hs = TextSize(Font::Bold, size::Heading, "리더보드");
-        Badge(dl, ImVec2(a.x + ip + hs.x + Dp(12.0f), a.y + ip + Dp(3.0f)), CategoryTag(benchCategory_).c_str(),
-              WithAlpha(p.ink, 0.06f), p.ink2);
+        const ImVec2 badgePos(a.x + ip + hs.x + Dp(12.0f), a.y + ip + Dp(3.0f));
+        ImVec2 badgeSize;
+        Badge(dl, badgePos, CategoryTag(benchCategory_).c_str(), WithAlpha(p.ink, 0.06f), p.ink2, &badgeSize);
+        // info icon: the scores depend on each user's library
+        const ImVec2 iconTopLeft(badgePos.x + badgeSize.x + Dp(10.0f), badgePos.y + badgeSize.y * 0.5f - Dp(11.0f));
+        ImGui::SetCursorScreenPos(iconTopLeft);
+        ImGui::InvisibleButton("##lbinfo", ImVec2(Dp(22), Dp(22)));
+        const bool infoHover = ImGui::IsItemHovered();
+        Icon(dl, icon::Info, 18.0f, ImVec2(iconTopLeft.x + Dp(11.0f), iconTopLeft.y + Dp(11.0f)),
+             infoHover ? p.ink2 : p.ink3);
+        if (infoHover)
+            Tooltip("재미로 즐기는 벤치마크입니다. 측정 장면은 각자의 라이브러리에서 자동으로 고르므로(정점이 가장 많은 "
+                    "모델·무대, 2분 30초에 가까운 곡), 사용한 에셋에 따라 점수가 유리하거나 불리할 수 있습니다.");
         ImGui::SetCursorScreenPos(ImVec2(b.x - ip - Dp(36.0f), a.y + ip - Dp(6.0f)));
         if (IconButton("##refresh", icon::Refresh, "새로고침")) RefreshLeaderboard();
 
@@ -478,12 +467,13 @@ void App::DrawRenderBenchPreview(float x0, float y0, float x1, float y1, float r
     // rim light glows (teal left, pink right)
     dl->AddCircleFilled(ImVec2(x0 + w * 0.12f, y0 + h * 0.18f), h * 0.45f, IM_COL32(60, 200, 190, 14), 40);
     dl->AddCircleFilled(ImVec2(x1 - w * 0.12f, y0 + h * 0.22f), h * 0.42f, IM_COL32(240, 100, 170, 14), 40);
-    int chars[kRenderBenchPerformerCount], songs[kRenderBenchPerformerCount];
-    FindRenderBenchAssets(chars, songs);
+    // the three performers: the characters with the most vertices in the user's library
+    RenderBenchCast cast;
+    PickRenderBenchCast(library_, cast);
     const float xs[3] = {0.5f, 0.28f, 0.72f}, hs[3] = {0.98f, 0.86f, 0.86f};
     for (int k = 2; k >= 0; --k) {   // sides first, the centre performer on top
-        if (chars[k] < 0) continue;
-        const uint64_t tex = CharacterThumb(chars[k]);
+        if (cast.characters[k] < 0) continue;
+        const uint64_t tex = CharacterThumb(cast.characters[k]);
         if (!tex) continue;
         const float th = h * hs[k], tw = th * 0.75f, cx = x0 + w * xs[k];
         const float by = y1 - h * (k == 0 ? 0.04f : 0.10f);
@@ -571,7 +561,7 @@ void App::DrawRenderBenchOverlay() {
     ProgressBar(dl, ImVec2(x0, a.y + Dp(86.0f)), ImVec2(x1, a.y + Dp(92.0f)), std::min(frac, 0.995f));
     {
         char line[96];
-        std::snprintf(line, sizeof(line), "%u×%u · %u spp · Prism", pr.width, pr.height, spp);
+        std::snprintf(line, sizeof(line), "%u×%u · %u spp · GI 렌더", pr.width, pr.height, spp);
         const ImVec2 ts = TextSize(Font::Regular, size::Caption, line);
         Text(dl, Font::Regular, size::Caption, ImVec2((a.x + b.x - ts.x) * 0.5f, b.y - Dp(28.0f)), p.ink3, line);
     }
@@ -669,7 +659,7 @@ void App::FinishBenchmark() {
     LOG_INFO("BENCHMARK %s score=%d tier=%s avg=%.1f low1=%.1f low01=%.1f std=%.2f frames=%d official=%d",
              benchResult_.category.c_str(), benchResult_.score, benchResult_.tier.c_str(),
              benchResult_.avgFps, benchResult_.low1Fps, benchResult_.low01Fps, benchResult_.frametimeStdMs,
-             benchResult_.totalFrames, benchOfficial_ ? 1 : 0);
+             benchResult_.totalFrames, benchSubmittable_ ? 1 : 0);
     UnloadScene();
     ApplyRenderSettings();
     submitResult_.reset();
@@ -711,7 +701,7 @@ void App::DrawBenchResult() {
     Panel(dl, a, b, Dp(20.0f), 1.0f);
     const float ip = Dp(32.0f);
     const std::string head = std::string("벤치마크 결과  ·  ") + CategoryTag(benchCategory_) +
-                             (benchOfficial_ ? "  ·  공식 프리셋" : "  ·  비공식 실행");
+                             (benchSubmittable_ ? "  ·  내 라이브러리" : "  ·  테스트 실행");
     Text(dl, Font::Semibold, size::Small, ImVec2(a.x + ip, a.y + ip), p.ink2, head.c_str());
     const std::string score = Thousands((uint64_t)std::max(0, benchResult_.score));
     const ImVec2 ss = TextSize(Font::Bold, size::Display, score.c_str());
@@ -796,7 +786,7 @@ void App::DrawBenchResult() {
         const bool submitPending =
             submitFuture_.valid() && submitFuture_.wait_for(std::chrono::seconds(0)) != std::future_status::ready;
         const bool submitDone = submitResult_ && submitResult_->ok;
-        if (benchOfficial_) {
+        if (benchSubmittable_) {
             TextField("##nick", "닉네임", nicknameEdit_, sizeof(nicknameEdit_), innerW / Dpi(), "리더보드에 표시될 이름");
             Gap(12.0f);
             const bool nicknameEmpty = nicknameEdit_[0] == '\0';
@@ -845,9 +835,7 @@ void App::DrawBenchResult() {
             PushFont(Font::Regular, size::Small);
             ImGui::PushStyleColor(ImGuiCol_Text, ImGui::ColorConvertU32ToFloat4(p.ink2));
             ImGui::PushTextWrapPos(sb.x - sp);
-            ImGui::TextUnformatted(gi ? "기본 설정(4K · 4096 spp)으로 렌더한 결과만 리더보드에 제출할 수 있습니다."
-                                      : "공식 프리셋 에셋(Project DIVA 미쿠, theater, World is Mine)으로 측정한 결과만 "
-                                        "리더보드에 제출할 수 있습니다.");
+            ImGui::TextUnformatted("기본 설정(4K · 4096 spp)으로 렌더한 결과만 리더보드에 제출할 수 있습니다.");
             ImGui::PopTextWrapPos();
             ImGui::PopStyleColor();
             PopFont();

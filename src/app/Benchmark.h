@@ -3,6 +3,7 @@
 #include <string>
 #include <vector>
 
+#include "asset/AssetLibrary.h"
 #include "render/RenderTypes.h"
 
 namespace mmdx {
@@ -39,11 +40,15 @@ inline constexpr int kBenchWarmupFrames = 120;
 inline constexpr int kBenchMeasuredFrames = 3600;
 inline constexpr double kBenchSimStep = 1.0 / 60.0;
 
-// Official preset (results are only submittable when all three are found in the library):
-// matched case-insensitively as substrings of the asset id (library-relative path).
-inline constexpr const char* kBenchPresetCharacter = "miku/MikuProjectDIVAstyle_ver105.pmx";
-inline constexpr const char* kBenchPresetStage = "stage/theater";
-inline constexpr const char* kBenchPresetSong = "motion/worldismine";
+// Benchmark scene. MMDX12 ships no MMD assets, so the scene comes from the user's library: the character and the
+// stage with the most vertices and the song whose dance length is closest to kBenchSongTargetSec (songs with a camera
+// motion first). Scores therefore depend on the library; the benchmark is for fun, not a reference.
+inline constexpr float kBenchSongTargetSec = 150.0f;
+struct BenchmarkScene {
+    int character = -1, stage = -1, song = -1;   // indices into the library lists; stage -1 = studio
+    bool Runnable() const { return character >= 0 && song >= 0; }
+};
+BenchmarkScene PickBenchmarkScene(const LibraryScanResult& library);
 
 struct BenchmarkResult {
     std::string category;

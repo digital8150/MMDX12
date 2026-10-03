@@ -13,11 +13,89 @@ XMFLOAT3 Srgb(float r, float g, float b) {
     return {f(r), f(g), f(b)};
 }
 
+// 32-bit FNV-1a.
+uint32_t Fnv1a(uint32_t h, const char* s) {
+    for (const char* p = s; *p; ++p) {
+        h ^= (uint32_t)(uint8_t)*p;
+        h *= 16777619u;
+    }
+    return h;
+}
+
+// SplitMix-style finalizer.
+uint32_t Mix32(uint32_t x) {
+    x ^= x >> 16;
+    x *= 0x7feb352d;
+    x ^= x >> 15;
+    x *= 0x846ca68b;
+    x ^= x >> 16;
+    return x;
+}
+
 // Points per million path samples per second: an RTX 3060 Laptop GPU (~800 Msamples/s on this
 // scene) scores about 5000 (tier A); the tier thresholds are the real-time benchmark's.
 constexpr double kScorePerMsps = 6.25;
 
 } // namespace
+
+// The three characters with the most vertices (fewer characters repeat), each with a dance from
+// the library; the seed mixes the chosen characters' ids and every candidate song's id.
+bool PickRenderBenchCast(const LibraryScanResult& library, RenderBenchCast& out) {
+    if (library.characters.empty()) return false;
+
+    // characters: indices sorted by vertexCount descending (stable, ties keep the lower index).
+    std::vector<int> sorted;
+    sorted.reserve(library.characters.size());
+    for (size_t i = 0; i < library.characters.size(); ++i) sorted.push_back((int)i);
+    std::stable_sort(sorted.begin(), sorted.end(), [&library](int a, int b) {
+        return library.characters[(size_t)a].vertexCount > library.characters[(size_t)b].vertexCount;
+    });
+    for (int k = 0; k < kRenderBenchPerformerCount; ++k)
+        out.characters[k] = sorted[(size_t)(k % (int)sorted.size())];
+
+    // song candidates: dances of at least 10 s, else any dance with a duration.
+    std::vector<int> candidates;
+    for (size_t i = 0; i < library.songs.size(); ++i)
+        if (library.songs[i].durationSec >= 10.0f) candidates.push_back((int)i);
+    if (candidates.empty())
+        for (size_t i = 0; i < library.songs.size(); ++i)
+            if (library.songs[i].durationSec > 0.0f) candidates.push_back((int)i);
+    if (candidates.empty()) return false;
+
+    // seed: the chosen characters' id strings, then all candidate songs' id strings.
+    uint32_t seed = 2166136261u;
+    for (int k = 0; k < kRenderBenchPerformerCount; ++k) {
+        const std::string& id = library.characters[(size_t)out.characters[k]].id;
+        seed = Fnv1a(seed, id.c_str());
+        seed = Fnv1a(seed, "\n");
+    }
+    for (int i : candidates) {
+        seed = Fnv1a(seed, library.songs[(size_t)i].id.c_str());
+        seed = Fnv1a(seed, "\n");
+    }
+    out.seed = seed;
+
+    // songs: three distinct candidates when possible, else with repetition.
+    if (candidates.size() >= 3) {
+        std::vector<int> remaining = candidates;
+        for (int k = 0; k < kRenderBenchPerformerCount; ++k) {
+            const size_t idx = (size_t)(Mix32(seed + 101u * (uint32_t)(k + 1)) % remaining.size());
+            out.songs[k] = remaining[idx];
+            remaining.erase(remaining.begin() + (long)idx);
+        }
+    } else {
+        for (int k = 0; k < kRenderBenchPerformerCount; ++k)
+            out.songs[k] = candidates[Mix32(seed + 101u * (uint32_t)(k + 1)) % candidates.size()];
+    }
+    return true;
+}
+
+float RenderBenchPoseFrame(uint32_t seed, int slot, int attempt, float danceSeconds) {
+    const uint32_t u =
+        Mix32(seed ^ Mix32((uint32_t)(slot * 7919 + attempt * 104729 + 1))) & 0xFFFFFFu;
+    const float f = (0.25f + 0.5f * ((float)u / 16777216.0f)) * danceSeconds * 30.0f;
+    return std::floor(f);
+}
 
 void BuildRenderBenchView(const XMFLOAT3& centerHead, FrameView& view) {
     // ---- camera: low three-quarter view over the glass cube toward the three performers

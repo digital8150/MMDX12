@@ -27,6 +27,33 @@ constexpr Tier kTiers[] = {
 
 } // namespace
 
+BenchmarkScene PickBenchmarkScene(const LibraryScanResult& library) {
+    BenchmarkScene out;
+    for (size_t i = 0; i < library.characters.size(); ++i) {
+        if (out.character < 0 ||
+            library.characters[i].vertexCount > library.characters[(size_t)out.character].vertexCount)
+            out.character = (int)i;
+    }
+    for (size_t i = 0; i < library.stages.size(); ++i) {
+        if (out.stage < 0 || library.stages[i].vertexCount > library.stages[(size_t)out.stage].vertexCount)
+            out.stage = (int)i;
+    }
+    // Songs with a camera motion first, then the dance length closest to kBenchSongTargetSec.
+    bool anyCamera = false;
+    for (const SongAsset& s : library.songs)
+        if (s.durationSec > 0.0f && !s.cameraVmd.empty()) { anyCamera = true; break; }
+    for (size_t i = 0; i < library.songs.size(); ++i) {
+        const SongAsset& s = library.songs[i];
+        if (s.durationSec <= 0.0f) continue;
+        if (anyCamera && s.cameraVmd.empty()) continue;
+        const float dist = std::abs(s.durationSec - kBenchSongTargetSec);
+        if (out.song < 0 ||
+            dist < std::abs(library.songs[(size_t)out.song].durationSec - kBenchSongTargetSec))
+            out.song = (int)i;
+    }
+    return out;
+}
+
 BenchmarkResult ComputeBenchmarkResult(const std::vector<float>& frameTimesMs, double durationSec,
                                        const BenchmarkCategory& category) {
     BenchmarkResult out;

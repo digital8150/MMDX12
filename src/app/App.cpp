@@ -596,24 +596,17 @@ void App::PollScan() {
             return;
         }
         benchCategory_ = cat;
-        // Same preset-or-selection logic as the lobby's "측정 시작" button.
-        const auto findByPreset = [](const auto& list, const char* key) -> int {
-            const std::string needle = ToLowerAscii(key);
-            for (size_t i = 0; i < list.size(); ++i)
-                if (ToLowerAscii(list[i].id).find(needle) != std::string::npos) return (int)i;
-            return -1;
-        };
-        const int presetChar = findByPreset(library_.characters, kBenchPresetCharacter);
-        const int presetStage = findByPreset(library_.stages, kBenchPresetStage);
-        const int presetSong = findByPreset(library_.songs, kBenchPresetSong);
-        benchOfficial_ = presetChar >= 0 && presetStage >= 0 && presetSong >= 0;
-        if (benchOfficial_) {
-            StartLoad(LoadTarget::Benchmark, &library_.characters[presetChar],
-                      &library_.stages[presetStage], &library_.songs[presetSong]);
-        } else if (selCharacter_ >= 0 && selSong_ >= 0) {
-            StartLoad(LoadTarget::Benchmark, &library_.characters[selCharacter_],
-                      selStage_ >= 0 ? &library_.stages[selStage_] : nullptr,
-                      &library_.songs[selSong_]);
+        // Same library-picked scene as the lobby's "측정 시작" button.
+        const BenchmarkScene sc = PickBenchmarkScene(library_);
+        benchSubmittable_ = sc.Runnable();
+        if (sc.Runnable()) {
+            LOG_INFO("benchmark scene: %s / %s / %s", library_.characters[(size_t)sc.character].id.c_str(),
+                     sc.stage >= 0 ? library_.stages[(size_t)sc.stage].id.c_str() : "studio",
+                     library_.songs[(size_t)sc.song].id.c_str());
+            StartLoad(LoadTarget::Benchmark, &library_.characters[(size_t)sc.character],
+                      sc.stage >= 0 ? &library_.stages[(size_t)sc.stage] : nullptr, &library_.songs[(size_t)sc.song]);
+        } else {
+            LOG_ERROR("benchmark: the library needs at least one character and one song");
         }
         options_.benchmarkCategory.clear();
     }

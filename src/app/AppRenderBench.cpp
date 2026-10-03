@@ -34,44 +34,17 @@ std::string Timestamp() {
 }  // namespace
 
 // ---------------------------------------------------------------------------
-// Library lookup
-// ---------------------------------------------------------------------------
-
-bool App::FindRenderBenchAssets(int characters[kRenderBenchPerformerCount],
-                                int songs[kRenderBenchPerformerCount]) const {
-    for (int k = 0; k < kRenderBenchPerformerCount; ++k) {
-        const std::string charNeedle = ToLowerAscii(kRenderBenchPerformers[k].characterKey);
-        characters[k] = -1;
-        for (size_t i = 0; i < library_.characters.size(); ++i) {
-            if (ToLowerAscii(library_.characters[i].id).find(charNeedle) != std::string::npos) {
-                characters[k] = (int)i;
-                break;
-            }
-        }
-        const std::string songNeedle = ToLowerAscii(kRenderBenchPerformers[k].songKey);
-        songs[k] = -1;
-        for (size_t i = 0; i < library_.songs.size(); ++i) {
-            if (ToLowerAscii(library_.songs[i].id).find(songNeedle) != std::string::npos) {
-                songs[k] = (int)i;
-                break;
-            }
-        }
-        if (characters[k] < 0 || songs[k] < 0) return false;
-    }
-    return true;
-}
-
-// ---------------------------------------------------------------------------
 // Start (-> Loading -> BenchRender)
 // ---------------------------------------------------------------------------
 
 void App::StartRenderBenchLoad() {
-    int ch[kRenderBenchPerformerCount], so[kRenderBenchPerformerCount];
-    if (!FindRenderBenchAssets(ch, so)) {
-        LOG_ERROR("render benchmark assets missing");
+    RenderBenchCast cast;
+    if (!PickRenderBenchCast(library_, cast)) {
+        LOG_ERROR("render benchmark: the library needs at least one character and one song");
         if (renderBench_.fromCli) running_ = false;
         return;
     }
+    renderBench_.cast = cast;
 
     renderBench_.width = kRenderBenchWidth;
     renderBench_.height = kRenderBenchHeight;
@@ -88,7 +61,11 @@ void App::StartRenderBenchLoad() {
     }
     renderBench_.official = official;
     benchCategory_ = kBenchGiRender;
-    benchOfficial_ = renderBench_.official;
+    benchSubmittable_ = renderBench_.official;
+    for (int k = 0; k < kRenderBenchPerformerCount; ++k)
+        LOG_INFO("render bench cast %d: %s / %s", k, library_.characters[(size_t)cast.characters[k]].id.c_str(),
+                 library_.songs[(size_t)cast.songs[k]].id.c_str());
+    LOG_INFO("render bench cast seed %u", cast.seed);
 
     // The previous result image stays (the lobby may have drawn it this frame); it is replaced
     // when the new render finishes.
@@ -102,8 +79,8 @@ void App::StartRenderBenchLoad() {
     std::vector<CharacterAsset> chars;
     std::vector<SongAsset> songs;
     for (int k = 0; k < kRenderBenchPerformerCount; ++k) {
-        chars.push_back(library_.characters[ch[k]]);
-        songs.push_back(library_.songs[so[k]]);
+        chars.push_back(library_.characters[(size_t)cast.characters[k]]);
+        songs.push_back(library_.songs[(size_t)cast.songs[k]]);
     }
     loadFuture_ = std::async(std::launch::async, [chars, songs, pkg = loadPackage_.get(), this] {
         return LoadRenderBenchPackage(chars, songs, *pkg, &loadProgress_, &loadError_);
@@ -132,35 +109,75 @@ void App::PoseRenderBench() {
             inst->UpdatePose();
             continue;
         }
-        const RenderBenchPerformer& d = kRenderBenchPerformers[k];
+        const RenderBenchSlot& slot = kRenderBenchSlots[k];
 
-        // 1. where the dance puts the centre bone at the pose frame (no root transform yet)
         XMFLOAT4X4 identity;
         XMStoreFloat4x4(&identity, XMMatrixIdentity());
         inst->SetRootTransform(identity);
+
+        // 1. rest head height: standing pose with physics off
         inst->EnablePhysics(false);
-        mo->Evaluate(d.poseFrame, *inst);
+        inst->ResetPose();
+        inst->UpdatePose(0.0f);
+        const int head = inst->Model().FindBone("\xE9\xA0\xAD");  // 頭
+        const bool hasHead = head >= 0;
+        const float restHead = hasHead ? inst->BoneWorldPosition(head).y : 0.0f;
+
+        // 2. pose search: the first candidate frame inside the middle of the dance whose head is
+        //    high enough (standing, not crouching or lying), else the highest-headed frame
+        float danceSeconds = library_.songs[(size_t)renderBench_.cast.songs[k]].durationSec;
+        if (danceSeconds <= 0.0f) danceSeconds = 60.0f;
+        int chosen = -1;
+        float bestHead = -1.0f, bestFrame = 0.0f;
+        for (int attempt = 0; attempt < kRenderBenchPoseAttempts; ++attempt) {
+            const float frame = RenderBenchPoseFrame(renderBench_.cast.seed, k, attempt, danceSeconds);
+            mo->Evaluate(frame, *inst);
+            inst->UpdatePose(0.0f);
+            const float y = hasHead ? inst->BoneWorldPosition(head).y : 0.0f;
+            if (chosen < 0 || y > bestHead) {
+                bestHead = y;
+                bestFrame = frame;
+            }
+            if (chosen < 0 && y >= 0.85f * restHead) chosen = (int)attempt;
+        }
+        const float poseFrame = chosen >= 0
+                                    ? RenderBenchPoseFrame(renderBench_.cast.seed, k, chosen, danceSeconds)
+                                    : bestFrame;
+
+        // 3. evaluate the chosen frame (identity root, physics off): centre bone and body yaw
+        inst->EnablePhysics(false);
+        mo->Evaluate(poseFrame, *inst);
         inst->UpdatePose(0.0f);
         const int center = inst->Model().FindBone("\xE3\x82\xBB\xE3\x83\xB3\xE3\x82\xBF\xE3\x83\xBC");  // センター
         XMFLOAT3 c = center >= 0 ? inst->BoneWorldPosition(center) : XMFLOAT3{0, 0, 0};
+        const int armL = inst->Model().FindBone("\xE5\xB7\xA6\xE8\x85\x95");  // 左腕
+        const int armR = inst->Model().FindBone("\xE5\x8F\xB3\xE8\x85\x95");  // 右腕
+        float bodyYaw = 0.0f;
+        if (armL >= 0 && armR >= 0) {
+            const XMFLOAT3 pl = inst->BoneWorldPosition(armL), pr = inst->BoneWorldPosition(armR);
+            const float dx = pl.x - pr.x, dz = pl.z - pr.z;
+            if (dx * dx + dz * dz > 1e-6f) bodyYaw = std::atan2f(-dz, dx);
+        }
 
-        // 2. placement: move the centre over the origin, turn, move to (x, z)
+        // 4. placement: move the centre over the origin, face the camera (upper body), move to the slot
         XMFLOAT4X4 root;
         XMStoreFloat4x4(&root, XMMatrixTranslation(-c.x, 0.0f, -c.z) *
-                                   XMMatrixRotationY(XMConvertToRadians(d.yawDeg)) *
-                                   XMMatrixTranslation(d.x, 0.0f, d.z));
+                                   XMMatrixRotationY(XMConvertToRadians(slot.yawDeg) - bodyYaw) *
+                                   XMMatrixTranslation(slot.x, 0.0f, slot.z));
         inst->SetRootTransform(root);
 
-        // 3. physics pre-roll: kRenderBenchPrerollFrames of motion in 60 Hz steps, ending exactly
+        // 5. physics pre-roll: kRenderBenchPrerollFrames of motion in 60 Hz steps, ending exactly
         //    at the pose frame
         inst->EnablePhysics(true);
         inst->ResetPhysics();
         const int steps = (int)std::lround(kRenderBenchPrerollFrames * 2.0f);
         for (int s = 0; s <= steps; ++s) {
-            const float f = d.poseFrame - kRenderBenchPrerollFrames + (float)s * 0.5f;
+            const float f = poseFrame - kRenderBenchPrerollFrames + (float)s * 0.5f;
             mo->Evaluate(std::max(f, 0.0f), *inst);
             inst->UpdatePose(s == 0 ? 0.0f : 1.0f / 60.0f);
         }
+        LOG_INFO("render bench: performer %d frame %.0f bodyYaw %.1f deg", k, (double)poseFrame,
+                 (double)(XMConvertToDegrees(bodyYaw)));
     }
     LOG_INFO("render bench: posed %d performers", count);
 }

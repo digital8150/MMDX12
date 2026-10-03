@@ -1,83 +1,137 @@
-# MMDX12: MikuMikuDance DX12 Player
+<div align="center">
+  <h1>MMDX12</h1>
+  <p>A native Direct3D 12 MikuMikuDance player — real-time ray tracing, path tracing, and an offline GI renderer for Blender-class MMD videos.</p>
+  <p>차세대 MMD 플레이어 — 레이 트레이싱, 패스 트레이싱, 오프라인 GI 렌더</p>
+  <p>
+    <img src="https://img.shields.io/badge/Platform-Windows%2010%2F11-39C5BB" alt="Platform">
+    <img src="https://img.shields.io/badge/Graphics-Direct3D%2012%20%2B%20DXR%201.1-39C5BB" alt="Graphics">
+    <img src="https://img.shields.io/badge/Language-C%2B%2B20-39C5BB" alt="Language">
+    <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-39C5BB" alt="License"></a>
+  </p>
+  <a href="https://github.com/digital8150/MMDX12/releases/latest/download/MMDX12-intro-1080p60.mp4">
+    <img src="docs/media/promo-preview.webp" width="100%" alt="Preview">
+  </a>
+  <br>
+  <a href="https://github.com/digital8150/MMDX12/releases/latest/download/MMDX12-intro-1080p60.mp4">▶ Watch the full promo (58 s, 1080p60)</a>
+  <p>
+    <a href="#gallery">Gallery</a> ·
+    <a href="#highlights">Highlights</a> ·
+    <a href="#bring-your-own-assets">Assets</a> ·
+    <a href="#getting-started">Getting started</a> ·
+    <a href="#benchmark-for-fun">Benchmark</a>
+  </p>
+</div>
 
-A Windows Direct3D 12 MikuMikuDance (MMD) client. Drop MMD characters (PMX), stages (PMX) and
-dance sets (VMD motion + camera + music) into the library folder in any layout; the client
-classifies them by content.
+## Gallery
 
-## Build
+Unedited stills from the built-in offline GI renderer (3840×2160, shown downscaled).
 
-Requirements: Visual Studio 2026 (v18, MSVC 14.5x) with the Windows SDK, and CMake + Ninja on PATH
-(`pip install cmake ninja`). All third-party code is vendored in `external/`.
+<table>
+  <tr>
+    <td>
+      <img src="docs/media/gi-open-arms.jpg" width="100%">
+      <br><i>Soft studio light, thin-lens depth of field</i>
+    </td>
+    <td>
+      <img src="docs/media/gi-point.jpg" width="100%">
+      <br><i>Close-up with a bokeh foreground</i>
+    </td>
+  </tr>
+  <tr>
+    <td>
+      <img src="docs/media/gi-stage.jpg" width="100%">
+      <br><i>Night stage, depth of field and bokeh</i>
+    </td>
+    <td>
+      <img src="docs/media/gi-render-bench.jpg" width="100%">
+      <br><i>GI render benchmark: refraction and dispersion through a glass cube</i>
+    </td>
+  </tr>
+</table>
 
-```
-build.cmd                 # -> build\bin\MMDX12.exe (RelWithDebInfo)
+## Highlights
+
+- **Drop-in library**: any folder layout; characters, stages and dance sets are classified by content.
+- **Real-time raster**: MMD toon shading, cascaded shadows, SSAO, SSR and TAA.
+- **DXR 1.1 ray tracing**: RT shadows, RTAO and RT reflections.
+- **Path tracing**: 1–4 spp with a temporal + à-trous denoiser.
+- **Upscalers**: DLSS, FSR and XeSS.
+- **Post effects**: depth of field, volumetric light, FFT convolution bloom, colour LUTs (built-in looks or any `.cube`).
+- **Physics**: PMX rigid bodies and joints in Bullet (hair, skirts, accessories).
+- **Offline GI renderer**: irradiance cache + path tracing with depth of field, motion blur and skin subsurface scattering, for 4K stills and MP4 videos. The render dialog measures its own time estimate.
+- **Benchmark**: real-time and GI render categories with an online leaderboard.
+
+## Interface
+
+<img src="docs/media/ui-library.jpg" width="100%" alt="Library UI">
+<br><sub>The library screen. The UI is in Korean.</sub>
+
+## Bring your own assets
+
+> [!IMPORTANT]
+> MMDX12 ships NO models, motions, stages, or music. MMD assets are licensed by their authors and cannot be redistributed, so you point MMDX12 at your own library folder and must follow each asset's terms (e.g., many models forbid commercial use or require credit when you publish videos). The images and film in this README were made with the author's local library.
+
+The library folder is resolved as follows: `--library`, then `mmdx12.ini`, then `<exe>\library`, then the first `library\` folder found walking up from the executable.
+
+**Library classification**
+- **Character**: a PMX with humanoid bones (`頭`, `左腕`, `左足`/`左ひざ`), not under a `stage` folder.
+- **Stage**: any other PMX. All PMX files in one folder form one stage (multi-part stages). Byte-identical duplicates are dropped. A non-humanoid PMX next to a character is treated as an accessory and skipped.
+- **Song**: a folder with a VMD containing bone keys. The camera is the VMD with camera keys. Morph-only VMDs are facial layers. The audio is a wav/mp3/flac/ogg in the same or the parent folder. When there are several dance VMDs, the one whose length best matches the audio wins.
+
+## Getting started
+
+**Requirements:**
+- Windows 10/11, a D3D12 GPU.
+- DXR 1.1 required for RT/PT/GI.
+- Visual Studio 2026 v18 with MSVC 14.5x + Windows SDK.
+- CMake + Ninja (via `pip install cmake ninja`).
+
+**Build commands:**
+```text
+build.cmd
 build.cmd build --target asset_probe
 ```
 
-## Run
-
-`build\bin\MMDX12.exe`. The library folder is resolved as follows: `--library`, then `mmdx12.ini`,
-then `<exe>\library`, then the first `library\` folder found walking up from the exe.
-The demo assets came from the the server server (`<server>/assets`) into `library/`, which is git-ignored.
-
-Screens: **library** (character / stage / song cards with rendered thumbnails, scene preview,
-graphics quality and lighting) → **play**, and **benchmark** (lobby + online leaderboard →
-fixed-workload run → score/submit). Light theme, Pretendard + Phosphor (assets/fonts, OFL/MIT).
-Thumbnails are rendered once and cached in `%LOCALAPPDATA%/MMDX12/thumbs`.
-
-Rendering features:
-
-- **DXR 1.1 ray tracing**: RT shadows, RTAO, RT reflections (렌더링 → 레이 트레이싱).
-- **Path tracing**: 1–4 samples per pixel with a temporal + à-trous denoiser (패스 트레이싱).
-- **Upscalers**: DLSS, FSR and XeSS (품질/균형/성능/울트라); the DLLs are fetched with
-  `tools/fetch_sdks.ps1`.
-- **Post effects** (세부 설정 → 효과, independent of the quality presets, off in the benchmark):
-  depth of field focused on the character's head (bokeh gather, 조리개), volumetric light (half-res
-  ray march through height fog: sun via the shadow map, stage spotlight cones; 안개 밀도), FFT
-  convolution bloom with a starburst kernel, and colour LUTs (six built-in looks plus any `.cube`
-  file in `<exe>/luts` or `<library>/luts`, with an intensity slider).
-- **Offline GI renders** (play bar: 카메라 = 고품질 스크린샷 / P key; 고품질 영상 렌더 = the select screen's "영상 렌더" button next to
-  "플레이", which opens a dialog for resolution (720p–4K), frame rate (24/30/60), GI quality (draft / standard / high / best:
-  samples per pixel, irradiance-cache gather rays, max bounces), and bit rate, with a time and file size estimate; videos
-  only, stills stay 4K; needs DXR):
-  a non-real-time renderer independent of the graphics settings, always at maximum quality, built
-  like Cinema 4D's irradiance-cache GI. Prepass: six adaptive coarse-to-fine passes of screen-grid
-  indirect-irradiance samples (512 multi-bounce gather paths each, denser at geometric edges), shown
-  as the cache-lit scene with the sample points as white dots, then edge-aware smoothing. Render:
-  path tracing with adaptive sampling (256–4096 spp) that takes indirect diffuse from the cache (brute
-  force where the cache has no matching surface), with per-pixel direct light, soft shadows,
-  reflections, thin-lens depth of field focused on the character's head, motion blur (180° shutter:
-  geometry and camera rebuilt per iteration), skin subsurface scattering (diffused sun, warm
-  terminator, translucency of thin backlit parts), edge-aware denoise, bloom, aerial haze and a soft
-  grade. Characters keep the MMD toon key light and outlines (raster inverted hull re-drawn per
-  iteration with the same lens/shutter sample). The preview refines from noise.
-  Stills: 3840×2160 PNG in `Pictures\MMDX12` (~20 s on an RTX 3060 Laptop). Videos: the whole song
-  at 3840×2160 60 fps, H.264 (100 Mbps) + AAC (the song) MP4 via Media Foundation in
-  `Videos\MMDX12` (~10 s per frame, about a day for a full song); Esc stops and keeps the frames so far.
-- **Benchmark categories**: `dx12-rt-fhd`, `dx12-rt-4k`, `dx12-pt-fhd`, `dx12-pt-4k` alongside the
-  raster ones.
-- **GI render benchmark** (`dx12-gi-render`, Cinebench style; 벤치마크 → GI 렌더): one 3840×2160 image of a
-  dedicated scene ("Prism") rendered by the offline GI renderer with exactly 4096 samples per pixel,
-  scored by the total render time (score = 6.25 × million samples per second; ~5,200 / 41 s on an RTX
-  3060 Laptop). Three Sour Miku models (White, Breath You, ChunWeiLai) hold poses taken from dance
-  motions (with a physics pre-roll) behind a rounded glass cube: refraction with dispersion,
-  Beer-Lambert absorption and transparent shadows, two softboxes and teal/pink rim spots on a dark
-  cyclorama. Scene and score: `src/app/RenderBench.*`; glass in `shaders/offline_glass.hlsli` /
-  `offline_gi.hlsl`. The image is saved to `Pictures\MMDX12` and shown on the result screen.
-
-Physics: the character's PMX rigid bodies and joints run in Bullet (hair, skirts, accessories),
-stepped by the motion clock at 120 Hz. Seeks, loops and teleports in the motion reset the bodies to
-the animated pose. Toggle it under 세부 설정 → 물리 연산, or with `--no-physics`. The benchmark always
-simulates.
-
-Play controls: Space (play/pause), ←/→ (seek ±5 s), C (motion/free camera), L (lighting preset),
-F1 (hide UI), mouse drag (orbit), right drag (pan), wheel (zoom), Esc (back).
-
-Command line (also used for automated checks):
+**Optional upscalers:**
+Fetch the optional upscaler DLLs, then rebuild (missing DLLs only disable that upscaler):
+```powershell
+powershell -ExecutionPolicy Bypass -File tools/fetch_sdks.ps1
 ```
+
+**Run:**
+`build\bin\MMDX12.exe`
+
+## Using it
+
+- **Screens**: Library → Play, 영상 렌더 render dialog, Benchmark.
+- **Play controls**: Space (play/pause), ←/→ (seek ±5 s), C (motion/free camera), L (lighting preset), F1 (hide UI), mouse drag (orbit), right drag (pan), wheel (zoom), Esc (back).
+- **Offline renders**:
+  - P key / camera button = 4K PNG still in `Pictures\MMDX12` (~20 s on an RTX 3060 Laptop).
+  - 영상 렌더 (next to 플레이) = H.264 + AAC MP4 in `Videos\MMDX12`, 720p–4K at 24/30/60 fps. Renderer choice: raster, RT, PT or offline GI (offline GI at 4K: ~10 s per frame on an RTX 3060 Laptop, about a day for a full song). Esc stops and keeps the frames so far.
+
+## Benchmark (for fun)
+
+- Because no assets can ship, there is no official benchmark scene. The scene is picked automatically from your library: the character and stage with the most vertices, and the song whose dance length is closest to 2:30 (songs with a camera motion preferred).
+- The GI render benchmark (Cinebench style, `dx12-gi-render`): one 3840×2160 image at 4096 samples per pixel, scored by render time (score = 6.25 × million samples per second). The cast is the three characters with the most vertices in your library, each holding a pose taken from a dance in your library (deterministic per library), behind a refracting glass cube with dispersion; softboxes and coloured rim spots.
+
+| Categories | Resolution & Measurement |
+|---|---|
+| `dx12-raster-fhd`<br>`dx12-rt-fhd`<br>`dx12-pt-fhd` | **1080p real-time**: 120 warm-up + 3600 measured frames at a fixed 1/60 s step, vsync/upscaler off, MSAA 4x for raster/RT, PT 1 spp 3 bounces. |
+| `dx12-raster-4k`<br>`dx12-rt-4k`<br>`dx12-pt-4k` | **4K real-time**: 120 warm-up + 3600 measured frames at a fixed 1/60 s step, vsync/upscaler off, MSAA 4x for raster/RT, PT 1 spp 3 bounces. |
+| `dx12-gi-render` | **4K offline GI**: one 3840×2160 image at 4096 samples per pixel. |
+
+- Scores depend on the library you use, so the leaderboard is for fun, not a reference. Results go to an online leaderboard (`https://home.codingbot.kr/api/benchmark`).
+- Real-time score formula summary: `(avg*0.6 + low1*0.4) × resolutionFactor × stabilityFactor × 100`, tiers D…SSS.
+
+## Command line
+
+<details>
+<summary>Command-line options</summary>
+
+```text
 --library <dir>  --character <s> --stage <s|none> --song <s>  --autoplay  --seek <sec>
 --benchmark dx12-raster-fhd|dx12-raster-4k|dx12-rt-fhd|dx12-rt-4k|dx12-pt-fhd|dx12-pt-4k|dx12-gi-render  --bench-frames <n>
---bench-spp <n>  (GI render benchmark testing: samples per pixel; with --offline-size the result is unofficial)
+--bench-spp <n>  (GI render benchmark testing: samples per pixel; with --offline-size the result cannot be submitted)
 --frames <n>  --capture <out.png>  --width <w> --height <h>  --debug
 --free-camera  --camera tx,ty,tz,yaw,pitch,dist  --paused  --lighting 0..3  --quality 0..3  --no-physics
 --render raster|rt|pt  --upscaler none|dlss|fsr|xess  --upscale-quality native|quality|balanced|performance|ultra
@@ -91,18 +145,14 @@ Command line (also used for automated checks):
                                                               --offline-video renders straight from the select screen)
 ```
 
-## Library classification (src/asset/AssetLibrary.cpp)
-
-- **Character**: a PMX with humanoid bones (`頭`, `左腕`, `左足`/`左ひざ`), not under a `stage` folder.
-- **Stage**: any other PMX. All PMX files in one folder form one stage (multi-part stages).
-  Byte-identical duplicates are dropped. A non-humanoid PMX next to a character is treated as an accessory and skipped.
-- **Song**: a folder with a VMD containing bone keys. The camera is the VMD with camera keys.
-  Morph-only VMDs are facial layers. The audio is a wav/mp3/flac/ogg in the same or the parent folder.
-  When there are several dance VMDs, the one whose length best matches the audio wins.
+</details>
 
 ## Architecture
 
-```
+<details>
+<summary>Module overview</summary>
+
+```text
 src/core    Log, text encodings (UTF-8 / UTF-16 / Shift-JIS)
 src/asset   PMX 2.0/2.1 + VMD parsers, image decode (stb + WIC), library scanner
 src/anim    ModelInstance (bone hierarchy, append bones, CCD IK with limits, vertex/bone/group morphs),
@@ -124,16 +174,33 @@ shaders     mmd.hlsl (MMD toon + shadows through the toon ramp, punctual lights,
 tools       asset_probe, anim_probe, render_smoke (headless-ish self tests)
 ```
 
-Conventions: MMD native space (left-handed, +Y up) everywhere. It matches D3D, so nothing is
-axis-flipped. DirectXMath row vectors (`v * M`); HLSL uses `pack_matrix(row_major)`.
+Conventions: MMD native space (left-handed, +Y up) everywhere. It matches D3D, so nothing is axis-flipped. DirectXMath row vectors (`v * M`); HLSL uses `pack_matrix(row_major)`.
 
-Leaderboard: `https://home.codingbot.kr/api/benchmark`,
-categories `dx12-raster-fhd` / `dx12-raster-4k`. The score formula is the same as the web MikuMark.
+</details>
 
-## Roadmap (beyond the MVP)
+## Third-party
+
+| Dependency | License |
+|---|---|
+| [Dear ImGui](https://github.com/ocornut/imgui) | MIT |
+| [stb](https://github.com/nothings/stb) | MIT / Public domain |
+| [miniaudio](https://github.com/mackron/miniaudio) | MIT-0 / Public domain |
+| [DirectX-Headers](https://github.com/microsoft/DirectX-Headers) | MIT |
+| [nlohmann/json](https://github.com/nlohmann/json) | MIT |
+| [Bullet Physics 3.25 subset](https://github.com/bulletphysics/bullet3) | zlib |
+| [NVIDIA DLSS SDK](https://github.com/NVIDIA/DLSS) | NVIDIA RTX SDK license |
+| [AMD FidelityFX SDK](https://github.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SDK) | MIT |
+| [Intel XeSS SDK](https://github.com/intel/xess) | Intel Simplified Software License |
+| [Pretendard](https://github.com/orioncactus/pretendard) | SIL OFL 1.1 |
+| [Phosphor Icons](https://github.com/phosphor-icons/core) | MIT |
+
+*Note: "MikuMikuDance" is by Yu Higuchi (樋口優) and Hatsune Miku is a Crypton Future Media character; MMDX12 is an unofficial fan project, not affiliated with either.*
+
+## License
+
+[MIT](LICENSE) for MMDX12's own code; third-party code under its own licences; MMD assets are not covered.
+
+## Roadmap
 
 - Material morphs, SDEF skinning, PMD support, VMD light track.
-- DoF, motion blur, contact shadows.
-- DXR (reflections/shadows/GI), and DLSS / FSR / XeSS behind `IUpscaler` (motion vectors and
-  jitter already exist); needs the Agility SDK with DXC (SM 6.x).
-- Library index cache (the scan currently re-probes all files on every launch).
+- Library index cache.

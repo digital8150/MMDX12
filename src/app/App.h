@@ -33,7 +33,7 @@ namespace mmdx {
 //   --seek <seconds>       start position for --autoplay
 //   --benchmark <catId>    after the scan, start the benchmark run for that category immediately
 //   --bench-frames <n>     override kBenchMeasuredFrames (testing)
-//   --bench-spp <n>        render benchmark: override kRenderBenchSamples (testing; result is unofficial)
+//   --bench-spp <n>        render benchmark: override kRenderBenchSamples (testing; the result cannot be submitted)
 //   --frames <n>           quit after n frames have been rendered in Play/BenchmarkRun state
 //   --capture <file.png>   capture the final frame (with --frames) to a PNG
 //   --width <w> --height <h>  initial window client size
@@ -165,13 +165,11 @@ private:
     void DrawAppBar(int activeNav);  // 0 = library, 1 = benchmark
     void DrawScenePreview(const CharacterAsset* ch, const StageAsset* st, float x0, float y0, float x1, float y1,
                           float rounding);
-    void StartBenchmarkLoad();       // official preset, else the current selection
+    void StartBenchmarkLoad();       // the library-picked scene (PickBenchmarkScene)
     void SetPlaying(bool play);
     void FinishBenchmark();
 
     // --- render benchmark (AppRenderBench.cpp; overlay in UiBenchmark.cpp)
-    // Library indices of the kRenderBenchPerformers characters and songs; false if any is missing.
-    bool FindRenderBenchAssets(int characters[kRenderBenchPerformerCount], int songs[kRenderBenchPerformerCount]) const;
     void StartRenderBenchLoad();     // -> Loading (LoadTarget::RenderBench) -> BenchRender
     void PoseRenderBench();          // after BuildSceneRuntime: placement, physics pre-roll, final pose
     void RecordRenderBenchFrame(ID3D12GraphicsCommandList* cmd);  // instead of renderer_.Render (BenchRender)
@@ -354,7 +352,7 @@ private:
 
     // benchmark
     int benchCategory_ = 0;       // index into kBenchCategories
-    bool benchOfficial_ = false;  // preset assets found
+    bool benchSubmittable_ = false;  // default workload (leaderboard submit allowed)
     std::vector<float> benchFrameTimes_;
     int benchFrameCounter_ = 0;
     int64_t benchLastQpc_ = 0;
@@ -374,6 +372,7 @@ private:
         bool fromCli = false;          // started by --benchmark dx12-gi-render
         uint32_t width = kRenderBenchWidth, height = kRenderBenchHeight, samples = kRenderBenchSamples;
         bool official = true;          // default size and samples (submittable)
+        RenderBenchCast cast;          // picked when the run starts
         int64_t startQpc = 0;          // QueryPerformanceCounter right after BeginOffline
         double elapsed = 0;            // seconds since start (updated every frame while rendering)
     } renderBench_;
