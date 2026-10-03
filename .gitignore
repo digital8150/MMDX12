@@ -10,3 +10,5 @@ mmdx12.ini
 /external/ffx/bin/
 # promo film kit (Remotion), kept local
 /videos/
+# private notes (server paths etc.)
+CLAUDE.local.md

@@ -77,6 +77,9 @@ progress.md is the session log. Read its latest entry first.
 - `external/` is vendored third-party code (imgui, stb, miniaudio, DirectX-Headers, nlohmann json, Bullet 3.25 subset). Don't edit it.
   - Bullet is built per file, not from its `*All.cpp` unity files (`btVector3.cpp` defines `BT_USE_SSE_IN_API`, which breaks later files).
 
+## Private notes
+- Server and asset-source details live in `CLAUDE.local.md` (git-ignored). Never commit server paths, hostnames or local user paths.
+
 ## Session close ("세션 마무리")
 1. Commit everything so the working tree is clean.
 2. Append a dated summary of the session to progress.md, and include it in the commit.

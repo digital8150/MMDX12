@@ -120,7 +120,7 @@ powershell -ExecutionPolicy Bypass -File tools/fetch_sdks.ps1
 | `dx12-raster-4k`<br>`dx12-rt-4k`<br>`dx12-pt-4k` | **4K real-time**: 120 warm-up + 3600 measured frames at a fixed 1/60 s step, vsync/upscaler off, MSAA 4x for raster/RT, PT 1 spp 3 bounces. |
 | `dx12-gi-render` | **4K offline GI**: one 3840×2160 image at 4096 samples per pixel. |
 
-- Scores depend on the library you use, so the leaderboard is for fun, not a reference. Results go to an online leaderboard (`https://home.codingbot.kr/api/benchmark`).
+- Scores depend on the library you use, so the leaderboard is for fun, not a reference. Results can be submitted to the online leaderboard from the result screen.
 - Real-time score formula summary: `(avg*0.6 + low1*0.4) × resolutionFactor × stabilityFactor × 100`, tiers D…SSS.
 
 ## Command line
