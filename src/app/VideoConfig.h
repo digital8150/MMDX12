@@ -52,14 +52,15 @@ struct VideoRealtimeQuality {
     uint32_t shadowMapSize;   // per cascade
     uint32_t ptSamples;       // path tracer samples per pixel per pass (1..4)
     uint32_t ptBounces;       // path tracer bounces (1..6)
-    uint32_t ptPasses;        // passes accumulated per video frame (path tracer denoiser history)
+    uint32_t ptPasses;        // passes for the first video frame and after a cut (warm-up)
+    uint32_t ptSteadyPasses;  // passes for every other video frame (the denoiser history carries over)
     float relativeCost;       // relative to "고품질"
 };
 inline constexpr VideoRealtimeQuality kVideoRealtimeQualities[] = {
-    {"초안", 2, 1024, 1, 2, 4, 0.5f},
-    {"표준", 4, 2048, 2, 3, 8, 0.75f},
-    {"고품질", 8, 4096, 4, 4, 16, 1.0f},
-    {"최고", 8, 4096, 4, 6, 32, 2.0f}};
+    {"초안", 2, 1024, 1, 2, 4, 1, 0.5f},
+    {"표준", 4, 2048, 2, 3, 8, 2, 0.75f},
+    {"고품질", 8, 4096, 4, 4, 16, 4, 1.0f},
+    {"최고", 8, 4096, 4, 6, 32, 8, 2.0f}};
 
 inline bool IsGiRenderer(VideoRenderer r) { return r == VideoRenderer::OfflineGI; }
 
@@ -112,7 +113,7 @@ inline double EstimatedSecondsPerFrame(const VideoRenderConfig& c) {
     case VideoRenderer::Raster: base4k = 0.35; rel = kVideoRealtimeQualities[q].relativeCost; break;
     case VideoRenderer::RayTraced: base4k = 0.6; rel = kVideoRealtimeQualities[q].relativeCost; break;
     case VideoRenderer::PathTraced:
-        base4k = 0.12 * kVideoRealtimeQualities[q].ptPasses / 16.0 * kVideoRealtimeQualities[q].ptSamples;
+        base4k = 0.03 * kVideoRealtimeQualities[q].ptSteadyPasses * kVideoRealtimeQualities[q].ptSamples;
         rel = 1.0;
         break;
     default: base4k = 10.0; rel = kVideoQualities[q].relativeCost; break;

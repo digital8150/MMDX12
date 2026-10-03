@@ -242,6 +242,7 @@ private:
     void DrawVideoRenderDialog();  // video render settings + start (Select, UiVideoDialog.cpp)
     void DrawToast();           // completion / error toast (Select, Play)
     std::filesystem::path OfflineOutputDir(bool video) const;  // Pictures\MMDX12 or Videos\MMDX12
+    DirectX::XMFLOAT3 CharacterCenter() const;  // world position of the character's center bone (teleport detection)
     void SaveOfflinePose();                     // current scene pose -> offline_.prevPose (video motion blur)
     void UploadOfflinePrevPose(uint64_t slot);  // offline_.prevPose -> the models' bone/morph ring entry `slot`
 
@@ -325,6 +326,7 @@ private:
         };
         std::vector<Pose> prevPose;
         CameraParams prevCamera;
+        DirectX::XMFLOAT3 prevCenter{};   // character center bone at prevPose
     } offline_;
     CameraParams lastLiveCamera_;       // camera of the last real-time frame (still motion blur)
     bool haveLastLiveCamera_ = false;

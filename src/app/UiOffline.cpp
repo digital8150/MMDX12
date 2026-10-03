@@ -96,6 +96,22 @@ std::string Hms(double seconds) {
     return buf;
 }
 
+// A VMD camera cut (or a character teleport) between two video frames is not motion: blurring across it smears the whole
+// frame over the jump. Thresholds are per video frame at 30 fps and scale with the frame interval.
+bool CameraJumped(const CameraParams& a, const CameraParams& b, double fps) {
+    using namespace DirectX;
+    const float scale = 30.0f / (float)std::max(fps, 1.0);
+    const XMMATRIX ia = XMMatrixInverse(nullptr, XMLoadFloat4x4(&a.view));
+    const XMMATRIX ib = XMMatrixInverse(nullptr, XMLoadFloat4x4(&b.view));
+    const float cosAngle = XMVectorGetX(XMVector3Dot(XMVector3Normalize(ia.r[2]), XMVector3Normalize(ib.r[2])));
+    const float angle = std::acos(std::clamp(cosAngle, -1.0f, 1.0f));
+    const float shift = XMVectorGetX(XMVector3Length(XMVectorSubtract(ia.r[3], ib.r[3])));
+    const float zoom = std::tan(a.fovYRadians * 0.5f) / std::max(std::tan(b.fovYRadians * 0.5f), 1e-4f);
+    return angle > XMConvertToRadians(12.0f) * scale || shift > 40.0f * scale || zoom > 1.6f || zoom < 0.625f;
+}
+
+constexpr float kPoseJumpUnits = 15.0f;   // character centre bone travel per 30 fps frame treated as a teleport
+
 }  // namespace
 
 // ---------------------------------------------------------------------------
@@ -207,8 +223,7 @@ void App::StartOfflineVideo(double startSeconds, double endSeconds, bool fromLob
         return;
     }
     if (offline_.realtime) {
-        // the real-time renderer produces the frames at the video's resolution; a path tracer frame
-        // accumulates several passes so its denoiser history converges
+        // the real-time renderer produces the frames at the video's resolution; frame 0 is a warm-up frame
         RenderSettings rs = VideoRealtimeSettings(cfg);
         rs.fixedWidth = jd.width;
         rs.fixedHeight = jd.height;
@@ -242,6 +257,13 @@ void App::SaveOfflinePose() {
     };
     save(*scene_->character);
     for (const auto& st : scene_->stages) save(*st);
+    offline_.prevCenter = CharacterCenter();
+}
+
+DirectX::XMFLOAT3 App::CharacterCenter() const {
+    if (!scene_ || !scene_->character) return {};
+    const int center = scene_->character->Model().FindBone("ã»ã³ã¿ã¼");
+    return center >= 0 ? scene_->character->BoneWorldPosition(center) : DirectX::XMFLOAT3{};
 }
 
 void App::UploadOfflinePrevPose(uint64_t slot) {
@@ -284,12 +306,12 @@ void App::UpdateOffline() {
 }
 
 void App::RecordRealtimeVideoFrame(ID3D12GraphicsCommandList* cmd) {
-    if (offline_.beginPending) {
+    const bool newFrame = offline_.beginPending;
+    if (newFrame) {
         // a new video frame: pose it once; its further passes (path tracer history) re-upload the same pose
         playTime_ = offline_.startSeconds + (double)offline_.frame / offline_.video.fps;
         offline_.frameMmd = (float)(playTime_ * kMmdFps);
         UpdateScene(offline_.frameMmd);
-        SaveOfflinePose();
         offline_.iter = 0;
         offline_.beginPending = false;
         offline_.imageStartWall = timeSeconds_;
@@ -299,6 +321,30 @@ void App::RecordRealtimeVideoFrame(ID3D12GraphicsCommandList* cmd) {
     }
     FrameView view;
     BuildFrameView(offline_.frameMmd, view);   // a camera cut (first frame, seek) discards temporal history
+    if (newFrame) {
+        const VideoRenderConfig& cfg = offline_.video;
+        if (cfg.Renderer() == VideoRenderer::PathTraced) {
+            const int q = std::clamp(cfg.quality, 0, kVideoQualityCount - 1);
+            bool jumpCut = false;
+            if (offline_.frame > 0) {
+                if (CameraJumped(offline_.prevCamera, view.camera, cfg.fps)) jumpCut = true;
+                const DirectX::XMFLOAT3 c = CharacterCenter();
+                const DirectX::XMVECTOR d = DirectX::XMVectorSubtract(DirectX::XMLoadFloat3(&c),
+                                                                      DirectX::XMLoadFloat3(&offline_.prevCenter));
+                if (DirectX::XMVectorGetX(DirectX::XMVector3Length(d)) > kPoseJumpUnits * 30.0f / (float)cfg.fps) {
+                    jumpCut = true;
+                }
+            }
+            if (jumpCut) view.cameraCut = true;
+            const bool warmUp = offline_.frame == 0 || view.cameraCut;
+            offline_.iterCount = (int)(warmUp ? kVideoRealtimeQualities[q].ptPasses
+                                              : kVideoRealtimeQualities[q].ptSteadyPasses);
+        } else {
+            offline_.iterCount = 1;
+        }
+        offline_.prevCamera = view.camera;
+        SaveOfflinePose();
+    }
     renderer_.Render(cmd, view);
 }
 
@@ -337,6 +383,17 @@ void App::RecordOfflineFrame(ID3D12GraphicsCommandList* cmd) {
     BuildFrameView(frame, view);
     view.motionBlur = blur;
     view.prevCamera = !blur ? view.camera : (video ? offline_.prevCamera : lastLiveCamera_);
+    if (video && blur && !probe) {
+        // camera cut / teleport since the previous video frame: no blur across the jump
+        if (CameraJumped(view.prevCamera, view.camera, offline_.video.fps)) view.prevCamera = view.camera;
+        const DirectX::XMFLOAT3 c = CharacterCenter();
+        const DirectX::XMVECTOR d = DirectX::XMVectorSubtract(DirectX::XMLoadFloat3(&c),
+                                                              DirectX::XMLoadFloat3(&offline_.prevCenter));
+        if (DirectX::XMVectorGetX(DirectX::XMVector3Length(d)) > kPoseJumpUnits * 30.0f / (float)offline_.video.fps) {
+            SaveOfflinePose();                         // the shutter opens at the new pose
+            UploadOfflinePrevPose(ctx_.FrameNumber() - 1);
+        }
+    }
     if (video) {
         SaveOfflinePose();
         offline_.prevCamera = view.camera;
