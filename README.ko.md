@@ -9,12 +9,11 @@
     <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-39C5BB" alt="License"></a>
     <a href="https://youtu.be/7S7D670HbIM"><img src="https://img.shields.io/badge/YouTube-Introduction-39C5BB?logo=youtube&logoColor=white" alt="YouTube"></a>
   </p>
-  <a href="https://youtu.be/7S7D670HbIM">
+  <a href="https://youtu.be/vNztzqvVV4M">
     <img src="docs/media/promo-preview.webp" width="100%" alt="MMDX12 미리보기">
   </a>
   <br>
-  <a href="https://youtu.be/7S7D670HbIM">▶ YouTube에서 소개 영상 보기</a>
-  · <a href="https://github.com/digital8150/MMDX12/releases/latest/download/MMDX12-intro-1080p60.mp4">58초 프로모 영상 받기 (1080p60 MP4)</a>
+  ▶ YouTube: <a href="https://youtu.be/vNztzqvVV4M">58초 프로모</a> · <a href="https://youtu.be/7S7D670HbIM">전체 소개 영상</a>
   <p>
     <a href="#갤러리">갤러리</a> ·
     <a href="#주요-기능">주요 기능</a> ·
@@ -81,6 +80,12 @@
 - **곡**: 본 키가 있는 VMD가 든 폴더. 카메라 키가 있는 VMD가 카메라, 모프만 있는 VMD는 표정 레이어입니다. 음원은 같은 폴더나 상위 폴더의 wav/mp3/flac/ogg. 댄스 VMD가 여러 개면 음원 길이와 가장 잘 맞는 것을 씁니다.
 
 ## 시작하기
+
+### 다운로드
+
+[Releases](https://github.com/digital8150/MMDX12/releases/latest)에서 포터블 빌드(`MMDX12-<버전>-win64.zip`)를 받아 아무 곳에나 압축을 풀고, `MMDX12.exe` 옆의 `library` 폴더에 MMD 에셋을 넣은 뒤(또는 앱에서 폴더 선택) `MMDX12.exe`를 실행하세요. Windows 10/11 x64와 Direct3D 12 GPU가 필요하고, 레이 트레이싱·패스 트레이싱·GI 렌더러는 DXR 1.1, DLSS는 NVIDIA RTX GPU가 필요합니다. 실행 파일에 코드 서명이 없어 SmartScreen 경고가 한 번 뜰 수 있습니다 (추가 정보 → 실행).
+
+### 소스에서 빌드
 
 **요구 사항**
 - Windows 10/11, D3D12 GPU.

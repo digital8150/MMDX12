@@ -9,12 +9,11 @@
     <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-39C5BB" alt="License"></a>
     <a href="https://youtu.be/7S7D670HbIM"><img src="https://img.shields.io/badge/YouTube-Introduction-39C5BB?logo=youtube&logoColor=white" alt="YouTube"></a>
   </p>
-  <a href="https://youtu.be/7S7D670HbIM">
+  <a href="https://youtu.be/vNztzqvVV4M">
     <img src="docs/media/promo-preview.webp" width="100%" alt="MMDX12 preview">
   </a>
   <br>
-  <a href="https://youtu.be/7S7D670HbIM">▶ Watch the introduction on YouTube</a>
-  · <a href="https://github.com/digital8150/MMDX12/releases/latest/download/MMDX12-intro-1080p60.mp4">Download the 58 s promo (1080p60 MP4)</a>
+  ▶ YouTube: <a href="https://youtu.be/vNztzqvVV4M">58 s promo</a> · <a href="https://youtu.be/7S7D670HbIM">Full introduction</a>
   <p>
     <a href="#gallery">Gallery</a> ·
     <a href="#highlights">Highlights</a> ·
@@ -81,6 +80,12 @@ The library folder is resolved as follows: `--library`, then `mmdx12.ini`, then 
 - **Song**: a folder with a VMD containing bone keys. The camera is the VMD with camera keys. Morph-only VMDs are facial layers. The audio is a wav/mp3/flac/ogg in the same or the parent folder. When there are several dance VMDs, the one whose length best matches the audio wins.
 
 ## Getting started
+
+### Download
+
+Grab the portable build from [Releases](https://github.com/digital8150/MMDX12/releases/latest) (`MMDX12-<version>-win64.zip`), unzip it anywhere, put your MMD assets in the `library` folder next to `MMDX12.exe` (or pick a folder in the app) and run `MMDX12.exe`. Windows 10/11 x64 with a Direct3D 12 GPU; ray tracing, path tracing and the GI renderer need DXR 1.1, DLSS needs an NVIDIA RTX GPU. The exe is not code-signed, so SmartScreen may ask once (More info → Run anyway).
+
+### Build from source
 
 **Requirements:**
 - Windows 10/11, a D3D12 GPU.

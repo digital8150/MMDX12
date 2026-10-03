@@ -12,3 +12,4 @@ mmdx12.ini
 /videos/
 # private notes (server paths etc.)
 CLAUDE.local.md
+/dist/
