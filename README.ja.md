@@ -56,17 +56,17 @@ MMDX12 の動画モードで 1 曲まるごとレンダリングして、その�
 <table>
   <tr>
     <td align="center" width="33%">
-      <a href="https://youtu.be/tng53F--jEM"><img src="https://img.youtube.com/vi/tng53F--jEM/hqdefault.jpg" width="100%" alt="モニタリング (Best Friend Remix)"></a>
+      <a href="https://youtu.be/tng53F--jEM"><img src="docs/media/video-monitoring.webp" width="100%" alt="モニタリング (Best Friend Remix)"></a>
       <br><b>モニタリング (Best Friend Remix)</b>
       <br><sub>パストレーシング 4K 60FPS</sub>
     </td>
     <td align="center" width="33%">
-      <a href="https://youtu.be/WqZzpxBWhj4"><img src="https://img.youtube.com/vi/WqZzpxBWhj4/hqdefault.jpg" width="100%" alt="Cute Medley: Idol Sounds"></a>
+      <a href="https://youtu.be/WqZzpxBWhj4"><img src="docs/media/video-cute-medley.webp" width="100%" alt="Cute Medley: Idol Sounds"></a>
       <br><b>Cute Medley: Idol Sounds</b>
       <br><sub>パストレーシング QHD 60FPS</sub>
     </td>
     <td align="center" width="33%">
-      <a href="https://youtu.be/6JerS9iSD50"><img src="https://img.youtube.com/vi/6JerS9iSD50/hqdefault.jpg" width="100%" alt="World is Mine"></a>
+      <a href="https://youtu.be/6JerS9iSD50"><img src="docs/media/video-world-is-mine.webp" width="100%" alt="World is Mine"></a>
       <br><b>World is Mine</b>
       <br><sub>パストレーシング QHD 24FPS</sub>
     </td>
