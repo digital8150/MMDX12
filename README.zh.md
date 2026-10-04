@@ -6,10 +6,10 @@
     <img src="https://img.shields.io/badge/Platform-Windows%2010%2F11-39C5BB" alt="Platform">
     <img src="https://img.shields.io/badge/Graphics-Direct3D%2012%20%2B%20DXR%201.1-39C5BB" alt="Graphics">
     <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-39C5BB" alt="License"></a>
-    <a href="https://www.bilibili.com/video/BV1m8Hr6JEP3/"><img src="https://img.shields.io/badge/Bilibili-%E4%BB%8B%E7%BB%8D%E8%A7%86%E9%A2%91-39C5BB?logo=bilibili&logoColor=white" alt="Bilibili"></a>
+    <a href="https://www.bilibili.com/video/BV1m8Hr6JEP3/?"><img src="https://img.shields.io/badge/Bilibili-%E4%BB%8B%E7%BB%8D%E8%A7%86%E9%A2%91-39C5BB?logo=bilibili&logoColor=white" alt="Bilibili"></a>
     <a href="#支持"><img src="https://img.shields.io/badge/%E6%94%AF%E6%8C%81-Bitcoin-0f3b21?logo=bitcoin&logoColor=white" alt="支持"></a>
   </p>
-  <a href="https://www.bilibili.com/video/BV1m8Hr6JEP3/">
+  <a href="https://www.bilibili.com/video/BV1m8Hr6JEP3/?">
     <img src="docs/media/promo-preview.webp" width="100%" alt="MMDX12 预览">
   </a>
   <br>
