@@ -255,6 +255,12 @@ bool FullscreenPipeline::Create(Dx12Context& ctx, const std::filesystem::path& f
         rt.SrcBlendAlpha = D3D12_BLEND_ONE;
         rt.DestBlendAlpha = D3D12_BLEND_ONE;
         rt.BlendOpAlpha = D3D12_BLEND_OP_MAX;
+        if (blend == Blend::Transmittance) {
+            rt.SrcBlend = D3D12_BLEND_ONE;
+            rt.DestBlend = D3D12_BLEND_SRC_ALPHA;
+            rt.SrcBlendAlpha = D3D12_BLEND_ZERO;
+            rt.BlendOpAlpha = D3D12_BLEND_OP_ADD;
+        }
     }
     pso.DepthStencilState.DepthEnable = FALSE;
     pso.DepthStencilState.StencilEnable = FALSE;

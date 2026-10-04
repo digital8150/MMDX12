@@ -682,6 +682,7 @@ VideoRenderConfig App::ActiveVideoConfig() const {
     if (options_.offlineRenderer >= 0) c.renderer = options_.offlineRenderer;
     if (options_.dof >= 0) c.dof = options_.dof != 0;
     if (options_.volumetric >= 0) c.volumetric = options_.volumetric != 0;
+    if (options_.volumetricDensity > 0.0f) c.volumetricDensity = options_.volumetricDensity;
     if (options_.bloomConv >= 0) c.bloomConvolution = options_.bloomConv != 0;
     c.Clamp();
     return c;

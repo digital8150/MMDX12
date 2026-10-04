@@ -31,7 +31,8 @@ Texture2D gToon    : register(t3);
 StructuredBuffer<BoneMatrix> gPrevBones : register(t4);
 Texture2DArray<float> gShadowMap : register(t5);
 struct Light { float3 pos; float invRange; float3 color; float cosOuter; float3 dir; float cosInner; float4 pad; };
-StructuredBuffer<Light> gLights : register(t6);
+StructuredBuffer<Light> gLights : register(t6);   // pad.x = spot shadow slice (-1 = none)
+Texture2DArray<float> gSpotShadowMap : register(t7);
 SamplerState gWrap  : register(s0);
 SamplerState gClamp : register(s1);
 SamplerComparisonState gShadowCmp : register(s2);
@@ -142,6 +143,29 @@ float ShadowRt(float3 wp, float3 n, float viewZ, float2 pixel) {
 
 // ---- punctual lights ------------------------------------------------------------
 
+// Spot shadow map (perspective slice per spot): normal offset scaled with the texel footprint,
+// 2x2 hardware PCF taps.
+float SpotShadow(Light l, float3 wp, float3 n, float dist) {
+    float slice = l.pad.x;
+    if (slice < 0.0 || slice >= gSpotShadowParams.x) return 1.0;
+    float c = max(l.cosOuter, 0.05);
+    float texel = dist * 2.0 * sqrt(1.0 - c * c) / c * gSpotShadowParams.y;
+    float3 ld = (l.pos - wp) / max(dist, 1e-4);
+    float offset = texel * (2.0 - saturate(dot(n, ld)));
+    float4 sp = mul(float4(wp + n * offset, 1.0), gSpotViewProj[(uint)slice]);
+    if (sp.w <= 0.0) return 1.0;
+    float3 p = sp.xyz / sp.w;
+    float2 uv = float2(p.x * 0.5 + 0.5, 0.5 - p.y * 0.5);
+    if (any(uv < 0.0) || any(uv > 1.0) || p.z > 1.0) return 1.0;
+    float r = 0.75 * gSpotShadowParams.y;
+    float sum = 0;
+    [unroll] for (int k = 0; k < 4; ++k) {
+        float2 o = float2((k & 1) ? r : -r, (k & 2) ? r : -r);
+        sum += gSpotShadowMap.SampleCmpLevelZero(gShadowCmp, float3(uv + o, slice), p.z - 0.00002);
+    }
+    return sum * 0.25;
+}
+
 float3 PunctualDiffuse(float3 wp, float3 n, float toonSoft, float flat) {
     float3 sum = 0;
     uint count = (uint)gNumLights;
@@ -153,6 +177,7 @@ float3 PunctualDiffuse(float3 wp, float3 n, float toonSoft, float flat) {
         float x = saturate(1.0 - pow(dist * l.invRange, 4.0));
         float atten = x * x / (1.0 + dist * dist * 0.0004);
         if (l.cosOuter > -1.0) atten *= smoothstep(l.cosOuter, l.cosInner, dot(-ld, l.dir));
+        if (atten > 0.0) atten *= SpotShadow(l, wp, n, dist);
         float ndl = dot(n, ld);
         float diff = lerp(saturate(ndl), smoothstep(-0.05, 0.25, ndl), toonSoft);
         diff = lerp(diff, saturate(ndl * 0.3 + 0.7), flat);
@@ -172,6 +197,7 @@ float3 PunctualSpecular(float3 wp, float3 n, float3 V, float power) {
         float x = saturate(1.0 - pow(dist * l.invRange, 4.0));
         float atten = x * x / (1.0 + dist * dist * 0.0004);
         if (l.cosOuter > -1.0) atten *= smoothstep(l.cosOuter, l.cosInner, dot(-ld, l.dir));
+        if (atten > 0.0) atten *= SpotShadow(l, wp, n, dist);
         float3 h = normalize(ld + V);
         sum += l.color * atten * pow(saturate(dot(n, h)), power) * saturate(dot(n, ld));
     }
@@ -376,7 +402,7 @@ struct ShadowOut { float4 pos : SV_Position; float2 uv : TEXCOORD0; };
 ShadowOut VSShadow(VSIn v) {
     ShadowOut o;
     float4 wp = mul(float4(v.pos + v.morph, 1.0), SkinMatrix(v));
-    o.pos = mul(wp, gShadowViewProj[gCascade]);
+    o.pos = mul(wp, gCascade < 3 ? gShadowViewProj[gCascade] : gSpotViewProj[gCascade - 3]);
     o.uv = v.uv;
     return o;
 }

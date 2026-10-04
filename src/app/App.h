@@ -48,6 +48,7 @@ namespace mmdx {
 //   --upscale-quality <native|quality|balanced|performance|ultra>  upscaler quality for this run
 //   --no-physics           disable rigid-body physics for this run
 //   --dof <0|1>  --volumetric <0|1>  --bloom-conv <0|1>   post effects for this run
+//   --volumetric-density <0.25..4>  volumetric medium density for this run
 //   --lut <substr|none>    colour LUT for this run (first LUT whose id or name contains substr)
 //   --offline-still <file.png>   with --autoplay: render the --seek frame with the offline GI renderer,
 //                                save it to the file and quit
@@ -84,6 +85,7 @@ struct AppOptions {
     int upscalerQuality = -1;  // --upscale-quality <native|quality|balanced|performance|ultra>: override settings for this run
     bool noPhysics = false;    // --no-physics: override settings for this run
     int dof = -1, volumetric = -1, bloomConv = -1;  // --dof/--volumetric/--bloom-conv <0|1>: override for this run
+    float volumetricDensity = -1.0f;                 // --volumetric-density (< 0 = settings)
     std::string lut;           // --lut <substr|none>: override for this run (resolved against the LUT list)
     std::filesystem::path offlineStill, offlineVideo;  // --offline-still / --offline-video
     double offlineRange[2] = {-1.0, -1.0};             // --offline-range (seconds; < 0 = unset)
@@ -291,6 +293,8 @@ private:
     POINT lastMouse_{};
     double timeSeconds_ = 0;      // wall clock since start (QPC)
     int framesInScene_ = 0;       // frames rendered in Play/BenchRun (for --frames)
+    double gpuMsSum_ = 0.0;       // --frames: GPU time of the second half, logged at quit
+    int gpuMsCount_ = 0;
 
     // offline render
     struct OfflineJob {

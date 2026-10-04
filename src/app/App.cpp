@@ -94,6 +94,8 @@ AppOptions ParseCommandLine(int argc, wchar_t** argv) {
             opt.dof = _wtoi(next().c_str()) != 0 ? 1 : 0;
         } else if (arg == L"--volumetric") {
             opt.volumetric = _wtoi(next().c_str()) != 0 ? 1 : 0;
+        } else if (arg == L"--volumetric-density") {
+            opt.volumetricDensity = (float)_wtof(next().c_str());
         } else if (arg == L"--bloom-conv") {
             opt.bloomConv = _wtoi(next().c_str()) != 0 ? 1 : 0;
         } else if (arg == L"--lut") {
@@ -162,6 +164,7 @@ int App::Run(HINSTANCE instance, const AppOptions& options) {
     if (options_.upscalerQuality >= 0) settings_.upscalerQuality = std::clamp(options_.upscalerQuality, 0, 4);
     if (options_.dof >= 0) settings_.dof = options_.dof != 0;
     if (options_.volumetric >= 0) settings_.volumetric = options_.volumetric != 0;
+    if (options_.volumetricDensity > 0.0f) settings_.volumetricDensity = std::clamp(options_.volumetricDensity, 0.25f, 4.0f);
     if (options_.bloomConv >= 0) settings_.bloomConvolution = options_.bloomConv != 0;
 
     ImGui_ImplWin32_EnableDpiAwareness();
@@ -244,6 +247,7 @@ int App::Run(HINSTANCE instance, const AppOptions& options) {
     if (options_.upscalerQuality >= 0) settings_.upscalerQuality = persisted.upscalerQuality;
     if (options_.dof >= 0) settings_.dof = persisted.dof;
     if (options_.volumetric >= 0) settings_.volumetric = persisted.volumetric;
+    if (options_.volumetricDensity > 0.0f) settings_.volumetricDensity = persisted.volumetricDensity;
     if (options_.bloomConv >= 0) settings_.bloomConvolution = persisted.bloomConvolution;
     if (!options_.lut.empty()) settings_.colorLut = persisted.colorLut;
     settings_.Save(settingsPath_);
@@ -475,6 +479,11 @@ void App::RenderFrame() {
     bool quit = false;
     if (inScene || screen_ == Screen::Offline || !options_.startScreen.empty()) {
         ++framesInScene_;
+        // --frames runs: average GPU time over the second half (after loading hitches settle)
+        if (inScene && options_.quitAfterFrames > 0 && framesInScene_ > options_.quitAfterFrames / 2) {
+            gpuMsSum_ += renderer_.Stats().gpuFrameMs;
+            ++gpuMsCount_;
+        }
         if (options_.quitAfterFrames > 0 && framesInScene_ >= options_.quitAfterFrames) {
             if (!options_.capturePath.empty()) ctx_.RequestCapture(options_.capturePath);
             quit = true;
@@ -486,7 +495,11 @@ void App::RenderFrame() {
 
     if (quit) {
         ctx_.WaitForGpu();
-        LOG_INFO("quit after %d frames", framesInScene_);
+        if (gpuMsCount_ > 0)
+            LOG_INFO("quit after %d frames (GPU %.2f ms average over the last %d)", framesInScene_,
+                     gpuMsSum_ / gpuMsCount_, gpuMsCount_);
+        else
+            LOG_INFO("quit after %d frames", framesInScene_);
         running_ = false;
     }
 }

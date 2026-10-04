@@ -522,15 +522,15 @@ void OfflineRenderer::Impl::Prepass(PassContext& pc, OfflineProgress& pg) {
     }
 }
 
-// Sun shafts and spotlight cones: half-resolution ray march (offline_volumetric.hlsl) + depth-aware blur;
-// CSFinalize adds the result (volReady).
+// Sun shafts and spotlight beams: half-resolution ray march (offline_volumetric.hlsl) + depth-aware blur;
+// CSFinalize composites image * transmittance + in-scattered light (volReady).
 void OfflineRenderer::Impl::Volumetric(PassContext& pc) {
     ID3D12GraphicsCommandList* cmd = pc.cmd;
     gbuf.Transition(cmd, kSrvAll);
     volA.Transition(cmd, kUav);
     const float c0[16] = {0.005f * job.volumetricDensity, 0.02f, 400.0f, 0.55f,
                           (float)width, (float)height, 3.0f, 0.3f,
-                          (float)(serial & 0xFFFFu), 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f};
+                          (float)(serial & 0xFFFFu), 0.25f, 0.45f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f};
     volMarch.Dispatch(pc, pc.transient.SrvTable(*ctx, {&gbuf}), pc.transient.UavTable(*ctx, {&volA}), c0, 16,
                       Groups(volA.width), Groups(volA.height));
     UavBarrier(cmd);

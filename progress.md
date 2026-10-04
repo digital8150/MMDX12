@@ -312,3 +312,27 @@ every frame and encodes an MP4, 3) GI with a Pixar/Disney-like look while keepin
 ### Not verified
 - Switching to Chinese from the popup in a running session keeps the Japanese Han glyph forms until the next start (font atlas is built once).
 - Translations are model-written, not reviewed by a native speaker; play screen / video dialog not captured in zh.
+
+## 2026-10-05 — Volumetric light: shafts (god rays), spot shadow maps, release 0.4.0
+
+### Done
+- Diagnosis: the old march only added a veil. Spot cones were unshadowed, 32 steps over 400 units (~12-unit steps, 1-2 samples per beam),
+  and the scene was never attenuated by the fog.
+- Spot shadow maps: `ShadowPass` renders the characters into a perspective slice per spot (first 8 spots, `kSpotShadowSlices`,
+  `targets.spotShadowMap`, 512..1024 px). `SceneConstants::spotViewProj[]` / `spotShadowParams`, `GpuLight::shadowSlice`.
+  Rendered when `SpotShadowsWanted` (shadows on and raster/RT, or volumetrics). The scene PS (`SpotShadow`, root param 11 = t7)
+  shadows spot diffuse/specular on surfaces too. Characters only: re-drawing the stage per spot cost more than the march.
+- `shaders/volumetric_common.hlsli` (shared by real-time and offline): closed-form height-fog transmittance; sun marched only over the
+  shadow range with an exact unshadowed tail (T(a) - T(b)); spots marched only inside the analytic ray/cone interval, step count from
+  the segment length; isotropic sky ambient; medium bounded by a sphere (r 180) around the stage so distant scenery is not fogged out.
+- Real-time pass: march (jittered per frame) -> temporal accumulation (reprojects the march end point, neighbourhood clamp) -> light
+  depth-aware blur -> `Blend::Transmittance` apply (lit * T + L). Offline: same integrator, sun and spots shadowed with ray queries;
+  CSFinalize composites image * T + L.
+- CLI: `--volumetric-density <0.25..4>`; `--frames` runs log the average GPU time of the second half at quit.
+- Checked: raster / RT / PT captures and an offline GI still (concert side view: visible beams, character shadow in the beam; terrace
+  sunset facing the sun: shafts through the pergola) against a baseline build; no shader errors. GPU (theater, concert, free camera,
+  300 frames): old with volumetric 7.41 ms, new 7.45 ms, new without volumetric 6.04 ms.
+
+### Not verified
+- Temporal stability in motion (only still captures); ghosting on fast camera moves not checked.
+- With the medium now attenuating the scene, high densities (the saved 4.0) look much foggier than before; 1-1.5 reads best.

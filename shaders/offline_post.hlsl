@@ -156,14 +156,14 @@ bool SeesGlass(int2 p, int2 size) {
     return GlassIntersect(gInvView[3].xyz, d, 0.0, 1e5, t, n, inside);
 }
 
-// Half-resolution volumetric light, upsampled depth-aware (bilinear weights times a depth similarity).
-float3 VolUpsample(int2 p, int2 size) {
+// Half-resolution volumetric light (rgb in-scattered, a transmittance), upsampled depth-aware (bilinear weights times a depth similarity).
+float4 VolUpsample(int2 p, int2 size) {
     const int2 vs = (size + 1) / 2;
     const float zc = min(gGbufT.Load(int3(p, 0)).w, 1e4);
     const float2 f = (float2(p) + 0.5) * 0.5 - 0.5;
     const int2 b = (int2)floor(f);
     const float2 t = f - (float2)b;
-    float3 sum = 0;
+    float4 sum = 0;
     float wsum = 0;
     [unroll] for (int y = 0; y < 2; ++y) {
         [unroll] for (int x = 0; x < 2; ++x) {
@@ -171,7 +171,7 @@ float3 VolUpsample(int2 p, int2 size) {
             float zq = min(gGbufT.Load(int3(min(q * 2, size - 1), 0)).w, 1e4);
             float wl = max((x ? t.x : 1.0 - t.x) * (y ? t.y : 1.0 - t.y), 1e-3);
             float w = wl / (0.01 + abs(zc - zq) / (0.02 * zc + 0.5));
-            sum += gVolT.Load(int3(q, 0)).rgb * w;
+            sum += gVolT.Load(int3(q, 0)) * w;
             wsum += w;
         }
     }
@@ -186,7 +186,10 @@ void CSFinalize(uint3 id : SV_DispatchThreadID) {
     int2 p = int2(id.xy);
     if (p.x >= size.x || p.y >= size.y) return;
     float3 c = gP0.x > 0.5 ? gInT.Load(int3(p, 0)).rgb * MeanAlbedo(p) : MeanRadiance(p);
-    if (gP2.x > 0.5) c += VolUpsample(p, size);
+    if (gP2.x > 0.5) {
+        float4 vol = VolUpsample(p, size);   // rgb in-scattered light, a transmittance
+        c = c * saturate(vol.a) + vol.rgb;
+    }
     if (gP0.y > 0.5) c += gBloomT.SampleLevel(gLinear, (float2(p) + 0.5) / float2(size), 0).rgb * gP0.z;
     if (gP1.w > 0.0 && !SeesGlass(p, size)) {
         float4 e = gEdgeT.Load(int3(p, 0)) / gP1.w;   // mean outline layer over the iterations

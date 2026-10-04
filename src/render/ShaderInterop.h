@@ -8,6 +8,7 @@
 namespace mmdx {
 
 inline constexpr uint32_t kShadowCascades = 3;
+inline constexpr uint32_t kSpotShadowSlices = 8;  // spot lights with a shadow map (the first 8 spots)
 inline constexpr uint32_t kSceneCbSize = 2048;
 
 struct SceneConstants {               // b0, kSceneCbSize-byte slot per frame
@@ -40,6 +41,9 @@ struct SceneConstants {               // b0, kSceneCbSize-byte slot per frame
     DirectX::XMFLOAT4 glassAbsorb;     // xyz Beer-Lambert absorption per MMD unit (linear rgb)
     DirectX::XMFLOAT4 softbox[2][4];   // per softbox: centre (w = enabled), half U, half V, radiance
     DirectX::XMFLOAT4 floorParams;     // studio floor: xyz albedo (linear), w = reflectivity; w < 0: default floor
+    // Spot light shadow maps (ShadowPass, slice = GpuLight::_pad[0]): perspective view-projection per slice.
+    DirectX::XMFLOAT4X4 spotViewProj[kSpotShadowSlices];
+    DirectX::XMFLOAT4 spotShadowParams;  // x = slices rendered this frame (0 = none), y = 1/mapSize
 };
 static_assert(sizeof(SceneConstants) <= kSceneCbSize, "SceneConstants layout");
 
@@ -71,7 +75,8 @@ struct GpuLight {
     DirectX::XMFLOAT3 position; float invRange;
     DirectX::XMFLOAT3 color;    float spotCosOuter;   // colour premultiplied by intensity
     DirectX::XMFLOAT3 direction; float spotCosInner;
-    float _pad[4];
+    float shadowSlice;           // spot shadow map slice (valid when < spotShadowParams.x), -1 = none
+    float _pad[3];
 };
 static_assert(sizeof(GpuLight) == 64, "GpuLight layout");
 

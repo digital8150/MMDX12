@@ -80,6 +80,7 @@ struct RenderTargets {
     Texture ldr;      // PostPass output (output resolution), sRGB-encoded 8-bit (what PresentPass shows)
     // Shadow cascades (owned here so the scene pass can bind them)
     Texture shadowMap;  // R32_TYPELESS array, kShadowCascades slices
+    Texture spotShadowMap;  // R32_TYPELESS array, kSpotShadowSlices perspective slices (ShadowPass)
     // Outputs of optional passes for this frame (null when the pass is disabled)
     Texture* ao = nullptr;        // R8 (half res), SsaoPass after blur
     Texture* ssr = nullptr;       // RGBA16F (half res), SsrPass
@@ -146,7 +147,8 @@ ComPtr<ID3DBlob> CompileShader(const std::filesystem::path& file, const char* en
 // The vertex shader is VSFullscreen from fullscreen.hlsli (include it from the .hlsl).
 class FullscreenPipeline {
 public:
-    enum class Blend { Opaque, Additive, Alpha };
+    // Transmittance: dst = src.rgb + dst.rgb * src.a (dst alpha kept), for participating media.
+    enum class Blend { Opaque, Additive, Alpha, Transmittance };
     bool Create(Dx12Context& ctx, const std::filesystem::path& file, const char* psEntry,
                 std::initializer_list<DXGI_FORMAT> rtvFormats, const ShaderDefines& defines = {},
                 Blend blend = Blend::Opaque);

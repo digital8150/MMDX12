@@ -208,6 +208,10 @@ void Renderer::EnsureShadowMap(uint32_t size) {
     ctx_->WaitForGpu();
     targets_.shadowMap.Create(*ctx_, size, size, RenderTargets::kDepthFormat, D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL,
                               D3D12_RESOURCE_STATE_DEPTH_WRITE, L"shadow.cascades", 1, kShadowCascades);
+    const uint32_t spotSize = std::clamp(size / 4, 512u, 1024u);
+    targets_.spotShadowMap.Create(*ctx_, spotSize, spotSize, RenderTargets::kDepthFormat,
+                                  D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL, D3D12_RESOURCE_STATE_DEPTH_WRITE,
+                                  L"shadow.spots", 1, kSpotShadowSlices);
 }
 
 void Renderer::EnsureTargets(uint32_t width, uint32_t height, uint32_t outWidth, uint32_t outHeight, uint32_t msaa) {
@@ -341,6 +345,27 @@ void Renderer::FillSceneConstants(const FrameView& view, uint32_t w, uint32_t h,
         XMStoreFloat4x4(&sc.shadowViewProj[c], lightView * ortho);
         texel[c] = 2.0f * radius / mapSize;
     }
+    // spot shadow maps: a perspective frustum per spot cone (slice order = FillGpuLights)
+    uint32_t spotSlices = 0;
+    if (targets_.spotShadowMap && SpotShadowsWanted(settings_, EffectivePath(), offscreen)) {
+        uint32_t slice = 0;
+        const size_t count = std::min<size_t>(view.light.punctual.size(), kMaxPunctualLights);
+        for (size_t i = 0; i < count && slice < kSpotShadowSlices; ++i) {
+            const PunctualLight& p = view.light.punctual[i];
+            if (p.spotCosOuter <= -1.0f) continue;
+            const XMVECTOR pos = XMLoadFloat3(&p.position);
+            const XMVECTOR dir = XMVector3Normalize(XMLoadFloat3(&p.direction));
+            const XMVECTOR upV = std::fabs(XMVectorGetY(dir)) > 0.99f ? XMVectorSet(0, 0, 1, 0) : XMVectorSet(0, 1, 0, 0);
+            const float halfAngle = std::acos(std::clamp(p.spotCosOuter, -0.99f, 1.0f));
+            const float fov = std::min(2.0f * halfAngle * 1.08f + 0.02f, XMConvertToRadians(170.0f));
+            const XMMATRIX lv = XMMatrixLookToLH(pos, dir, upV);
+            const XMMATRIX lp = XMMatrixPerspectiveFovLH(fov, 1.0f, std::max(0.05f, p.range * 0.004f), std::max(p.range, 1.0f));
+            XMStoreFloat4x4(&sc.spotViewProj[slice], lv * lp);
+            ++slice;
+        }
+        spotSlices = slice;
+    }
+    sc.spotShadowParams = {(float)spotSlices, 1.0f / (float)std::max(targets_.spotShadowMap.width, 1u), 0, 0};
     sc.cascadeSplits = {splits[1], splits[2], splits[3], settings_.shadows ? 1.0f : 0.0f};
     sc.shadowParams = {1.0f / mapSize, 1.2f, 1.6f, 0};
     sc.cascadeTexel = {texel[0], texel[1], texel[2], 0};
@@ -372,6 +397,7 @@ void Renderer::FillSceneConstants(const FrameView& view, uint32_t w, uint32_t h,
 
 uint32_t Renderer::FillGpuLights(const LightParams& light, GpuLight* out) {
     const size_t count = std::min<size_t>(light.punctual.size(), kMaxPunctualLights);
+    uint32_t spot = 0;
     for (size_t i = 0; i < count; ++i) {
         const PunctualLight& p = light.punctual[i];
         GpuLight& g = out[i];
@@ -381,6 +407,8 @@ uint32_t Renderer::FillGpuLights(const LightParams& light, GpuLight* out) {
         g.spotCosOuter = p.spotCosOuter;
         XMStoreFloat3(&g.direction, XMVector3Normalize(XMLoadFloat3(&p.direction)));
         g.spotCosInner = std::max(p.spotCosInner, p.spotCosOuter + 1e-3f);
+        g.shadowSlice = (p.spotCosOuter > -1.0f && spot < kSpotShadowSlices) ? (float)spot : -1.0f;
+        if (p.spotCosOuter > -1.0f) ++spot;
     }
     return (uint32_t)count;
 }
@@ -741,6 +769,7 @@ void Renderer::Shutdown() {
     }
     ReleaseTargets();
     targets_.shadowMap.Release(*ctx_);
+    targets_.spotShadowMap.Release(*ctx_);
     lut_.Release(*ctx_);
     targets_.lut = nullptr;
     passes_.clear();

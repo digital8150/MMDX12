@@ -1,6 +1,8 @@
 // The frame's pass list, in execution order (pc.path decides which ones do work):
 //   ShadowPass    cascaded shadow map (depth only, skinned)                       Raster, or any path
-//                 with volumetrics on (the volumetric march samples it)
+//                 with volumetrics on (the volumetric march samples it); spot shadow maps of the
+//                 characters for the first 8 spot lights (SpotShadowsWanted: raster/RT scene
+//                 shading and volumetrics)
 //   ScenePass     sky, studio floor, MMD materials + edges -> MSAA colour/normal/velocity/depth
 //                 (RayTraced: ray-query sun shadows instead of the shadow map)    not PathTraced
 //   ResolvePass   MSAA -> single sample (colour, normal, velocity, closest depth) not PathTraced
@@ -9,8 +11,8 @@
 //   SsaoPass      half-res AO (RayTraced: ray-traced AO) + depth-aware blur       not PathTraced
 //   SsrPass       half-res reflections (RayTraced: ray-traced)                    not PathTraced
 //   CompositePass colour * AO + reflections + haze -> lit
-//   VolumetricPass half-res ray-marched in-scattering (sun via the shadow map, spot/point lights),
-//                 added into lit                                                  optional
+//   VolumetricPass half-res ray-marched in-scattering (sun via the shadow map, spots via spot shadow maps),
+//                 lit * transmittance + in-scattered light                        optional
 //   TaaPass       temporal AA (optional, skipped when an upscaler runs) -> hdrFinal
 //   UpscalePass   DLSS / FSR / XeSS: lit -> output resolution -> hdrFinal
 //   DofPass       depth of field: CoC + half-res bokeh gather + composite -> hdrFinal (output res)
@@ -24,6 +26,14 @@
 
 namespace mmdx {
 
+// Spot shadow maps are rendered (and sampled by the scene / volumetric shaders) when shadows are on
+// and something reads them: the raster and RT scene shaders, or the volumetric march.
+inline bool SpotShadowsWanted(const RenderSettings& s, RenderPath path, bool offscreen) {
+    return s.shadows && (path != RenderPath::PathTraced || (s.volumetric && !offscreen));
+}
+// Number of spot shadow slices for these lights (slice i = the i-th spot among the first maxLights).
+uint32_t SpotShadowCount(const LightParams& light, uint32_t maxLights);
+
 class ShadowPass final : public IRenderPass {
 public:
     const char* Name() const override { return "Shadow"; }
@@ -31,6 +41,7 @@ public:
     void Execute(PassContext& pc) override;
 
 private:
+    void DrawSlice(PassContext& pc, const Texture& map, uint32_t slice, uint32_t matrixIndex, bool charactersOnly);
     ComPtr<ID3D12RootSignature> rootSig_;
     ComPtr<ID3D12PipelineState> psoOpaque_, psoAlpha_;
 };
@@ -169,8 +180,10 @@ private:
     bool kernelReady_ = false;
 };
 
-// Half-res ray-marched participating medium (height fog) lit by the sun (shadowed through the
-// cascaded shadow map when shadows are on) and the punctual lights. Additive into targets.lit.
+// Half-res ray-marched participating medium (height fog, volumetric_common.hlsli) lit by the sun
+// (shadowed through the cascaded shadow map) and the spot lights (shadowed through the spot shadow
+// maps), so occluders cut light shafts out of the beams. Jittered per frame and accumulated
+// temporally; composited as lit * transmittance + in-scattered light.
 // Needs the compute path (cs_6_5); does nothing without it, offscreen, or when settings.volumetric is off.
 class VolumetricPass final : public IRenderPass {
 public:
@@ -182,9 +195,14 @@ public:
 
 private:
     ComputePipeline march_;       // volumetric.hlsl CSMarch -> raw_ (UAV)
-    ComputePipeline blur_;        // volumetric.hlsl CSBlur  -> depth-aware separable blur raw_ <-> temp_
-    FullscreenPipeline apply_;    // volumetric.hlsl PSApply, additive into lit (depth-aware upsample)
-    Texture raw_, temp_;          // half render res RGBA16F, rgb = in-scattered radiance
+    ComputePipeline temporal_;    // volumetric.hlsl CSTemporal raw_ + history_[prev] -> history_[cur]
+    ComputePipeline blur_;        // volumetric.hlsl CSBlur  -> depth-aware separable blur history_[cur] -> temp_ -> raw_
+    FullscreenPipeline apply_;    // volumetric_apply.hlsl PSApply, lit * T + L (depth-aware upsample)
+    Texture raw_, temp_;          // half render res RGBA16F, rgb = in-scattered radiance, a = transmittance
+    Texture history_[2];          // temporal accumulation ping-pong (same format)
+    uint32_t historyIndex_ = 0;   // history_[historyIndex_] holds the last frame's result
+    uint64_t lastFrame_ = 0;      // pc.frame of the last executed frame (history validity)
+    bool historyReady_ = false;
 };
 
 // Depth of field at output resolution on hdrFinal: CoC from depth (render res, sampled by uv),

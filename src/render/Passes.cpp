@@ -2,6 +2,7 @@
 #include "render/Passes.h"
 #include "render/PassCommon.h"
 #include "render/GpuModel.h"
+#include "render/Renderer.h"
 #include "render/RayTracing.h"
 #include "render/Upscaler.h"
 #include "render/ShaderInterop.h"
@@ -88,58 +89,83 @@ bool ShadowPass::CreatePipelines(Dx12Context& ctx, const std::filesystem::path& 
     return CheckHr(device->CreateGraphicsPipelineState(&pso, IID_PPV_ARGS(&psoAlpha_)), "ShadowPass: PSO alpha");
 }
 
-void ShadowPass::Execute(PassContext& pc) {
-    Texture& sm = pc.targets.shadowMap;
-    if (!sm) return;
+uint32_t SpotShadowCount(const LightParams& light, uint32_t maxLights) {
+    uint32_t n = 0;
+    const size_t count = std::min<size_t>(light.punctual.size(), maxLights);
+    for (size_t i = 0; i < count && n < kSpotShadowSlices; ++i)
+        if (light.punctual[i].spotCosOuter > -1.0f) ++n;
+    return n;
+}
+
+// Renders every shadow-casting material into one depth slice (matrixIndex = gCascade: 0..2 the sun
+// cascades, 3 + i spot slice i). Spot slices take characters only: the performers are what cuts
+// shafts out of the beams, and re-drawing the whole stage per spot would cost more than the march.
+void ShadowPass::DrawSlice(PassContext& pc, const Texture& map, uint32_t slice, uint32_t matrixIndex,
+                           bool charactersOnly) {
     ID3D12GraphicsCommandList* cmd = pc.cmd;
-    if (pc.path != RenderPath::Raster && !(pc.settings.volumetric && !pc.offscreen)) {
-        sm.Transition(cmd, kSrv);
-        return;
-    }
-    if (!pc.settings.shadows || pc.view.models.empty()) {
-        sm.Transition(cmd, kSrv);
-        return;
-    }
-    sm.Transition(cmd, D3D12_RESOURCE_STATE_DEPTH_WRITE);
-    cmd->SetGraphicsRootSignature(rootSig_.Get());
-    cmd->SetGraphicsRootConstantBufferView(0, pc.sceneConstants);
-    cmd->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-    D3D12_VIEWPORT vp{0, 0, (float)sm.width, (float)sm.height, 0, 1};
-    D3D12_RECT sc{0, 0, (LONG)sm.width, (LONG)sm.height};
+    D3D12_VIEWPORT vp{0, 0, (float)map.width, (float)map.height, 0, 1};
+    D3D12_RECT sc{0, 0, (LONG)map.width, (LONG)map.height};
     cmd->RSSetViewports(1, &vp);
     cmd->RSSetScissorRects(1, &sc);
-    for (uint32_t c = 0; c < kShadowCascades; ++c) {
-        D3D12_CPU_DESCRIPTOR_HANDLE dsv = pc.ctx.DsvHeap().Cpu(sm.dsv + c);
-        cmd->ClearDepthStencilView(dsv, D3D12_CLEAR_FLAG_DEPTH, 1.0f, 0, 0, nullptr);
-        cmd->OMSetRenderTargets(0, nullptr, FALSE, &dsv);
-        cmd->SetGraphicsRoot32BitConstant(4, c, 0);
-        for (GpuModel* model : pc.view.models) {
-            if (!model) continue;
-            BindModelBuffers(cmd, *model, pc.frame);
-            cmd->SetGraphicsRootShaderResourceView(2, model->BoneBuffer(pc.frame));
-            ID3D12PipelineState* bound = nullptr;
-            for (const GpuModel::Material& m : model->Materials()) {
-                if (!m.castShadow || m.indexCount == 0) continue;
-                ID3D12PipelineState* want = m.alphaTested ? psoAlpha_.Get() : psoOpaque_.Get();
-                if (want != bound) {
-                    cmd->SetPipelineState(want);
-                    bound = want;
-                }
-                cmd->SetGraphicsRootConstantBufferView(1, m.constants);
-                cmd->SetGraphicsRootDescriptorTable(3, pc.ctx.SrvHeap().Gpu(m.srvTable));
-                cmd->DrawIndexedInstanced(m.indexCount, 1, m.indexStart, 0, 0);
-                pc.stats.drawCalls++;
+    D3D12_CPU_DESCRIPTOR_HANDLE dsv = pc.ctx.DsvHeap().Cpu(map.dsv + slice);
+    cmd->ClearDepthStencilView(dsv, D3D12_CLEAR_FLAG_DEPTH, 1.0f, 0, 0, nullptr);
+    cmd->OMSetRenderTargets(0, nullptr, FALSE, &dsv);
+    cmd->SetGraphicsRoot32BitConstant(4, matrixIndex, 0);
+    for (GpuModel* model : pc.view.models) {
+        if (!model || (charactersOnly && model->Role() != ModelRole::Character)) continue;
+        BindModelBuffers(cmd, *model, pc.frame);
+        cmd->SetGraphicsRootShaderResourceView(2, model->BoneBuffer(pc.frame));
+        ID3D12PipelineState* bound = nullptr;
+        for (const GpuModel::Material& m : model->Materials()) {
+            if (!m.castShadow || m.indexCount == 0) continue;
+            ID3D12PipelineState* want = m.alphaTested ? psoAlpha_.Get() : psoOpaque_.Get();
+            if (want != bound) {
+                cmd->SetPipelineState(want);
+                bound = want;
             }
+            cmd->SetGraphicsRootConstantBufferView(1, m.constants);
+            cmd->SetGraphicsRootDescriptorTable(3, pc.ctx.SrvHeap().Gpu(m.srvTable));
+            cmd->DrawIndexedInstanced(m.indexCount, 1, m.indexStart, 0, 0);
+            pc.stats.drawCalls++;
         }
     }
+}
+
+void ShadowPass::Execute(PassContext& pc) {
+    Texture& sm = pc.targets.shadowMap;
+    Texture& spot = pc.targets.spotShadowMap;
+    if (!sm) return;
+    ID3D12GraphicsCommandList* cmd = pc.cmd;
+    const bool cascades = pc.settings.shadows && !pc.view.models.empty() &&
+                          (pc.path == RenderPath::Raster || (pc.settings.volumetric && !pc.offscreen));
+    // must match Renderer::FillSceneConstants (spotShadowParams.x)
+    const uint32_t spots = (spot && SpotShadowsWanted(pc.settings, pc.path, pc.offscreen))
+                               ? SpotShadowCount(pc.view.light, Renderer::kMaxPunctualLights)
+                               : 0;
+    if (cascades || spots) {
+        cmd->SetGraphicsRootSignature(rootSig_.Get());
+        cmd->SetGraphicsRootConstantBufferView(0, pc.sceneConstants);
+        cmd->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+    }
+    if (cascades) {
+        sm.Transition(cmd, D3D12_RESOURCE_STATE_DEPTH_WRITE);
+        for (uint32_t c = 0; c < kShadowCascades; ++c) DrawSlice(pc, sm, c, c, false);
+    }
     sm.Transition(cmd, kSrv);
+    if (spot) {
+        if (spots) {
+            spot.Transition(cmd, D3D12_RESOURCE_STATE_DEPTH_WRITE);
+            for (uint32_t s = 0; s < spots; ++s) DrawSlice(pc, spot, s, kShadowCascades + s, true);
+        }
+        spot.Transition(cmd, kSrv);
+    }
 }
 
 // ---- ScenePass ---------------------------------------------------------------------------
 
 bool ScenePass::CreatePipelines(Dx12Context& ctx, const std::filesystem::path& shaderDir, uint32_t msaa) {
     ID3D12Device* device = ctx.Device();
-    CD3DX12_ROOT_PARAMETER params[11];
+    CD3DX12_ROOT_PARAMETER params[12];
     params[0].InitAsConstantBufferView(0, 0, D3D12_SHADER_VISIBILITY_ALL);   // SceneConstants
     params[1].InitAsConstantBufferView(1, 0, D3D12_SHADER_VISIBILITY_ALL);   // MaterialConstants
     params[2].InitAsShaderResourceView(0, 0, D3D12_SHADER_VISIBILITY_VERTEX); // bones
@@ -158,6 +184,9 @@ bool ScenePass::CreatePipelines(Dx12Context& ctx, const std::filesystem::path& s
     bufAll.Init(D3D12_DESCRIPTOR_RANGE_TYPE_SRV, UINT_MAX, 0, 3, 0);
     params[9].InitAsDescriptorTable(1, &texAll, D3D12_SHADER_VISIBILITY_PIXEL);
     params[10].InitAsDescriptorTable(1, &bufAll, D3D12_SHADER_VISIBILITY_PIXEL);
+    CD3DX12_DESCRIPTOR_RANGE spotTable;
+    spotTable.Init(D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 1, 7);
+    params[11].InitAsDescriptorTable(1, &spotTable, D3D12_SHADER_VISIBILITY_PIXEL);  // spot shadow maps
 
     CD3DX12_STATIC_SAMPLER_DESC samplers[4];
     samplers[0].Init(0, D3D12_FILTER_ANISOTROPIC, D3D12_TEXTURE_ADDRESS_MODE_WRAP,
@@ -176,7 +205,7 @@ bool ScenePass::CreatePipelines(Dx12Context& ctx, const std::filesystem::path& s
                      D3D12_SHADER_VISIBILITY_PIXEL);
 
     CD3DX12_ROOT_SIGNATURE_DESC rs;
-    rs.Init(11, params, 4, samplers, D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT);
+    rs.Init(12, params, 4, samplers, D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT);
     if (!CreateRootSignature(device, rs, rootSig_, "ScenePass: CreateRootSignature")) return false;
 
     const std::filesystem::path file = shaderDir / L"mmd.hlsl";
@@ -318,6 +347,7 @@ void ScenePass::Execute(PassContext& pc) {
     cmd->SetGraphicsRootSignature(rootSig_.Get());
     cmd->SetGraphicsRootConstantBufferView(0, pc.sceneConstants);
     cmd->SetGraphicsRootDescriptorTable(5, pc.transient.SrvTable(ctx, {&t.shadowMap}));
+    cmd->SetGraphicsRootDescriptorTable(11, pc.transient.SrvTable(ctx, {&t.spotShadowMap}));
     cmd->SetGraphicsRootShaderResourceView(6, pc.lights);
     if (rt) {
         cmd->SetGraphicsRootShaderResourceView(7, pc.rt->Tlas());
