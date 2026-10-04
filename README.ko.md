@@ -1,6 +1,6 @@
 <div align="center">
   <h1>MMDX12</h1>
-  <p><a href="README.md">English</a> · <b>한국어</b> · <a href="README.ja.md">日本語</a></p>
+  <p><a href="README.md">English</a> · <b>한국어</b> · <a href="README.ja.md">日本語</a> · <a href="README.zh.md">简体中文</a></p>
   <p>갖고 있는 MMD 모델이랑 춤 파일 넣고 재생만 누르면 레이 트레이싱 조명으로 바로 볼 수 있어요.<br>더 예쁘게 뽑고 싶으면 앱 안에서 4K 사진이나 뮤직비디오 한 편까지 렌더링됩니다.</p>
   <p>
     <img src="https://img.shields.io/badge/Platform-Windows%2010%2F11-39C5BB" alt="Platform">
@@ -9,11 +9,11 @@
     <a href="https://youtu.be/7S7D670HbIM"><img src="https://img.shields.io/badge/YouTube-Introduction-39C5BB?logo=youtube&logoColor=white" alt="YouTube"></a>
     <a href="#후원"><img src="https://img.shields.io/badge/%ED%9B%84%EC%9B%90-Bitcoin-0f3b21?logo=bitcoin&logoColor=white" alt="후원"></a>
   </p>
-  <a href="https://youtu.be/vNztzqvVV4M">
+  <a href="https://youtu.be/7S7D670HbIM">
     <img src="docs/media/promo-preview.webp" width="100%" alt="MMDX12 미리보기">
   </a>
   <br>
-  ▶ YouTube: <a href="https://youtu.be/vNztzqvVV4M">58초 프로모</a> · <a href="https://youtu.be/7S7D670HbIM">전체 소개 영상</a>
+  ▶ YouTube: <a href="https://youtu.be/7S7D670HbIM">전체 소개 영상</a>
   <p>
     <a href="#갤러리">갤러리</a> ·
     <a href="#할-수-있는-것">할 수 있는 것</a> ·

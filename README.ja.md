@@ -1,6 +1,6 @@
 <div align="center">
   <h1>MMDX12</h1>
-  <p><a href="README.md">English</a> · <a href="README.ko.md">한국어</a> · <b>日本語</b></p>
+  <p><a href="README.md">English</a> · <a href="README.ko.md">한국어</a> · <b>日本語</b> · <a href="README.zh.md">简体中文</a></p>
   <p>手持ちの MMD モデルとダンスのファイルを入れて再生を押すだけで、レイトレーシングのライティングですぐに見られます。<br>もっときれいに出したいときは、アプリの中から 4K の写真やミュージックビデオまでレンダリングできます。</p>
   <p>
     <img src="https://img.shields.io/badge/Platform-Windows%2010%2F11-39C5BB" alt="Platform">
@@ -9,11 +9,11 @@
     <a href="https://youtu.be/j8nnveh7Bug"><img src="https://img.shields.io/badge/YouTube-Introduction-39C5BB?logo=youtube&logoColor=white" alt="YouTube"></a>
     <a href="#支援"><img src="https://img.shields.io/badge/%E6%94%AF%E6%8F%B4-Bitcoin-0f3b21?logo=bitcoin&logoColor=white" alt="支援"></a>
   </p>
-  <a href="https://youtu.be/vNztzqvVV4M">
+  <a href="https://youtu.be/j8nnveh7Bug">
     <img src="docs/media/promo-preview.webp" width="100%" alt="MMDX12 プレビュー">
   </a>
   <br>
-  ▶ YouTube: <a href="https://youtu.be/vNztzqvVV4M">58秒のプロモ</a> · <a href="https://youtu.be/j8nnveh7Bug">フル紹介動画</a>
+  ▶ YouTube: <a href="https://youtu.be/j8nnveh7Bug">フル紹介動画</a>
   <p>
     <a href="#ギャラリー">ギャラリー</a> ·
     <a href="#できること">できること</a> ·

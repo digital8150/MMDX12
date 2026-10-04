@@ -1,6 +1,6 @@
 <div align="center">
   <h1>MMDX12</h1>
-  <p><b>English</b> · <a href="README.ko.md">한국어</a> · <a href="README.ja.md">日本語</a></p>
+  <p><b>English</b> · <a href="README.ko.md">한국어</a> · <a href="README.ja.md">日本語</a> · <a href="README.zh.md">简体中文</a></p>
   <p>Drop in your MMD models and dances, hit play, and watch them with ray-traced lighting.<br>When you want something prettier, render a 4K still or a full music video right from the app.</p>
   <p>
     <img src="https://img.shields.io/badge/Platform-Windows%2010%2F11-39C5BB" alt="Platform">
@@ -9,11 +9,11 @@
     <a href="https://youtu.be/QQFtn_meacA"><img src="https://img.shields.io/badge/YouTube-Introduction-39C5BB?logo=youtube&logoColor=white" alt="YouTube"></a>
     <a href="#support"><img src="https://img.shields.io/badge/Donate-Bitcoin-0f3b21?logo=bitcoin&logoColor=white" alt="Donate"></a>
   </p>
-  <a href="https://youtu.be/vNztzqvVV4M">
+  <a href="https://youtu.be/QQFtn_meacA">
     <img src="docs/media/promo-preview.webp" width="100%" alt="MMDX12 preview">
   </a>
   <br>
-  ▶ YouTube: <a href="https://youtu.be/vNztzqvVV4M">58-second promo</a> · <a href="https://youtu.be/QQFtn_meacA">Full introduction</a>
+  ▶ YouTube: <a href="https://youtu.be/QQFtn_meacA">Full introduction</a>
   <p>
     <a href="#gallery">Gallery</a> ·
     <a href="#what-it-does">What it does</a> ·
