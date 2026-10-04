@@ -6,14 +6,14 @@
     <img src="https://img.shields.io/badge/Platform-Windows%2010%2F11-39C5BB" alt="Platform">
     <img src="https://img.shields.io/badge/Graphics-Direct3D%2012%20%2B%20DXR%201.1-39C5BB" alt="Graphics">
     <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-39C5BB" alt="License"></a>
-    <a href="https://youtu.be/7S7D670HbIM"><img src="https://img.shields.io/badge/YouTube-Introduction-39C5BB?logo=youtube&logoColor=white" alt="YouTube"></a>
+    <a href="https://youtu.be/j8nnveh7Bug"><img src="https://img.shields.io/badge/YouTube-Introduction-39C5BB?logo=youtube&logoColor=white" alt="YouTube"></a>
     <a href="#支援"><img src="https://img.shields.io/badge/%E6%94%AF%E6%8F%B4-Bitcoin-0f3b21?logo=bitcoin&logoColor=white" alt="支援"></a>
   </p>
   <a href="https://youtu.be/vNztzqvVV4M">
     <img src="docs/media/promo-preview.webp" width="100%" alt="MMDX12 プレビュー">
   </a>
   <br>
-  ▶ YouTube: <a href="https://youtu.be/vNztzqvVV4M">58秒のプロモ</a> · <a href="https://youtu.be/7S7D670HbIM">フル紹介動画</a>
+  ▶ YouTube: <a href="https://youtu.be/vNztzqvVV4M">58秒のプロモ</a> · <a href="https://youtu.be/j8nnveh7Bug">フル紹介動画</a>
   <p>
     <a href="#ギャラリー">ギャラリー</a> ·
     <a href="#できること">できること</a> ·

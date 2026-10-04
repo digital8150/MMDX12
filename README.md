@@ -6,14 +6,14 @@
     <img src="https://img.shields.io/badge/Platform-Windows%2010%2F11-39C5BB" alt="Platform">
     <img src="https://img.shields.io/badge/Graphics-Direct3D%2012%20%2B%20DXR%201.1-39C5BB" alt="Graphics">
     <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-39C5BB" alt="License"></a>
-    <a href="https://youtu.be/7S7D670HbIM"><img src="https://img.shields.io/badge/YouTube-Introduction-39C5BB?logo=youtube&logoColor=white" alt="YouTube"></a>
+    <a href="https://youtu.be/QQFtn_meacA"><img src="https://img.shields.io/badge/YouTube-Introduction-39C5BB?logo=youtube&logoColor=white" alt="YouTube"></a>
     <a href="#support"><img src="https://img.shields.io/badge/Donate-Bitcoin-0f3b21?logo=bitcoin&logoColor=white" alt="Donate"></a>
   </p>
   <a href="https://youtu.be/vNztzqvVV4M">
     <img src="docs/media/promo-preview.webp" width="100%" alt="MMDX12 preview">
   </a>
   <br>
-  ▶ YouTube: <a href="https://youtu.be/vNztzqvVV4M">58-second promo</a> · <a href="https://youtu.be/7S7D670HbIM">Full introduction</a>
+  ▶ YouTube: <a href="https://youtu.be/vNztzqvVV4M">58-second promo</a> · <a href="https://youtu.be/QQFtn_meacA">Full introduction</a>
   <p>
     <a href="#gallery">Gallery</a> ·
     <a href="#what-it-does">What it does</a> ·
