@@ -55,20 +55,27 @@ MMDX12의 영상 모드로 노래 한 곡을 통째로 렌더해서 그대로 �
 
 <table>
   <tr>
-    <td align="center" width="33%">
+    <td align="center" width="50%">
       <a href="https://youtu.be/tng53F--jEM"><img src="docs/media/video-monitoring.webp" width="100%" alt="モニタリング (Best Friend Remix)"></a>
       <br><b>モニタリング (Best Friend Remix)</b>
       <br><sub>패스 트레이싱 4K 60FPS</sub>
     </td>
-    <td align="center" width="33%">
+    <td align="center" width="50%">
       <a href="https://youtu.be/WqZzpxBWhj4"><img src="docs/media/video-cute-medley.webp" width="100%" alt="Cute Medley: Idol Sounds"></a>
       <br><b>Cute Medley: Idol Sounds</b>
       <br><sub>패스 트레이싱 QHD 60FPS</sub>
     </td>
-    <td align="center" width="33%">
+  </tr>
+  <tr>
+    <td align="center" width="50%">
       <a href="https://youtu.be/6JerS9iSD50"><img src="docs/media/video-world-is-mine.webp" width="100%" alt="World is Mine"></a>
       <br><b>World is Mine</b>
       <br><sub>패스 트레이싱 QHD 24FPS</sub>
+    </td>
+    <td align="center" width="50%">
+      <a href="https://youtu.be/xYYAZFU4Yz8"><img src="docs/media/video-catch-the-wave.webp" width="100%" alt="Catch the Wave"></a>
+      <br><b>Catch the Wave</b>
+      <br><sub>패스 트레이싱 4K 60FPS</sub>
     </td>
   </tr>
 </table>
