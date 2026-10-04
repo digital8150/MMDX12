@@ -53,11 +53,25 @@
 
 用 MMDX12 的视频模式整首歌渲染后,原样上传。
 
-<ul>
-  <li><a href="https://youtu.be/tng53F--jEM">モニタリング (Best Friend Remix)</a> (路径追踪 4K 60FPS)</li>
-  <li><a href="https://youtu.be/WqZzpxBWhj4">Cute Medley: Idol Sounds</a> (路径追踪 QHD 60FPS)</li>
-  <li><a href="https://youtu.be/6JerS9iSD50">World is Mine</a> (路径追踪 QHD 24FPS)</li>
-</ul>
+<table>
+  <tr>
+    <td align="center" width="33%">
+      <a href="https://youtu.be/tng53F--jEM"><img src="https://img.youtube.com/vi/tng53F--jEM/hqdefault.jpg" width="100%" alt="モニタリング (Best Friend Remix)"></a>
+      <br><b>モニタリング (Best Friend Remix)</b>
+      <br><sub>路径追踪 4K 60FPS</sub>
+    </td>
+    <td align="center" width="33%">
+      <a href="https://youtu.be/WqZzpxBWhj4"><img src="https://img.youtube.com/vi/WqZzpxBWhj4/hqdefault.jpg" width="100%" alt="Cute Medley: Idol Sounds"></a>
+      <br><b>Cute Medley: Idol Sounds</b>
+      <br><sub>路径追踪 QHD 60FPS</sub>
+    </td>
+    <td align="center" width="33%">
+      <a href="https://youtu.be/6JerS9iSD50"><img src="https://img.youtube.com/vi/6JerS9iSD50/hqdefault.jpg" width="100%" alt="World is Mine"></a>
+      <br><b>World is Mine</b>
+      <br><sub>路径追踪 QHD 24FPS</sub>
+    </td>
+  </tr>
+</table>
 
 ## 功能
 
