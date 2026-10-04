@@ -1,3 +1,4 @@
+#include "core/I18n.h"
 #include "app/Lighting.h"
 #include <cmath>
 
@@ -14,10 +15,10 @@ DirectX::XMFLOAT3 Srgb(float r, float g, float b) {
 
 const char* LightingPresetName(LightingPreset p) {
     switch (p) {
-    case LightingPreset::Studio: return "스튜디오";
-    case LightingPreset::Sunset: return "노을";
-    case LightingPreset::Concert: return "콘서트";
-    case LightingPreset::Night: return "밤";
+    case LightingPreset::Studio: return Tr("스튜디오");
+    case LightingPreset::Sunset: return Tr("노을");
+    case LightingPreset::Concert: return Tr("콘서트");
+    case LightingPreset::Night: return Tr("밤");
     }
     return "";
 }

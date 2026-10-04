@@ -85,7 +85,7 @@ void App::DrawAppBar(int activeNav) {
 
     // Primary navigation.
     ImGui::SetCursorScreenPos(ImVec2(navX, (h - Dp(38.0f)) * 0.5f));
-    const char* nav[] = {"라이브러리", "벤치마크"};
+    const char* nav[] = {Tr("라이브러리"), Tr("벤치마크")};
     const char* navIcons[] = {icon::Stack, icon::Gauge};
     int sel = activeNav;
     if (Segmented("##nav", nav, 2, &sel, 0.0f, 38.0f, navIcons)) {
@@ -101,7 +101,7 @@ void App::DrawAppBar(int activeNav) {
     const std::string path = PathToUtf8(library_.root.empty() ? ResolveLibraryPath() : library_.root);
     const float pillW = Dp(300.0f);
     const float right = W - Dp(kPad);
-    const ImVec2 pa(right - pillW - Dp(46.0f), (h - Dp(36.0f)) * 0.5f);
+    const ImVec2 pa(right - pillW - Dp(86.0f), (h - Dp(36.0f)) * 0.5f);
     ImGui::SetCursorScreenPos(pa);
     bool hovered = false;
     const bool clicked = CardItem("##libpath", pa, ImVec2(pa.x + pillW, pa.y + Dp(36.0f)), &hovered);
@@ -111,31 +111,54 @@ void App::DrawAppBar(int activeNav) {
     Icon(dl, icon::FolderOpen, 16.0f, ImVec2(pa.x + Dp(20.0f), pa.y + Dp(18.0f)), p.ink2);
     TextEllipsis(dl, Font::Regular, size::Small, ImVec2(pa.x + Dp(36.0f), pa.y + Dp(9.0f)), pa.x + pillW - Dp(14.0f),
                  p.ink2, path.c_str());
-    if (hovered) Tooltip("라이브러리 폴더 변경");
+    if (hovered) Tooltip(Tr("라이브러리 폴더 변경"));
     if (clicked) ImGui::OpenPopup("##libpopup");
+    ImGui::SetCursorScreenPos(ImVec2(right - Dp(76.0f), (h - Dp(36.0f)) * 0.5f));
+    if (IconButton("##lang", icon::Globe, Tr("언어"))) ImGui::OpenPopup("##langpopup");
+    ImGui::SetNextWindowPos(ImVec2(right - Dp(40.0f), h + Dp(6.0f)), ImGuiCond_Always, ImVec2(1.0f, 0.0f));
+    ImGui::SetNextWindowSize(ImVec2(Dp(200.0f), 0));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(Dp(12.0f), Dp(12.0f)));
+    if (ImGui::BeginPopup("##langpopup")) {
+        const Language langs[] = {Language::Auto, Language::Korean, Language::English, Language::Japanese};
+        for (const Language l : langs) {
+            const std::string label = l == Language::Auto ? std::string(Tr("시스템 언어")) + "  (" +
+                                                                LanguageName(DetectSystemLanguage()) + ")"
+                                                          : std::string(LanguageName(l));
+            if (Chip((std::string("##lang") + std::to_string((int)l)).c_str(), label.c_str(), nullptr,
+                     settings_.language == (int)l, -1.0f)) {
+                settings_.language = (int)l;
+                SetLanguage(l);
+                settings_.Save(settingsPath_);
+                ImGui::CloseCurrentPopup();
+            }
+            Gap(4.0f);
+        }
+        ImGui::EndPopup();
+    }
+    ImGui::PopStyleVar();
     ImGui::SetCursorScreenPos(ImVec2(right - Dp(36.0f), (h - Dp(36.0f)) * 0.5f));
-    if (IconButton("##rescan", icon::Refresh, "라이브러리 다시 검색")) StartScan();
+    if (IconButton("##rescan", icon::Refresh, Tr("라이브러리 다시 검색"))) StartScan();
 
-    ImGui::SetNextWindowPos(ImVec2(pa.x + pillW + Dp(46.0f), h + Dp(6.0f)), ImGuiCond_Always, ImVec2(1.0f, 0.0f));
+    ImGui::SetNextWindowPos(ImVec2(pa.x + pillW + Dp(86.0f), h + Dp(6.0f)), ImGuiCond_Always, ImVec2(1.0f, 0.0f));
     ImGui::SetNextWindowSize(ImVec2(Dp(440.0f), 0));
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(Dp(18.0f), Dp(16.0f)));
     if (ImGui::BeginPopup("##libpopup")) {
-        TextField("##libedit", "라이브러리 폴더", libraryPathEdit_, sizeof(libraryPathEdit_), -1.0f);
+        TextField("##libedit", Tr("라이브러리 폴더"), libraryPathEdit_, sizeof(libraryPathEdit_), -1.0f);
         Gap(4.0f);
         PushFont(Font::Regular, size::Caption);
         ImGui::PushStyleColor(ImGuiCol_Text, ImGui::ColorConvertU32ToFloat4(p.ink3));
-        ImGui::TextWrapped("PMX 모델, 스테이지, VMD 모션과 음원이 들어 있는 폴더입니다. 폴더 구성은 자유롭게 두어도 됩니다.");
+        ImGui::TextWrapped(Tr("PMX 모델, 스테이지, VMD 모션과 음원이 들어 있는 폴더입니다. 폴더 구성은 자유롭게 두어도 됩니다."));
         ImGui::PopStyleColor();
         PopFont();
         Gap(8.0f);
-        if (Button("##libapply", "적용하고 다시 검색", icon::Refresh, ButtonKind::Primary)) {
+        if (Button("##libapply", Tr("적용하고 다시 검색"), icon::Refresh, ButtonKind::Primary)) {
             settings_.libraryPath = libraryPathEdit_;
             settings_.Save(settingsPath_);
             ImGui::CloseCurrentPopup();
             StartScan();
         }
         ImGui::SameLine();
-        if (Button("##libopen", "탐색기에서 열기", icon::FolderOpen, ButtonKind::Secondary))
+        if (Button("##libopen", Tr("탐색기에서 열기"), icon::FolderOpen, ButtonKind::Secondary))
             ShellExecuteW(nullptr, L"open", Utf8ToPath(libraryPathEdit_).c_str(), nullptr, nullptr, SW_SHOWNORMAL);
         ImGui::EndPopup();
     }
@@ -213,7 +236,7 @@ void App::DrawScanning() {
 
     const int visited = scanProgress_.filesVisited.load(std::memory_order_relaxed);
     const int total = scanProgress_.filesTotal.load(std::memory_order_relaxed);
-    const char* label = "라이브러리를 살펴보는 중";
+    const char* label = Tr("라이브러리를 살펴보는 중");
     const ImVec2 ls = TextSize(Font::Semibold, size::Body, label);
     Text(dl, Font::Semibold, size::Body, ImVec2(c.x - ls.x * 0.5f, y + ws.y + Dp(22.0f)), p.ink2, label);
     const float by = y + ws.y + Dp(54.0f);
@@ -221,8 +244,8 @@ void App::DrawScanning() {
         ProgressBar(dl, ImVec2(c.x - w * 0.5f, by), ImVec2(c.x + w * 0.5f, by + Dp(6.0f)), (float)visited / (float)total);
     else
         Skeleton(dl, ImVec2(c.x - w * 0.5f, by), ImVec2(c.x + w * 0.5f, by + Dp(6.0f)), Dp(3.0f));
-    const std::string count = total > 0 ? Thousands((uint64_t)visited) + " / " + Thousands((uint64_t)total) + " 파일"
-                                        : Thousands((uint64_t)visited) + " 파일";
+    const std::string count = total > 0 ? Thousands((uint64_t)visited) + " / " + Thousands((uint64_t)total) + Tr(" 파일")
+                                        : Thousands((uint64_t)visited) + Tr(" 파일");
     const ImVec2 cs = TextSize(Font::Regular, size::Caption, count.c_str());
     Text(dl, Font::Regular, size::Caption, ImVec2(c.x - cs.x * 0.5f, by + Dp(16.0f)), p.ink3, count.c_str());
     EndScreen();
@@ -244,9 +267,9 @@ void App::DrawSelect() {
 
     // ---- header row: category tabs + search
     {
-        const std::string l0 = "캐릭터  " + std::to_string(library_.characters.size());
-        const std::string l1 = "스테이지  " + std::to_string(library_.stages.size());
-        const std::string l2 = "곡  " + std::to_string(library_.songs.size());
+        const std::string l0 = Tr("캐릭터  ") + std::to_string(library_.characters.size());
+        const std::string l1 = Tr("스테이지  ") + std::to_string(library_.stages.size());
+        const std::string l2 = Tr("곡  ") + std::to_string(library_.songs.size());
         const char* labels[] = {l0.c_str(), l1.c_str(), l2.c_str()};
         const char* icons[] = {icon::Person, icon::Mountains, icon::Music};
         ImGui::SetCursorScreenPos(ImVec2(leftX, top));
@@ -254,7 +277,7 @@ void App::DrawSelect() {
         char* filter = libraryTab_ == 0 ? filterCharacter_ : (libraryTab_ == 1 ? filterStage_ : filterSong_);
         const float sw = std::min(280.0f, (leftR - leftX) / Dpi() * 0.4f);
         ImGui::SetCursorScreenPos(ImVec2(leftR - Dp(sw), top + Dp(1.0f)));
-        const char* hints[] = {"캐릭터 검색", "스테이지 검색", "곡 검색"};
+        const char* hints[] = {Tr("캐릭터 검색"), Tr("스테이지 검색"), Tr("곡 검색")};
         SearchField("##search", filter, 128, hints[libraryTab_], sw);
     }
 
@@ -314,7 +337,7 @@ void App::DrawSelect() {
                     Skeleton(dl, ImVec2(ta.x + Dp(10), ta.y + Dp(10)), ImVec2(tb.x - Dp(10), tb.y - Dp(10)), Dp(10.0f));
                 TextEllipsis(dl, Font::Semibold, size::Body, ImVec2(a0.x + Dp(14.0f), tb.y + Dp(12.0f)), b0.x - Dp(12.0f),
                              p.ink, a.displayName.c_str());
-                const std::string meta = "정점 " + Thousands(a.vertexCount) + "  ·  본 " + Thousands(a.boneCount);
+                const std::string meta = Tr("정점 ") + Thousands(a.vertexCount) + Tr("  ·  본 ") + Thousands(a.boneCount);
                 TextEllipsis(dl, Font::Regular, size::Caption, ImVec2(a0.x + Dp(14.0f), tb.y + Dp(35.0f)),
                              b0.x - Dp(12.0f), p.ink3, meta.c_str());
                 if (sv > 0.01f) dl->AddRect(a0, b0, WithAlpha(p.accent, sv), r, 0, Dp(2.0f));
@@ -323,8 +346,8 @@ void App::DrawSelect() {
                 ImGui::PopID();
             }
             if (n == 0) {
-                const char* msg = library_.characters.empty() ? "라이브러리 폴더에 PMX 모델을 넣어 주세요"
-                                                              : "검색 결과가 없습니다";
+                const char* msg = library_.characters.empty() ? Tr("라이브러리 폴더에 PMX 모델을 넣어 주세요")
+                                                              : Tr("검색 결과가 없습니다");
                 const ImVec2 ms = TextSize(Font::Semibold, size::Title, msg);
                 Text(dl, Font::Semibold, size::Title, ImVec2(origin.x + (availW - ms.x) * 0.5f, origin.y + Dp(80.0f)),
                      p.ink2, msg);
@@ -375,12 +398,12 @@ void App::DrawSelect() {
                     dl->PopClipRect();
                     Icon(dl, icon::Sun, 30.0f, ImVec2((ta.x + tb.x) * 0.5f, (ta.y + tb.y) * 0.5f), WithAlpha(p.ink2, 0.55f));
                 }
-                const char* name = a ? a->displayName.c_str() : "스튜디오";
+                const char* name = a ? a->displayName.c_str() : Tr("스튜디오");
                 TextEllipsis(dl, Font::Semibold, size::Body, ImVec2(a0.x + Dp(14.0f), tb.y + Dp(12.0f)), b0.x - Dp(12.0f),
                              p.ink, name);
-                const std::string meta = a ? "파트 " + std::to_string(a->pmxParts.size()) + "  ·  정점 " +
+                const std::string meta = a ? Tr("파트 ") + std::to_string(a->pmxParts.size()) + Tr("  ·  정점 ") +
                                                  Thousands(a->vertexCount)
-                                           : std::string("스테이지 없이 밝은 바닥 위에서");
+                                           : std::string(Tr("스테이지 없이 밝은 바닥 위에서"));
                 TextEllipsis(dl, Font::Regular, size::Caption, ImVec2(a0.x + Dp(14.0f), tb.y + Dp(35.0f)),
                              b0.x - Dp(12.0f), p.ink3, meta.c_str());
                 if (sv > 0.01f) dl->AddRect(a0, b0, WithAlpha(p.accent, sv), r, 0, Dp(2.0f));
@@ -424,17 +447,17 @@ void App::DrawSelect() {
                 const float by = ra.y + Dp(38.0f);
                 ImVec2 bs;
                 if (!a.audioPath.empty()) {
-                    Badge(dl, ImVec2(bx, by), "음원", WithAlpha(p.accent, 0.16f), p.accentInk, &bs);
+                    Badge(dl, ImVec2(bx, by), Tr("음원"), WithAlpha(p.accent, 0.16f), p.accentInk, &bs);
                     bx += bs.x + Dp(6.0f);
                 } else {
-                    Badge(dl, ImVec2(bx, by), "음원 없음", p.warnSoft, p.warn, &bs);
+                    Badge(dl, ImVec2(bx, by), Tr("음원 없음"), p.warnSoft, p.warn, &bs);
                     bx += bs.x + Dp(6.0f);
                 }
                 if (!a.cameraVmd.empty()) {
-                    Badge(dl, ImVec2(bx, by), "카메라 모션", WithAlpha(p.ink, 0.06f), p.ink2, &bs);
+                    Badge(dl, ImVec2(bx, by), Tr("카메라 모션"), WithAlpha(p.ink, 0.06f), p.ink2, &bs);
                     bx += bs.x + Dp(6.0f);
                 }
-                if (!a.extraVmds.empty()) Badge(dl, ImVec2(bx, by), "표정", WithAlpha(p.ink, 0.06f), p.ink2, &bs);
+                if (!a.extraVmds.empty()) Badge(dl, ImVec2(bx, by), Tr("표정"), WithAlpha(p.ink, 0.06f), p.ink2, &bs);
                 const std::string dur = MinSec(a.durationSec);
                 const ImVec2 dsz = TextSize(Font::Semibold, size::Body, dur.c_str());
                 if (sv > 0.01f)
@@ -445,8 +468,8 @@ void App::DrawSelect() {
                 ImGui::PopID();
             }
             if (n == 0) {
-                const char* msg = library_.songs.empty() ? "라이브러리 폴더에 VMD 댄스 모션을 넣어 주세요"
-                                                         : "검색 결과가 없습니다";
+                const char* msg = library_.songs.empty() ? Tr("라이브러리 폴더에 VMD 댄스 모션을 넣어 주세요")
+                                                         : Tr("검색 결과가 없습니다");
                 const ImVec2 ms = TextSize(Font::Semibold, size::Title, msg);
                 Text(dl, Font::Semibold, size::Title, ImVec2(origin.x + (availW - ms.x) * 0.5f, origin.y + Dp(80.0f)),
                      p.ink2, msg);
@@ -473,18 +496,18 @@ void App::DrawSelect() {
         const float prevH = innerW * (advancedOpen_ ? 0.34f : 10.0f / 16.0f);
         DrawScenePreview(ch, st, pa.x + ip, pa.y + ip, pb.x - ip, pa.y + ip + prevH, Dp(12.0f));
         if (!ch) {
-            const char* msg = "캐릭터를 골라 주세요";
+            const char* msg = Tr("캐릭터를 골라 주세요");
             const ImVec2 ms = TextSize(Font::Semibold, size::Body, msg);
             Text(dl, Font::Semibold, size::Body, ImVec2(pa.x + ip + (innerW - ms.x) * 0.5f, pa.y + ip + prevH * 0.5f - ms.y),
                  WithAlpha(p.ink2, 0.8f), msg);
         }
         float y = pa.y + ip + prevH + Dp(18.0f);
         TextEllipsis(dl, Font::Bold, size::Heading, ImVec2(pa.x + ip, y), pb.x - ip, song ? p.ink : p.ink3,
-                     song ? song->displayName.c_str() : "곡을 골라 주세요");
+                     song ? song->displayName.c_str() : Tr("곡을 골라 주세요"));
         y += Dp(32.0f);
         {
-            std::string sub = (ch ? ch->displayName : std::string("캐릭터 미선택")) + "  ·  " +
-                              (st ? st->displayName : std::string("스튜디오"));
+            std::string sub = (ch ? ch->displayName : std::string(Tr("캐릭터 미선택"))) + "  ·  " +
+                              (st ? st->displayName : std::string(Tr("스튜디오")));
             if (song) sub += "  ·  " + MinSec(song->durationSec);
             TextEllipsis(dl, Font::Regular, size::Small, ImVec2(pa.x + ip, y), pb.x - ip, p.ink2, sub.c_str());
         }
@@ -505,8 +528,8 @@ void App::DrawSelect() {
             const float colW = innerW;
             ImGui::BeginGroup();
             ImGui::PushClipRect(win->Pos, ImVec2(win->Pos.x + colW + Dp(4.0f), win->Pos.y + win->Size.y), true);
-            SectionLabel("그래픽 품질");
-            const char* q[] = {"낮음", "보통", "높음", "최고"};
+            SectionLabel(Tr("그래픽 품질"));
+            const char* q[] = {Tr("낮음"), Tr("보통"), Tr("높음"), Tr("최고")};
             int preset = settings_.graphicsPreset;
             if (Segmented("##quality", q, 4, &preset, colW / Dpi(), 36.0f)) {
                 ApplyGraphicsPreset(preset);
@@ -514,8 +537,8 @@ void App::DrawSelect() {
                 settings_.Save(settingsPath_);
             }
             Gap(18.0f);
-            SectionLabel("렌더링");
-            const char* paths[] = {"래스터", "레이 트레이싱", "패스 트레이싱"};
+            SectionLabel(Tr("렌더링"));
+            const char* paths[] = {Tr("래스터"), Tr("레이 트레이싱"), Tr("패스 트레이싱")};
             int path = settings_.renderPath;
             if (Segmented("##renderpath", paths, 3, &path, colW / Dpi(), 36.0f)) {
                 if (path != 0 && !renderer_.RayTracingSupported()) path = 0;
@@ -526,13 +549,13 @@ void App::DrawSelect() {
             if (!renderer_.RayTracingSupported()) {
                 PushFont(Font::Regular, size::Caption);
                 ImGui::PushStyleColor(ImGuiCol_Text, ImGui::ColorConvertU32ToFloat4(P().ink3));
-                ImGui::TextUnformatted("이 GPU는 DXR 1.1 레이 트레이싱을 지원하지 않습니다");
+                ImGui::TextUnformatted(Tr("이 GPU는 DXR 1.1 레이 트레이싱을 지원하지 않습니다"));
                 ImGui::PopStyleColor();
                 PopFont();
             }
             Gap(14.0f);
-            SectionLabel("업스케일러");
-            const char* ups[] = {"끔", "DLSS", "FSR", "XeSS"};
+            SectionLabel(Tr("업스케일러"));
+            const char* ups[] = {Tr("끔"), "DLSS", "FSR", "XeSS"};
             int up = settings_.upscaler;
             if (Segmented("##upscaler", ups, 4, &up, colW / Dpi(), 36.0f)) {
                 if (up != 0 && !renderer_.UpscalerAvailable((UpscalerKind)up)) up = 0;
@@ -549,7 +572,7 @@ void App::DrawSelect() {
                     }
                 }
                 if (!unavail.empty()) {
-                    const std::string cap = "사용할 수 없음: " + unavail;
+                    const std::string cap = Tr("사용할 수 없음: ") + unavail;
                     PushFont(Font::Regular, size::Caption);
                     ImGui::PushStyleColor(ImGuiCol_Text, ImGui::ColorConvertU32ToFloat4(P().ink3));
                     ImGui::TextUnformatted(cap.c_str());
@@ -559,7 +582,7 @@ void App::DrawSelect() {
             }
             if (settings_.upscaler != 0) {
                 Gap(10.0f);
-                const char* qs[] = {"네이티브", "품질", "균형", "성능", "울트라"};
+                const char* qs[] = {Tr("네이티브"), Tr("품질"), Tr("균형"), Tr("성능"), Tr("울트라")};
                 int q = settings_.upscalerQuality;
                 if (Segmented("##upq", qs, 5, &q, colW / Dpi(), 34.0f)) {
                     settings_.upscalerQuality = q;
@@ -568,7 +591,7 @@ void App::DrawSelect() {
                 }
             }
             Gap(18.0f);
-            SectionLabel("조명");
+            SectionLabel(Tr("조명"));
             const char* lightIcons[] = {icon::Sun, icon::CircleHalf, icon::Sparkle, icon::Moon};
             const float chipW = (colW / Dpi() - 8.0f) * 0.5f;
             for (int i = 0; i < kLightingPresetCount; ++i) {
@@ -589,22 +612,22 @@ void App::DrawSelect() {
                 if (CardItem("##advanced", da, ImVec2(da.x + colW, da.y + Dp(34.0f)), &hovered)) advancedOpen_ = !advancedOpen_;
                 const float rot = Anim(ImGui::GetID("##advrot"), advancedOpen_, 14.0f);
                 Text(w->DrawList, Font::Semibold, size::Small, ImVec2(da.x, da.y + Dp(8.0f)), hovered ? p.ink : p.ink2,
-                     "세부 설정");
+                     Tr("세부 설정"));
                 Icon(w->DrawList, rot > 0.5f ? icon::CaretDown : icon::CaretRight, 14.0f,
                      ImVec2(da.x + colW - Dp(10.0f), da.y + Dp(17.0f)), p.ink2);
             }
             if (advancedOpen_) {
                 bool changed = false;
-                changed |= Switch("##shadows", "그림자", &settings_.shadows);
-                changed |= Switch("##ssao", "앰비언트 오클루전", &settings_.ssao);
-                changed |= Switch("##ssr", "화면 공간 반사", &settings_.ssr);
-                changed |= Switch("##bloom", "블룸", &settings_.bloom);
-                changed |= Switch("##taa", "TAA", &settings_.taa, "시간 누적 안티에일리어싱");
-                changed |= Switch("##edges", "외곽선", &settings_.drawEdges);
-                changed |= Switch("##vsync", "수직 동기화", &settings_.vsync);
+                changed |= Switch("##shadows", Tr("그림자"), &settings_.shadows);
+                changed |= Switch("##ssao", Tr("앰비언트 오클루전"), &settings_.ssao);
+                changed |= Switch("##ssr", Tr("화면 공간 반사"), &settings_.ssr);
+                changed |= Switch("##bloom", Tr("블룸"), &settings_.bloom);
+                changed |= Switch("##taa", "TAA", &settings_.taa, Tr("시간 누적 안티에일리어싱"));
+                changed |= Switch("##edges", Tr("외곽선"), &settings_.drawEdges);
+                changed |= Switch("##vsync", Tr("수직 동기화"), &settings_.vsync);
                 Gap(6.0f);
                 SectionLabel("MSAA");
-                const char* m[] = {"끔", "2x", "4x", "8x"};
+                const char* m[] = {Tr("끔"), "2x", "4x", "8x"};
                 int mi = settings_.msaa == 1 ? 0 : settings_.msaa == 2 ? 1 : settings_.msaa == 4 ? 2 : 3;
                 if (Segmented("##msaa", m, 4, &mi, colW / Dpi(), 34.0f)) {
                     settings_.msaa = mi == 0 ? 1 : mi == 1 ? 2 : mi == 2 ? 4 : 8;
@@ -612,7 +635,7 @@ void App::DrawSelect() {
                 }
                 if (settings_.renderPath == 2) {
                     Gap(14.0f);
-                    SectionLabel("패스 트레이싱 샘플");
+                    SectionLabel(Tr("패스 트레이싱 샘플"));
                     const char* s[] = {"1", "2", "4"};
                     int si = settings_.ptSamples == 1 ? 0 : settings_.ptSamples == 2 ? 1 : 2;
                     if (Segmented("##ptsamples", s, 3, &si, colW / Dpi(), 34.0f)) {
@@ -620,7 +643,7 @@ void App::DrawSelect() {
                         ApplyRenderSettings();
                         settings_.Save(settingsPath_);
                     }
-                    SectionLabel("반사 횟수");
+                    SectionLabel(Tr("반사 횟수"));
                     const char* bn[] = {"2", "3", "4", "6"};
                     int bi = settings_.ptBounces == 2 ? 0 : settings_.ptBounces == 3 ? 1 : settings_.ptBounces == 4 ? 2 : 3;
                     if (Segmented("##ptbounces", bn, 4, &bi, colW / Dpi(), 34.0f)) {
@@ -630,34 +653,34 @@ void App::DrawSelect() {
                     }
                 }
                 Gap(14.0f);
-                changed |= SliderRow("##scale", "렌더 스케일", &settings_.renderScale, 0.5f, 2.0f, "%.2fx");
+                changed |= SliderRow("##scale", Tr("렌더 스케일"), &settings_.renderScale, 0.5f, 2.0f, "%.2fx");
                 Gap(10.0f);
-                changed |= SliderRow("##exposure", "노출", &settings_.exposure, 0.5f, 2.0f, "%.2f");
+                changed |= SliderRow("##exposure", Tr("노출"), &settings_.exposure, 0.5f, 2.0f, "%.2f");
                 Gap(10.0f);
-                if (Switch("##physics", "물리 연산", &settings_.physics, "머리카락과 옷의 흔들림")) settings_.Save(settingsPath_);
+                if (Switch("##physics", Tr("물리 연산"), &settings_.physics, Tr("머리카락과 옷의 흔들림"))) settings_.Save(settingsPath_);
                 Gap(14.0f);
-                SectionLabel("효과");
+                SectionLabel(Tr("효과"));
                 bool fx = false;
-                fx |= Switch("##dof", "피사계 심도", &settings_.dof, "캐릭터에 초점을 맞추고 배경을 흐림");
-                if (settings_.dof) { Gap(6.0f); fx |= SliderRow("##dofap", "조리개", &settings_.dofAperture, 0.2f, 3.0f, "%.2f"); Gap(6.0f); }
-                fx |= Switch("##vol", "볼류메트릭 라이트", &settings_.volumetric, "빛줄기와 조명 산란");
-                if (settings_.volumetric) { Gap(6.0f); fx |= SliderRow("##vold", "안개 밀도", &settings_.volumetricDensity, 0.25f, 4.0f, "%.2f"); Gap(6.0f); }
-                fx |= Switch("##bloomconv", "컨볼루션 블룸", &settings_.bloomConvolution, "FFT 스타버스트 블룸");
+                fx |= Switch("##dof", Tr("피사계 심도"), &settings_.dof, Tr("캐릭터에 초점을 맞추고 배경을 흐림"));
+                if (settings_.dof) { Gap(6.0f); fx |= SliderRow("##dofap", Tr("조리개"), &settings_.dofAperture, 0.2f, 3.0f, "%.2f"); Gap(6.0f); }
+                fx |= Switch("##vol", Tr("볼류메트릭 라이트"), &settings_.volumetric, Tr("빛줄기와 조명 산란"));
+                if (settings_.volumetric) { Gap(6.0f); fx |= SliderRow("##vold", Tr("안개 밀도"), &settings_.volumetricDensity, 0.25f, 4.0f, "%.2f"); Gap(6.0f); }
+                fx |= Switch("##bloomconv", Tr("컨볼루션 블룸"), &settings_.bloomConvolution, Tr("FFT 스타버스트 블룸"));
                 Gap(10.0f);
-                SectionLabel("컬러 LUT");
+                SectionLabel(Tr("컬러 LUT"));
                 int lutCount = 1 + (int)luts_.size();
                 for (int i = 0; i < lutCount; ++i) {
                     if (i % 2) ImGui::SameLine(0, Dp(8.0f));
                     ImGui::PushID(i);
                     const ColorLutEntry* e = i > 0 ? &luts_[(size_t)i - 1] : nullptr;
-                    if (Chip("##lut", e ? e->displayName.c_str() : "없음", icon::Image,
+                    if (Chip("##lut", e ? Tr(e->displayName.c_str()) : Tr("없음"), icon::Image,
                              settings_.colorLut == (e ? e->id : std::string()), chipW)) {
                         settings_.colorLut = e ? e->id : std::string();
                         fx = true;
                     }
                     ImGui::PopID();
                 }
-                if (!settings_.colorLut.empty()) fx |= SliderRow("##lutint", "LUT 강도", &settings_.lutIntensity, 0.0f, 1.0f, "%.2f");
+                if (!settings_.colorLut.empty()) fx |= SliderRow("##lutint", Tr("LUT 강도"), &settings_.lutIntensity, 0.0f, 1.0f, "%.2f");
                 if (fx) {
                     ApplyRenderSettings();
                     settings_.Save(settingsPath_);
@@ -679,19 +702,19 @@ void App::DrawSelect() {
         const bool canPlay = ch && song;
         float by = pb.y - ip - playH;
         if (!canPlay) {
-            const char* hint = !ch ? "캐릭터와 곡을 고르면 시작할 수 있어요" : "곡을 고르면 시작할 수 있어요";
+            const char* hint = !ch ? Tr("캐릭터와 곡을 고르면 시작할 수 있어요") : Tr("곡을 고르면 시작할 수 있어요");
             const ImVec2 hs = TextSize(Font::Regular, size::Caption, hint);
             Text(dl, Font::Regular, size::Caption, ImVec2(pa.x + ip + (innerW - hs.x) * 0.5f, by - Dp(24.0f)), p.ink3, hint);
         }
         ImGui::SetCursorScreenPos(ImVec2(pa.x + ip, by));
         ImGui::BeginDisabled(!canPlay);
         const float videoW = 138.0f;  // dp
-        if (Button("##play", "플레이", icon::Play, ButtonKind::Primary, ImVec2(innerW / Dpi() - videoW - 10.0f, 52.0f))) {
+        if (Button("##play", Tr("플레이"), icon::Play, ButtonKind::Primary, ImVec2(innerW / Dpi() - videoW - 10.0f, 52.0f))) {
             settings_.Save(settingsPath_);
             StartLoad(LoadTarget::Play, ch, st, song);
         }
         ImGui::SameLine(0.0f, Dp(10.0f));
-        if (Button("##video", "영상 렌더", icon::FilmStrip, ButtonKind::Secondary, ImVec2(videoW, 52.0f))) {
+        if (Button("##video", Tr("영상 렌더"), icon::FilmStrip, ButtonKind::Secondary, ImVec2(videoW, 52.0f))) {
             settings_.Save(settingsPath_);
             videoDialogOpen_ = true;
         }
@@ -731,24 +754,24 @@ void App::DrawLoading() {
         DrawScenePreview(ch, st, a.x + ip, a.y + ip, b.x - ip, a.y + ip + prevH - ip, Dp(12.0f));
 
     float y = a.y + prevH + Dp(16.0f);
-    const char* title = loadTarget_ == LoadTarget::Benchmark     ? "벤치마크 준비 중"
-                        : loadTarget_ == LoadTarget::RenderBench ? "GI 렌더 벤치마크 준비 중"
-                                                                 : (song ? song->displayName.c_str() : "불러오는 중");
+    const char* title = loadTarget_ == LoadTarget::Benchmark     ? Tr("벤치마크 준비 중")
+                        : loadTarget_ == LoadTarget::RenderBench ? Tr("GI 렌더 벤치마크 준비 중")
+                                                                 : (song ? song->displayName.c_str() : Tr("불러오는 중"));
     TextEllipsis(dl, Font::Bold, size::Title + 2.0f, ImVec2(a.x + Dp(24.0f), y), b.x - Dp(24.0f), p.ink, title);
     y += Dp(34.0f);
     const bool failed = !loadError_.empty() && !loadFuture_.valid();
     if (failed) {
         ImVec2 bs;
-        Badge(dl, ImVec2(a.x + Dp(24.0f), y), "불러오지 못했습니다", p.dangerSoft, p.danger, &bs);
+        Badge(dl, ImVec2(a.x + Dp(24.0f), y), Tr("불러오지 못했습니다"), p.dangerSoft, p.danger, &bs);
         TextEllipsis(dl, Font::Regular, size::Small, ImVec2(a.x + Dp(24.0f), y + bs.y + Dp(8.0f)), b.x - Dp(24.0f), p.ink2,
                      loadError_.c_str());
         ImGui::SetCursorScreenPos(ImVec2(b.x - Dp(24.0f) - Dp(120.0f), b.y - Dp(24.0f) - Dp(40.0f)));
-        if (Button("##back", "돌아가기", icon::ArrowLeft, ButtonKind::Secondary, ImVec2(120.0f, 40.0f)))
+        if (Button("##back", Tr("돌아가기"), icon::ArrowLeft, ButtonKind::Secondary, ImVec2(120.0f, 40.0f)))
             screen_ = sceneLoad ? Screen::Select : Screen::BenchLobby;
     } else {
         const std::string status = loadProgress_.Status();
         TextEllipsis(dl, Font::Regular, size::Small, ImVec2(a.x + Dp(24.0f), y), b.x - Dp(24.0f), p.ink2,
-                     status.empty() ? "준비 중" : status.c_str());
+                     status.empty() ? Tr("준비 중") : status.c_str());
         y += Dp(30.0f);
         ProgressBar(dl, ImVec2(a.x + Dp(24.0f), y), ImVec2(b.x - Dp(24.0f), y + Dp(6.0f)),
                     loadProgress_.fraction.load(std::memory_order_relaxed));

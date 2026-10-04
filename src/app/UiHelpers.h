@@ -4,6 +4,8 @@
 #include <cstdio>
 #include <string>
 
+#include "core/I18n.h"
+
 namespace mmdx::ui {
 
 inline std::string Thousands(uint64_t v) {

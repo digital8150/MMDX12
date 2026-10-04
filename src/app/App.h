@@ -93,6 +93,7 @@ struct AppOptions {
     int offlineQuality = -1;                           // --offline-quality (-1 = settings)
     int offlineRenderer = -1;                          // --offline-renderer <raster|rt|pt|gi> (-1 = settings)
     bool offlineProbe = false;                         // --offline-probe: sample render for the time estimate, then quit
+    int language = -1;  // --lang auto|ko|en|ja for this run only (-1: keep the saved setting)
     std::string startScreen;  // --screen select|bench: open that screen after the scan; --frames then counts every frame  // --free-camera: start in the orbit camera instead of the VMD camera
 };
 AppOptions ParseCommandLine(int argc, wchar_t** argv);  // unknown args are logged and ignored

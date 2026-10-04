@@ -1,3 +1,4 @@
+#include "core/I18n.h"
 #include "app/SceneLoader.h"
 
 #include <algorithm>
@@ -30,7 +31,7 @@ void DecodeModelTextures(LoadedModelCpu& m, LoadProgress* progress, float fracBe
             referenced.insert(mat.toonIndex);
     }
 
-    if (progress) progress->SetStatus(std::string("텍스처 디코딩: ") + label);
+    if (progress) progress->SetStatus(std::string(Tr("텍스처 디코딩: ")) + label);
 
     std::atomic<int> done{0};
     const int total = (int)referenced.size();
@@ -61,11 +62,11 @@ bool LoadScenePackage(const CharacterAsset& character, const StageAsset* stage, 
             std::string err;
             if (progress) {
                 progress->fraction.store(0.0f, std::memory_order_relaxed);
-                progress->SetStatus("캐릭터 로드: " + character.displayName);
+                progress->SetStatus(Tr("캐릭터 로드: ") + character.displayName);
             }
             out.character.pmx = std::make_shared<PmxModel>();
             if (!LoadPmx(character.pmxPath, *out.character.pmx, &err)) {
-                if (error) *error = "캐릭터를 불러오지 못했습니다: " + err;
+                if (error) *error = Tr("캐릭터를 불러오지 못했습니다: ") + err;
                 return false;
             }
         }
@@ -80,7 +81,7 @@ bool LoadScenePackage(const CharacterAsset& character, const StageAsset* stage, 
                 const std::filesystem::path& partPath = stage->pmxParts[k];
                 std::string label = stage->displayName +
                                     (n > 1 ? " " + std::to_string(k + 1) + "/" + std::to_string(n) : "");
-                if (progress) progress->SetStatus("스테이지 로드: " + label);
+                if (progress) progress->SetStatus(Tr("스테이지 로드: ") + label);
 
                 LoadedModelCpu part;
                 part.pmx = std::make_shared<PmxModel>();
@@ -97,11 +98,11 @@ bool LoadScenePackage(const CharacterAsset& character, const StageAsset* stage, 
         }
 
         // 4. Motions.
-        if (progress) progress->SetStatus("모션 로드");
+        if (progress) progress->SetStatus(Tr("모션 로드"));
         VmdMotion dance;
         std::string err;
         if (!LoadVmd(song.danceVmd, dance, &err)) {
-            if (error) *error = "모션을 불러오지 못했습니다: " + err;
+            if (error) *error = Tr("모션을 불러오지 못했습니다: ") + err;
             return false;
         }
         std::vector<std::unique_ptr<VmdMotion>> extraStorage;
@@ -141,14 +142,14 @@ bool LoadScenePackage(const CharacterAsset& character, const StageAsset* stage, 
         // 7. Done (GPU upload happens on the main thread).
         if (progress) {
             progress->fraction.store(1.0f, std::memory_order_relaxed);
-            progress->SetStatus("GPU 업로드");
+            progress->SetStatus(Tr("GPU 업로드"));
         }
         return true;
     } catch (const std::exception& e) {
-        if (error) *error = std::string("씬 로드 중 오류: ") + e.what();
+        if (error) *error = std::string(Tr("씬 로드 중 오류: ")) + e.what();
         return false;
     } catch (...) {
-        if (error) *error = "씬 로드 중 알 수 없는 오류";
+        if (error) *error = Tr("씬 로드 중 알 수 없는 오류");
         return false;
     }
 }
@@ -157,7 +158,7 @@ bool LoadRenderBenchPackage(const std::vector<CharacterAsset>& characters, const
                             ScenePackage& out, LoadProgress* progress, std::string* error) {
     try {
         if (characters.empty() || characters.size() != songs.size()) {
-            if (error) *error = "렌더 벤치마크 장면 구성이 올바르지 않습니다";
+            if (error) *error = Tr("렌더 벤치마크 장면 구성이 올바르지 않습니다");
             return false;
         }
         out = ScenePackage{};
@@ -168,11 +169,11 @@ bool LoadRenderBenchPackage(const std::vector<CharacterAsset>& characters, const
 
             // 1. Character.
             LoadedModelCpu m;
-            if (progress) progress->SetStatus("캐릭터 로드: " + characters[i].displayName);
+            if (progress) progress->SetStatus(Tr("캐릭터 로드: ") + characters[i].displayName);
             m.pmx = std::make_shared<PmxModel>();
             std::string err;
             if (!LoadPmx(characters[i].pmxPath, *m.pmx, &err)) {
-                if (error) *error = "캐릭터를 불러오지 못했습니다: " + err;
+                if (error) *error = Tr("캐릭터를 불러오지 못했습니다: ") + err;
                 return false;
             }
 
@@ -182,7 +183,7 @@ bool LoadRenderBenchPackage(const std::vector<CharacterAsset>& characters, const
             // 3. Dance motion.
             VmdMotion dance;
             if (!LoadVmd(songs[i].danceVmd, dance, &err)) {
-                if (error) *error = "모션을 불러오지 못했습니다: " + err;
+                if (error) *error = Tr("모션을 불러오지 못했습니다: ") + err;
                 return false;
             }
             std::vector<std::unique_ptr<VmdMotion>> extraStorage;
@@ -212,14 +213,14 @@ bool LoadRenderBenchPackage(const std::vector<CharacterAsset>& characters, const
         // Done (GPU upload happens on the main thread).
         if (progress) {
             progress->fraction.store(1.0f, std::memory_order_relaxed);
-            progress->SetStatus("GPU 업로드");
+            progress->SetStatus(Tr("GPU 업로드"));
         }
         return true;
     } catch (const std::exception& e) {
-        if (error) *error = std::string("씬 로드 중 오류: ") + e.what();
+        if (error) *error = std::string(Tr("씬 로드 중 오류: ")) + e.what();
         return false;
     } catch (...) {
-        if (error) *error = "씬 로드 중 알 수 없는 오류";
+        if (error) *error = Tr("씬 로드 중 알 수 없는 오류");
         return false;
     }
 }

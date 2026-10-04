@@ -97,8 +97,11 @@ bool LoadFonts(const std::filesystem::path& assetsDir) {
             ic.GlyphOffset = ImVec2(0, 1.5f);
             io.Fonts->AddFontFromFileTTF(iconFile.c_str(), size::Body, &ic);
         }
-        // Japanese / Chinese names inside asset titles.
-        if (std::filesystem::exists(L"C:\\Windows\\Fonts\\YuGothM.ttc"))
+        // Japanese UI text and kana/kanji in asset titles: bundled Noto Sans CJK JP (system fonts as fallback).
+        const std::string noto = (fontDir / (i == 0 ? "NotoSansCJKjp-Regular.otf" : "NotoSansCJKjp-Bold.otf")).string();
+        if (std::filesystem::exists(noto))
+            io.Fonts->AddFontFromFileTTF(noto.c_str(), size::Body, &merge);
+        else if (std::filesystem::exists(L"C:\\Windows\\Fonts\\YuGothM.ttc"))
             io.Fonts->AddFontFromFileTTF("C:\\Windows\\Fonts\\YuGothM.ttc", size::Body, &merge);
         else if (std::filesystem::exists(L"C:\\Windows\\Fonts\\msgothic.ttc"))
             io.Fonts->AddFontFromFileTTF("C:\\Windows\\Fonts\\msgothic.ttc", size::Body, &merge);

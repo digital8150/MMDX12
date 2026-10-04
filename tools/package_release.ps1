@@ -55,6 +55,7 @@ $third = @{
     'Intel-XeSS'      = 'external\xess\LICENSE.txt'
     'Pretendard'      = 'assets\fonts\Pretendard-LICENSE.txt'
     'Phosphor'        = 'assets\fonts\Phosphor-LICENSE.txt'
+    'NotoSansCJK'     = 'assets\fonts\Noto-LICENSE.txt'
 }
 foreach ($k in $third.Keys) { Copy-Item (Join-Path $root $third[$k]) (Join-Path $lic "$k.txt") }
 @'

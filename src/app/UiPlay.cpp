@@ -199,9 +199,9 @@ void App::DrawPlayOverlay() {
         const SongAsset* song = selSong_ >= 0 ? &library_.songs[(size_t)selSong_] : nullptr;
         const CharacterAsset* ch = selCharacter_ >= 0 ? &library_.characters[(size_t)selCharacter_] : nullptr;
         const StageAsset* st = selStage_ >= 0 ? &library_.stages[(size_t)selStage_] : nullptr;
-        const std::string title = song ? song->displayName : std::string("재생 중");
+        const std::string title = song ? song->displayName : std::string(Tr("재생 중"));
         const std::string sub =
-            (ch ? ch->displayName : std::string()) + "  ·  " + (st ? st->displayName : std::string("스튜디오"));
+            (ch ? ch->displayName : std::string()) + "  ·  " + (st ? st->displayName : std::string(Tr("스튜디오")));
         const ImVec2 ts = TextSize(Font::Semibold, size::Title, title.c_str());
         const ImVec2 ss = TextSize(Font::Regular, size::Caption, sub.c_str());
         const float w = std::min(std::max(ts.x, ss.x) + Dp(40.0f), Dp(520.0f));
@@ -272,12 +272,12 @@ void App::DrawPlayOverlay() {
                            std::round(a.y + (d - gs.y) * 0.5f)),
                     p.onAccent, glyph);
         PopFont();
-        if (hovered) Tooltip(playing_ ? "일시정지 (Space)" : "재생 (Space)");
+        if (hovered) Tooltip(playing_ ? Tr("일시정지 (Space)") : Tr("재생 (Space)"));
         if (pressed) SetPlaying(!playing_);
         x += d + Dp(8.0f);
     }
     ImGui::SetCursorScreenPos(ImVec2(x, cy - Dp(20.0f)));
-    if (IconButton("##restart", icon::SkipBack, "처음부터", false, 40.0f)) {
+    if (IconButton("##restart", icon::SkipBack, Tr("처음부터"), false, 40.0f)) {
         playTime_ = 0;
         if (s->hasAudio) audio_.Seek(playTime_);
     }
@@ -308,7 +308,7 @@ void App::DrawPlayOverlay() {
     ImGui::SetCursorScreenPos(ImVec2(x, cy - Dp(18.0f)));
     const bool muted = settings_.volume <= 0.001f;
     if (IconButton("##mute", muted ? icon::SpeakerX : (settings_.volume < 0.5f ? icon::SpeakerLow : icon::SpeakerHigh),
-                   muted ? "소리 켜기" : "음소거", false, 36.0f)) {
+                   muted ? Tr("소리 켜기") : Tr("음소거"), false, 36.0f)) {
         static float lastVolume = 0.8f;
         if (muted) {
             settings_.volume = lastVolume > 0.01f ? lastVolume : 0.8f;
@@ -342,7 +342,7 @@ void App::DrawPlayOverlay() {
         const bool ok = renderer_.OfflineSupported();
         ImGui::SetCursorScreenPos(ImVec2(x, cy - Dp(20.0f)));
         ImGui::BeginDisabled(!ok);
-        if (IconButton("##shot", icon::Camera, ok ? "고품질 스크린샷 (P)" : "고품질 렌더는 DXR 지원 GPU가 필요합니다",
+        if (IconButton("##shot", icon::Camera, ok ? Tr("고품질 스크린샷 (P)") : Tr("고품질 렌더는 DXR 지원 GPU가 필요합니다"),
                        false, 40.0f))
             StartOfflineStill();
         x += Dp(44.0f);
@@ -352,14 +352,14 @@ void App::DrawPlayOverlay() {
     // camera, lighting
     ImGui::SetCursorScreenPos(ImVec2(x, cy - Dp(20.0f)));
     ImGui::BeginDisabled(!s->camera);
-    if (IconButton("##cam", icon::VideoCamera, useMotionCamera_ ? "모션 카메라 켜짐 (C)" : "자유 카메라 (C)",
+    if (IconButton("##cam", icon::VideoCamera, useMotionCamera_ ? Tr("모션 카메라 켜짐 (C)") : Tr("자유 카메라 (C)"),
                    useMotionCamera_ && s->camera, 40.0f))
         useMotionCamera_ = !useMotionCamera_;
     ImGui::EndDisabled();
     x += Dp(44.0f);
     {
         const char* lightIcons[] = {icon::Sun, icon::CircleHalf, icon::Sparkle, icon::Moon};
-        const std::string tip = std::string("조명: ") + LightingPresetName((LightingPreset)settings_.lighting) + " (L)";
+        const std::string tip = std::string(Tr("조명: ")) + LightingPresetName((LightingPreset)settings_.lighting) + " (L)";
         ImGui::SetCursorScreenPos(ImVec2(x, cy - Dp(20.0f)));
         if (IconButton("##light", lightIcons[settings_.lighting], tip.c_str(), false, 40.0f)) {
             settings_.lighting = (settings_.lighting + 1) % kLightingPresetCount;
@@ -370,7 +370,7 @@ void App::DrawPlayOverlay() {
     dl->AddLine(ImVec2(x, cy - Dp(14.0f)), ImVec2(x, cy + Dp(14.0f)), WithAlpha(p.ink, 0.12f));
     x += Dp(11.0f);
     ImGui::SetCursorScreenPos(ImVec2(x, cy - Dp(20.0f)));
-    const bool exit = IconButton("##exit", icon::X, "라이브러리로 (Esc)", false, 40.0f);
+    const bool exit = IconButton("##exit", icon::X, Tr("라이브러리로 (Esc)"), false, 40.0f);
     ImGui::End();
     if (exit) {
         UnloadScene();

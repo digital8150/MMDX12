@@ -176,12 +176,12 @@ void App::StartOfflineVideo(double startSeconds, double endSeconds, bool fromLob
         if (cli) running_ = false;
     };
     if (cfg.Gi() && !renderer_.OfflineSupported()) {
-        abort("영상 렌더를 시작할 수 없습니다", "이 그래픽 카드에서는 오프라인 GI 렌더를 사용할 수 없습니다");
+        abort(Tr("영상 렌더를 시작할 수 없습니다"), Tr("이 그래픽 카드에서는 오프라인 GI 렌더를 사용할 수 없습니다"));
         return;
     }
     if ((cfg.Renderer() == VideoRenderer::RayTraced || cfg.Renderer() == VideoRenderer::PathTraced) &&
         !renderer_.RayTracingSupported()) {
-        abort("영상 렌더를 시작할 수 없습니다", "이 그래픽 카드에서는 레이 트레이싱을 사용할 수 없습니다");
+        abort(Tr("영상 렌더를 시작할 수 없습니다"), Tr("이 그래픽 카드에서는 레이 트레이싱을 사용할 수 없습니다"));
         return;
     }
     if (!background) SetPlaying(false);
@@ -219,7 +219,7 @@ void App::StartOfflineVideo(double startSeconds, double endSeconds, bool fromLob
     offline_.encoder = std::make_unique<VideoEncoder>();
     std::string err;
     if (!offline_.encoder->Open(offline_.output, d, &err)) {
-        abort(probe ? "시간을 측정할 수 없습니다" : "영상 렌더를 시작할 수 없습니다", err);
+        abort(probe ? Tr("시간을 측정할 수 없습니다") : Tr("영상 렌더를 시작할 수 없습니다"), err);
         return;
     }
     if (offline_.realtime) {
@@ -402,7 +402,7 @@ void App::RecordOfflineFrame(ID3D12GraphicsCommandList* cmd) {
     if (!renderer_.BeginOffline(cmd, view, MakeJobDesc(options_, settings_, offline_.video, video, true))) {
         if (!offline_.background) {
             renderer_.Render(cmd, view);  // keep this frame valid
-            toast_ = {"고품질 렌더를 시작할 수 없습니다", "레이 트레이싱 장면을 만들지 못했습니다", {}, true,
+            toast_ = {Tr("고품질 렌더를 시작할 수 없습니다"), Tr("레이 트레이싱 장면을 만들지 못했습니다"), {}, true,
                       timeSeconds_ + 8.0};
         }
         offline_.cancelRequested = true;  // AfterOfflineFrame finishes the job
@@ -426,14 +426,14 @@ void App::AfterOfflineFrame() {
     if (offline_.realtime) {
         if (++offline_.iter < offline_.iterCount) return;   // more passes accumulate into this frame
         if (!renderer_.ReadFinalImage(img)) {
-            toast_ = {"렌더 결과를 읽을 수 없습니다", "", {}, true, timeSeconds_ + 8.0};
+            toast_ = {Tr("렌더 결과를 읽을 수 없습니다"), "", {}, true, timeSeconds_ + 8.0};
             FinishOffline(true);
             return;
         }
     } else {
         if (renderer_.OfflineStatus().phase != OfflinePhase::Done) return;
         if (!renderer_.ReadOfflineImage(img)) {
-            toast_ = {"렌더 결과를 읽을 수 없습니다", "", {}, true, timeSeconds_ + 8.0};
+            toast_ = {Tr("렌더 결과를 읽을 수 없습니다"), "", {}, true, timeSeconds_ + 8.0};
             FinishOffline(true);
             return;
         }
@@ -445,9 +445,9 @@ void App::AfterOfflineFrame() {
         std::error_code ec;
         std::filesystem::create_directories(offline_.output.parent_path(), ec);
         const bool ok = SavePngRGBA8(offline_.output, img.Width(), img.Height(), img.mips[0].pixels.data(), img.Width() * 4);
-        toast_ = ok ? Toast{"고품질 스크린샷을 저장했습니다", PathToUtf8(offline_.output.filename()), offline_.output,
+        toast_ = ok ? Toast{Tr("고품질 스크린샷을 저장했습니다"), PathToUtf8(offline_.output.filename()), offline_.output,
                             false, timeSeconds_ + 8.0}
-                    : Toast{"스크린샷을 저장할 수 없습니다", PathToUtf8(offline_.output), {}, true, timeSeconds_ + 8.0};
+                    : Toast{Tr("스크린샷을 저장할 수 없습니다"), PathToUtf8(offline_.output), {}, true, timeSeconds_ + 8.0};
         offline_.frame = 1;
         FinishOffline(!ok);
         return;
@@ -459,7 +459,7 @@ void App::AfterOfflineFrame() {
                                                     : (offline_.avgEncodeSeconds * offline_.frame + encodeSecs) /
                                                           (offline_.frame + 1);
     if (!added) {
-        toast_ = {"영상 인코딩에 실패했습니다", "", {}, true, timeSeconds_ + 8.0};
+        toast_ = {Tr("영상 인코딩에 실패했습니다"), "", {}, true, timeSeconds_ + 8.0};
         FinishOffline(true);
         return;
     }
@@ -506,18 +506,18 @@ void App::FinishOffline(bool cancelled) {
         } else if (written == 0) {
             std::filesystem::remove(offline_.output, ec);
             if (!toast_.error || toast_.until < timeSeconds_)  // keep an error toast set just before
-                toast_ = {"영상 렌더를 취소했습니다", "", {}, false, timeSeconds_ + 6.0};
+                toast_ = {Tr("영상 렌더를 취소했습니다"), "", {}, false, timeSeconds_ + 6.0};
         } else if (cancelled) {
             if (!toast_.error || toast_.until < timeSeconds_)
-                toast_ = {"영상 렌더를 중단했습니다",
-                          std::to_string(written) + "프레임까지 저장했습니다 · " + PathToUtf8(offline_.output.filename()),
+                toast_ = {Tr("영상 렌더를 중단했습니다"),
+                          std::to_string(written) + Tr("프레임까지 저장했습니다 · ") + PathToUtf8(offline_.output.filename()),
                           offline_.output, false, timeSeconds_ + 10.0};
         } else {
-            toast_ = {"고품질 영상을 저장했습니다", PathToUtf8(offline_.output.filename()), offline_.output, false,
+            toast_ = {Tr("고품질 영상을 저장했습니다"), PathToUtf8(offline_.output.filename()), offline_.output, false,
                       timeSeconds_ + 10.0};
         }
     } else if (!video && !probe && cancelled && (!toast_.error || toast_.until < timeSeconds_)) {
-        toast_ = {"스크린샷 렌더를 취소했습니다", "", {}, false, timeSeconds_ + 5.0};
+        toast_ = {Tr("스크린샷 렌더를 취소했습니다"), "", {}, false, timeSeconds_ + 5.0};
     }
     if (probe) {
         if (!cancelled && offline_.probeN >= 1) {
@@ -528,11 +528,11 @@ void App::FinishOffline(bool cancelled) {
                      perFrame, offline_.probeN);
             if (!toast_.error || toast_.until < timeSeconds_) {
                 char detail[96];
-                std::snprintf(detail, sizeof(detail), "프레임당 %.1f초 기준으로 예상 시간을 계산했습니다", perFrame);
-                toast_ = {"시간 측정을 마쳤습니다", detail, {}, false, timeSeconds_ + 6.0};
+                std::snprintf(detail, sizeof(detail), Tr("프레임당 %.1f초 기준으로 예상 시간을 계산했습니다"), perFrame);
+                toast_ = {Tr("시간 측정을 마쳤습니다"), detail, {}, false, timeSeconds_ + 6.0};
             }
         } else if (!toast_.error || toast_.until < timeSeconds_) {
-            toast_ = {"시간 측정을 취소했습니다", "", {}, false, timeSeconds_ + 5.0};
+            toast_ = {Tr("시간 측정을 취소했습니다"), "", {}, false, timeSeconds_ + 5.0};
         }
     }
     LOG_INFO("offline render %s: %s", cancelled ? "cancelled" : "finished", PathToUtf8(offline_.output).c_str());
@@ -591,37 +591,37 @@ void App::DrawOfflineOverlay() {
     // row 1: icon + title, cancel button on the right
     const float y = a.y;
     {
-        const float cancelW = ButtonWidth("취소", true);
+        const float cancelW = ButtonWidth(Tr("취소"), true);
         ImGui::SetCursorScreenPos(ImVec2(x1 - cancelW, y + Dp(14.0f)));
-        if (Button("##offcancel", "취소", icon::X, ButtonKind::Secondary, ImVec2(0, 34)))
+        if (Button("##offcancel", Tr("취소"), icon::X, ButtonKind::Secondary, ImVec2(0, 34)))
             offline_.cancelRequested = true;
         Icon(dl, video ? icon::FilmStrip : icon::Image, Dp(20.0f), ImVec2(x0 + Dp(10.0f), y + Dp(28.0f)), p.accent);
         Text(dl, Font::Semibold, size::Title, ImVec2(x0 + Dp(30.0f), y + Dp(18.0f)), p.ink,
-             video ? "고품질 영상 렌더링" : probe ? "샘플 렌더링으로 시간 측정 중" : "고품질 스크린샷 렌더링");
+             video ? Tr("고품질 영상 렌더링") : probe ? Tr("샘플 렌더링으로 시간 측정 중") : Tr("고품질 스크린샷 렌더링"));
     }
 
     // row 2: status + elapsed
     std::string status;
     if (offline_.beginPending || pr.phase == OfflinePhase::Idle) {
-        status = "장면 준비 중…";
+        status = Tr("장면 준비 중…");
     } else if (offline_.realtime) {
-        status = offline_.iterCount > 1 ? "프레임 렌더링 · " + std::to_string(std::min(offline_.iter + 1, offline_.iterCount)) +
+        status = offline_.iterCount > 1 ? Tr("프레임 렌더링 · ") + std::to_string(std::min(offline_.iter + 1, offline_.iterCount)) +
                                               "/" + std::to_string(offline_.iterCount)
-                                        : "프레임 렌더링 중";
+                                        : Tr("프레임 렌더링 중");
     } else if (pr.phase == OfflinePhase::Prepass) {
-        status = "이래디언스 캐시 프리패스 · 메인 패스 (" + std::to_string(pr.prepassStep + 1) + "/" +
+        status = Tr("이래디언스 캐시 프리패스 · 메인 패스 (") + std::to_string(pr.prepassStep + 1) + "/" +
                  std::to_string(pr.prepassSteps) + ")";
     } else if (pr.phase == OfflinePhase::Render) {
-        status = "패스 트레이싱 · " + std::to_string(pr.samples) + " spp · 수렴 " +
+        status = Tr("패스 트레이싱 · ") + std::to_string(pr.samples) + Tr(" spp · 수렴 ") +
                  std::to_string((int)(100.0f * (1.0f - pr.activeFraction))) + "%";
     } else {
-        status = "마무리 중…";
+        status = Tr("마무리 중…");
     }
     Text(dl, Font::Regular, size::Body, ImVec2(x0, y + Dp(56.0f)), p.ink2, status.c_str());
     {
         const std::string right = video
-                                      ? "이번 프레임 " + MinSec(timeSeconds_ - offline_.imageStartWall)
-                                      : "경과 " + MinSec(timeSeconds_ - offline_.startWall);
+                                      ? Tr("이번 프레임 ") + MinSec(timeSeconds_ - offline_.imageStartWall)
+                                      : Tr("경과 ") + MinSec(timeSeconds_ - offline_.startWall);
         const ImVec2 ts = TextSize(Font::Regular, size::Caption, right.c_str());
         Text(dl, Font::Regular, size::Caption, ImVec2(x1 - ts.x, y + Dp(57.0f)), p.ink3, right.c_str());
     }
@@ -632,14 +632,14 @@ void App::DrawOfflineOverlay() {
     // rows 4/5 (video only): frame counts, total ETA, overall bar
     if (video) {
         const std::string left =
-            "프레임 " + std::to_string(std::min(offline_.frame + 1, offline_.frameCount)) + " / " +
+            Tr("프레임 ") + std::to_string(std::min(offline_.frame + 1, offline_.frameCount)) + " / " +
             std::to_string(offline_.frameCount);
         Text(dl, Font::Semibold, size::Body, ImVec2(x0, y + Dp(102.0f)), p.ink, left.c_str());
         const double elapsed = timeSeconds_ - offline_.startWall;
         const double eta = (offline_.avgImageSeconds + offline_.avgEncodeSeconds) *
                            (offline_.frameCount - offline_.frame - (double)pr.fraction);
-        const std::string right = "경과 " + Hms(elapsed) + " · 남은 시간 " +
-                                  (offline_.frame >= 1 ? "약 " + Hms(eta) : "계산 중");
+        const std::string right = Tr("경과 ") + Hms(elapsed) + Tr(" · 남은 시간 ") +
+                                  (offline_.frame >= 1 ? Tr("약 ") + Hms(eta) : Tr("계산 중"));
         const ImVec2 ts = TextSize(Font::Regular, size::Caption, right.c_str());
         Text(dl, Font::Regular, size::Caption, ImVec2(x1 - ts.x, y + Dp(104.0f)), p.ink3, right.c_str());
         const float frac = offline_.frameCount > 0
@@ -661,8 +661,8 @@ void App::DrawOfflineOverlay() {
     // ---- top-left pill
     {
         const std::string labelText =
-            offline_.realtime ? std::string("영상 렌더 · ") + kVideoRenderers[offline_.video.renderer].label + " · Esc 취소"
-                              : "비실시간 렌더 · 전역 조명(GI) · Esc 취소";
+            offline_.realtime ? std::string(Tr("영상 렌더 · ")) + Tr(kVideoRenderers[offline_.video.renderer].label) + Tr(" · Esc 취소")
+                              : Tr("비실시간 렌더 · 전역 조명(GI) · Esc 취소");
         const char* label = labelText.c_str();
         const ImVec2 ts = TextSize(Font::Semibold, size::Caption, label);
         const float pw = ts.x + Dp(28.0f), ph = Dp(30.0f);
@@ -916,7 +916,7 @@ void App::DrawToast() {
     const Palette& p = P();
     const ImVec2 tS = TextSize(Font::Semibold, size::Body, toast_.title.c_str());
     const ImVec2 dS = toast_.detail.empty() ? ImVec2(0, 0) : TextSize(Font::Regular, size::Caption, toast_.detail.c_str());
-    const float openW = toast_.path.empty() ? 0.0f : ButtonWidth("폴더 열기", true);
+    const float openW = toast_.path.empty() ? 0.0f : ButtonWidth(Tr("폴더 열기"), true);
     const float contentW = std::max(tS.x, dS.x);
     float w = contentW + Dp(16.0f + 24.0f + 12.0f + 20.0f);
     if (!toast_.path.empty()) w += openW + Dp(16.0f);
@@ -940,7 +940,7 @@ void App::DrawToast() {
         Text(dl, Font::Regular, size::Caption, ImVec2(tx, a.y + Dp(34.0f)), p.ink2, toast_.detail.c_str());
     if (!toast_.path.empty()) {
         ImGui::SetCursorScreenPos(ImVec2(b.x - Dp(14.0f) - openW, (a.y + b.y - Dp(34.0f)) * 0.5f));
-        if (Button("##toastopen", "폴더 열기", icon::FolderOpen, ButtonKind::Ghost, ImVec2(0, 34))) {
+        if (Button("##toastopen", Tr("폴더 열기"), icon::FolderOpen, ButtonKind::Ghost, ImVec2(0, 34))) {
             const std::wstring arg = L"/select,\"" + toast_.path.wstring() + L"\"";
             ShellExecuteW(nullptr, L"open", L"explorer.exe", arg.c_str(), nullptr, SW_SHOWNORMAL);
         }

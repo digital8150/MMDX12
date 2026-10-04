@@ -21,11 +21,11 @@ namespace {
 std::string DurationKo(double seconds) {
     char buf[32];
     if (seconds >= 86400.0)
-        std::snprintf(buf, sizeof(buf), "%.1f일", seconds / 86400.0);
+        std::snprintf(buf, sizeof(buf), Tr("%.1f일"), seconds / 86400.0);
     else if (seconds >= 3600.0)
-        std::snprintf(buf, sizeof(buf), "%.1f시간", seconds / 3600.0);
+        std::snprintf(buf, sizeof(buf), Tr("%.1f시간"), seconds / 3600.0);
     else
-        std::snprintf(buf, sizeof(buf), "%d분", std::max(1, (int)std::lround(seconds / 60.0)));
+        std::snprintf(buf, sizeof(buf), Tr("%d분"), std::max(1, (int)std::lround(seconds / 60.0)));
     return buf;
 }
 
@@ -66,7 +66,7 @@ void App::DrawVideoRenderDialog() {
     Panel(dl, a, b, Dp(20.0f));
     const float pad = Dp(28.0f);
     const float x0 = a.x + pad, x1 = b.x - pad;
-    Text(dl, Font::Bold, size::Heading, ImVec2(x0, a.y + Dp(22.0f)), p.ink, "고품질 영상 렌더링");
+    Text(dl, Font::Bold, size::Heading, ImVec2(x0, a.y + Dp(22.0f)), p.ink, Tr("고품질 영상 렌더링"));
     TextEllipsis(dl, Font::Regular, size::Small, ImVec2(x0, a.y + Dp(54.0f)), x1, p.ink2, song.displayName.c_str());
 
     // Settings area (scrolls when the window is short)
@@ -83,7 +83,7 @@ void App::DrawVideoRenderDialog() {
         ImGui::PushClipRect(win->Pos, ImVec2(win->Pos.x + win->Size.x, win->Pos.y + win->Size.y), true);
 
         // 1. 렌더러
-        SectionLabel("렌더러");
+        SectionLabel(Tr("렌더러"));
         const float gapX = Dp(8.0f);
         const float cardW = (colW - gapX) * 0.5f;
         const float cardH = Dp(56.0f);
@@ -158,9 +158,9 @@ void App::DrawVideoRenderDialog() {
 
                 Icon(cdl, kRendererIcons[i], 16.0f, ImVec2(textX0 + Dp(8.0f), bb.Min.y + Dp(18.0f)), iconCol);
                 Text(cdl, Font::Semibold, size::Body, ImVec2(textX0 + Dp(22.0f), bb.Min.y + Dp(9.0f)), nameCol,
-                     kVideoRenderers[i].label);
+                     Tr(kVideoRenderers[i].label));
 
-                const char* summaryText = avail ? kVideoRenderers[i].summary : "이 그래픽 카드에서는 사용할 수 없습니다";
+                const char* summaryText = avail ? Tr(kVideoRenderers[i].summary) : Tr("이 그래픽 카드에서는 사용할 수 없습니다");
                 TextEllipsis(cdl, Font::Regular, size::Caption, ImVec2(textX0, bb.Min.y + Dp(32.0f)), textX1, summaryCol,
                              summaryText);
 
@@ -170,16 +170,16 @@ void App::DrawVideoRenderDialog() {
 
         // 2. 화질
         Gap(10.0f);
-        SectionLabel("화질");
+        SectionLabel(Tr("화질"));
         const char* qLabels[kVideoQualityCount];
-        for (int i = 0; i < kVideoQualityCount; ++i) qLabels[i] = kVideoQualities[i].label;
+        for (int i = 0; i < kVideoQualityCount; ++i) qLabels[i] = Tr(kVideoQualities[i].label);
         Segmented("##vq", qLabels, kVideoQualityCount, &cfg.quality, colW / Dpi(), 36.0f);
         {
             static const char* const kQualityHints[kVideoQualityCount] = {
-                "빠르게 확인하는 용도",
-                "무난한 화질",
-                "최종 결과물 추천",
-                "가장 깨끗하지만 가장 오래 걸립니다"
+                Tr("빠르게 확인하는 용도"),
+                Tr("무난한 화질"),
+                Tr("최종 결과물 추천"),
+                Tr("가장 깨끗하지만 가장 오래 걸립니다")
             };
             const int qIdx = std::clamp(cfg.quality, 0, kVideoQualityCount - 1);
             const ImVec2 pos = ImGui::GetCursorScreenPos();
@@ -190,33 +190,33 @@ void App::DrawVideoRenderDialog() {
 
         // 3. 효과
         Gap(6.0f);
-        SectionLabel("효과");
+        SectionLabel(Tr("효과"));
 
-        Switch("##bloom", "블룸", &cfg.bloom, "밝은 부분이 부드럽게 번집니다");
+        Switch("##bloom", Tr("블룸"), &cfg.bloom, Tr("밝은 부분이 부드럽게 번집니다"));
         if (cfg.bloom) {
             ImGui::Indent(Dp(16.0f));
-            Switch("##bloomconv", "콘볼루션 블룸", &cfg.bloomConvolution, "렌즈 빛 갈라짐이 살아 있는 번짐");
+            Switch("##bloomconv", Tr("콘볼루션 블룸"), &cfg.bloomConvolution, Tr("렌즈 빛 갈라짐이 살아 있는 번짐"));
             ImGui::Unindent(Dp(16.0f));
         }
 
-        Switch("##volumetric", "볼류메트릭 라이트", &cfg.volumetric, "빛줄기와 안개를 표현합니다");
+        Switch("##volumetric", Tr("볼류메트릭 라이트"), &cfg.volumetric, Tr("빛줄기와 안개를 표현합니다"));
         if (cfg.volumetric) {
             ImGui::Indent(Dp(16.0f));
-            SliderRow("##voldensity", "안개 밀도", &cfg.volumetricDensity, 0.25f, 4.0f, "%.2f");
+            SliderRow("##voldensity", Tr("안개 밀도"), &cfg.volumetricDensity, 0.25f, 4.0f, "%.2f");
             ImGui::Unindent(Dp(16.0f));
         }
 
         if (cfg.DofApplies()) {
-            Switch("##dof", "피사계 심도", &cfg.dof, "초점 밖이 흐려집니다");
+            Switch("##dof", Tr("피사계 심도"), &cfg.dof, Tr("초점 밖이 흐려집니다"));
             if (cfg.dof) {
                 ImGui::Indent(Dp(16.0f));
-                SliderRow("##dofaperture", "조리개", &cfg.dofAperture, 0.2f, 3.0f, "%.1f");
+                SliderRow("##dofaperture", Tr("조리개"), &cfg.dofAperture, 0.2f, 3.0f, "%.1f");
                 ImGui::Unindent(Dp(16.0f));
             }
         } else {
             const ImVec2 pos = ImGui::GetCursorScreenPos();
             Text(ImGui::GetWindowDrawList(), Font::Regular, size::Caption, ImVec2(pos.x, pos.y + Dp(2.0f)), p.ink3,
-                 "오프라인 GI는 피사계 심도와 모션 블러를 자동으로 적용합니다");
+                 Tr("오프라인 GI는 피사계 심도와 모션 블러를 자동으로 적용합니다"));
             ImGui::Dummy(ImVec2(colW, Dp(24.0f)));
         }
 
@@ -226,14 +226,14 @@ void App::DrawVideoRenderDialog() {
         Gap(10.0f);
         const float halfW = (colW - gapX * 2.0f) * 0.5f;
         ImGui::BeginGroup();
-        SectionLabel("해상도");
+        SectionLabel(Tr("해상도"));
         const char* resLabels[kVideoResolutionCount];
         for (int i = 0; i < kVideoResolutionCount; ++i) resLabels[i] = kVideoResolutions[i].label;
         formatChanged |= Segmented("##vres", resLabels, kVideoResolutionCount, &cfg.resolution, halfW / Dpi(), 36.0f);
         ImGui::EndGroup();
         ImGui::SameLine(0.0f, gapX * 2.0f);
         ImGui::BeginGroup();
-        SectionLabel("프레임 레이트");
+        SectionLabel(Tr("프레임 레이트"));
         const char* fpsLabels[] = {"24", "30", "60"};
         int fpsIdx = cfg.fps == 24 ? 0 : cfg.fps == 30 ? 1 : 2;
         if (Segmented("##vfps", fpsLabels, kVideoFpsCount, &fpsIdx, halfW / Dpi(), 36.0f)) {
@@ -248,11 +248,11 @@ void App::DrawVideoRenderDialog() {
 
         Gap(6.0f);
         float mbps = (float)cfg.bitrateMbps;
-        if (SliderRow("##vbr", "비트 전송률", &mbps, 4.0f, 200.0f, "%.0f Mbps")) cfg.bitrateMbps = (int)std::lround(mbps);
+        if (SliderRow("##vbr", Tr("비트 전송률"), &mbps, 4.0f, 200.0f, "%.0f Mbps")) cfg.bitrateMbps = (int)std::lround(mbps);
         {
             char hint[96];
-            std::snprintf(hint, sizeof(hint), "%s · %dp %d fps 추천 %d Mbps",
-                          cfg.bitrateMbps >= recommended ? "깨끗한 화질" : "용량 우선", (int)res.height, cfg.fps,
+            std::snprintf(hint, sizeof(hint), Tr("%s · %dp %d fps 추천 %d Mbps"),
+                          cfg.bitrateMbps >= recommended ? Tr("깨끗한 화질") : Tr("용량 우선"), (int)res.height, cfg.fps,
                           recommended);
             const ImVec2 pos = ImGui::GetCursorScreenPos();
             Text(ImGui::GetWindowDrawList(), Font::Regular, size::Caption, ImVec2(pos.x, pos.y + Dp(2.0f)), p.ink3,
@@ -286,11 +286,11 @@ void App::DrawVideoRenderDialog() {
 
     // Big line: 예상 소요 시간 + Badge
     const float y1 = footerY + Dp(14.0f);
-    const std::string timeStr = "예상 소요 시간 " + DurationKo(est.totalSeconds);
+    const std::string timeStr = Tr("예상 소요 시간 ") + DurationKo(est.totalSeconds);
     Text(dl, Font::Semibold, size::Title, ImVec2(x0, y1), p.ink, timeStr.c_str());
     const ImVec2 titleSz = TextSize(Font::Semibold, size::Title, timeStr.c_str());
     ImVec2 badgeSz;
-    Badge(dl, ImVec2(x0 + titleSz.x + Dp(10.0f), y1 + Dp(1.0f)), est.measured ? "실측" : "추정",
+    Badge(dl, ImVec2(x0 + titleSz.x + Dp(10.0f), y1 + Dp(1.0f)), est.measured ? Tr("실측") : Tr("추정"),
           est.measured ? p.accent : p.sunken, est.measured ? p.onAccent : p.ink2, &badgeSz);
     // the sample render behind this dialog: a small progress bar next to the badge while it runs
     const VideoProbeStatus probeStatus = ProbeStatus();
@@ -305,7 +305,7 @@ void App::DrawVideoRenderDialog() {
     // Second line: 총 N프레임 · M:SS · W×H · F fps · 파일 약 X.X GB
     const float y2 = footerY + Dp(42.0f);
     char l2[160];
-    std::snprintf(l2, sizeof(l2), "총 %d프레임 · %s · %u×%u · %d fps · 파일 약 %.1f GB", est.frames,
+    std::snprintf(l2, sizeof(l2), Tr("총 %d프레임 · %s · %u×%u · %d fps · 파일 약 %.1f GB"), est.frames,
                   MinSec(song.durationSec).c_str(), curRes.width, curRes.height, cfg.fps, est.fileGigabytes);
     Text(dl, Font::Regular, size::Body, ImVec2(x0, y2), p.ink2, l2);
 
@@ -314,22 +314,22 @@ void App::DrawVideoRenderDialog() {
     char l3[128];
     if (est.measured) {
         std::snprintf(l3, sizeof(l3),
-                      est.secondsPerFrame < 0.1   ? "프레임당 약 %.3f초로 측정한 값입니다"
-                      : est.secondsPerFrame < 1.0 ? "프레임당 약 %.2f초로 측정한 값입니다"
-                                                  : "프레임당 약 %.1f초로 측정한 값입니다",
+                      est.secondsPerFrame < 0.1   ? Tr("프레임당 약 %.3f초로 측정한 값입니다")
+                      : est.secondsPerFrame < 1.0 ? Tr("프레임당 약 %.2f초로 측정한 값입니다")
+                                                  : Tr("프레임당 약 %.1f초로 측정한 값입니다"),
                       est.secondsPerFrame);
     } else if (probeStatus.phase == VideoProbeStatus::Phase::Measuring) {
-        std::snprintf(l3, sizeof(l3), "설정에 맞춰 샘플 한 장을 렌더링하며 정확한 시간을 측정하고 있습니다");
+        std::snprintf(l3, sizeof(l3), Tr("설정에 맞춰 샘플 한 장을 렌더링하며 정확한 시간을 측정하고 있습니다"));
     } else if (probeStatus.phase == VideoProbeStatus::Phase::Preparing) {
-        std::snprintf(l3, sizeof(l3), "곧 샘플 한 장을 렌더링해 정확한 시간을 측정합니다");
+        std::snprintf(l3, sizeof(l3), Tr("곧 샘플 한 장을 렌더링해 정확한 시간을 측정합니다"));
     } else {
-        std::snprintf(l3, sizeof(l3), "%s", "실제 시간은 PC 성능과 장면에 따라 달라집니다");
+        std::snprintf(l3, sizeof(l3), "%s", Tr("실제 시간은 PC 성능과 장면에 따라 달라집니다"));
     }
     Text(dl, Font::Regular, size::Caption, ImVec2(x0, y3), p.ink3, l3);
 
     // Save location line
     const float y4 = footerY + Dp(86.0f);
-    const std::string loc = "저장 위치: " + PathToUtf8(OfflineOutputDir(true));
+    const std::string loc = Tr("저장 위치: ") + PathToUtf8(OfflineOutputDir(true));
     TextEllipsis(dl, Font::Regular, size::Caption, ImVec2(x0, y4), x1, p.ink3, loc.c_str());
 
     // Buttons row
@@ -339,10 +339,10 @@ void App::DrawVideoRenderDialog() {
     // On the right: 취소 and 렌더링 시작
     const float startW = Dp(176.0f), cancelW = Dp(96.0f);
     ImGui::SetCursorScreenPos(ImVec2(x1 - startW - Dp(10.0f) - cancelW, y5));
-    const bool cancel = Button("##vidcancel", "취소", nullptr, ButtonKind::Secondary, ImVec2(96, 40));
+    const bool cancel = Button("##vidcancel", Tr("취소"), nullptr, ButtonKind::Secondary, ImVec2(96, 40));
     ImGui::SameLine(0.0f, Dp(10.0f));
     ImGui::BeginDisabled(!rendererAvailable);
-    const bool start = Button("##vidstart", "렌더링 시작", icon::FilmStrip, ButtonKind::Primary, ImVec2(176, 40));
+    const bool start = Button("##vidstart", Tr("렌더링 시작"), icon::FilmStrip, ButtonKind::Primary, ImVec2(176, 40));
     ImGui::EndDisabled();
 
     ImGui::End();

@@ -1,3 +1,4 @@
+#include "core/I18n.h"
 #include "app/LeaderboardClient.h"
 
 #include <Windows.h>
@@ -193,7 +194,7 @@ SubmitResponse LeaderboardClient::Submit(const SubmitRequest& req) {
     }
 
     if (status == 429) {
-        out.error = "제출이 너무 잦습니다 (분당 10회 제한)";
+        out.error = Tr("제출이 너무 잦습니다 (분당 10회 제한)");
         return out;
     }
     if (status != 200 && status != 201) {

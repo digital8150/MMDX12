@@ -2,6 +2,7 @@
 // (IMFSinkWriter, hardware encoders allowed). Frames arrive as RGBA8 images (top-down) and are
 // converted to NV12 (BT.709, limited range) on the CPU. The audio track is decoded from the song
 // file with miniaudio and written in step with the video, covering exactly the frames written.
+#include "core/I18n.h"
 #include "app/VideoEncoder.h"
 #include "asset/ImageLoader.h"
 
@@ -137,7 +138,7 @@ bool VideoEncoder::Open(const std::filesystem::path& mp4Path, const Desc& desc, 
 
     if (desc.width == 0 || desc.height == 0 || desc.fps == 0 ||
         (desc.width & 1) != 0 || (desc.height & 1) != 0) {
-        if (error) *error = "영상 크기가 올바르지 않습니다";
+        if (error) *error = Tr("영상 크기가 올바르지 않습니다");
         return false;
     }
 
@@ -146,7 +147,7 @@ bool VideoEncoder::Open(const std::filesystem::path& mp4Path, const Desc& desc, 
     hr = MFStartup(MF_VERSION, MFSTARTUP_FULL);
     impl.mfStarted = SUCCEEDED(hr);
     if (FAILED(hr)) {
-        if (error) *error = "Media Foundation을 초기화할 수 없습니다";
+        if (error) *error = Tr("Media Foundation을 초기화할 수 없습니다");
         if (impl.comInit) { CoUninitialize(); impl.comInit = false; }
         return false;
     }
@@ -174,7 +175,7 @@ bool VideoEncoder::Open(const std::filesystem::path& mp4Path, const Desc& desc, 
     };
     auto failWith = [&](HRESULT err) {
         char buf[128];
-        snprintf(buf, sizeof(buf), "MP4 인코더를 만들 수 없습니다 (HRESULT 0x%08X)", (unsigned)err);
+        snprintf(buf, sizeof(buf), Tr("MP4 인코더를 만들 수 없습니다 (HRESULT 0x%08X)"), (unsigned)err);
         if (error) *error = buf;
         cleanup();
         return false;

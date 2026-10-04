@@ -1,6 +1,6 @@
 <div align="center">
   <h1>MMDX12</h1>
-  <p><a href="README.md">English</a> · <b>한국어</b></p>
+  <p><a href="README.md">English</a> · <b>한국어</b> · <a href="README.ja.md">日本語</a></p>
   <p>갖고 있는 MMD 모델이랑 춤 파일 넣고 재생만 누르면 레이 트레이싱 조명으로 바로 볼 수 있어요.<br>더 예쁘게 뽑고 싶으면 앱 안에서 4K 사진이나 뮤직비디오 한 편까지 렌더링됩니다.</p>
   <p>
     <img src="https://img.shields.io/badge/Platform-Windows%2010%2F11-39C5BB" alt="Platform">

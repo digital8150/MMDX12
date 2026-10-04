@@ -1,6 +1,6 @@
 <div align="center">
   <h1>MMDX12</h1>
-  <p><b>English</b> · <a href="README.ko.md">한국어</a></p>
+  <p><b>English</b> · <a href="README.ko.md">한국어</a> · <a href="README.ja.md">日本語</a></p>
   <p>Drop in your MMD models and dances, hit play, and watch them with ray-traced lighting.<br>When you want something prettier, render a 4K still or a full music video right from the app.</p>
   <p>
     <img src="https://img.shields.io/badge/Platform-Windows%2010%2F11-39C5BB" alt="Platform">

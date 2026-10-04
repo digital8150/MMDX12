@@ -19,6 +19,7 @@ inline constexpr const char* Sliders = "\xee\x90\xb4";
 inline constexpr const char* Search = "\xee\x8c\x8c";
 inline constexpr const char* FolderOpen = "\xee\x89\x96";
 inline constexpr const char* X = "\xee\x93\xb6";
+inline constexpr const char* Globe = "\xee\x8a\x88";
 inline constexpr const char* Check = "\xee\x86\x82";
 inline constexpr const char* CaretDown = "\xee\x84\xb6";
 inline constexpr const char* CaretRight = "\xee\x84\xba";

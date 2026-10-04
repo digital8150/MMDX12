@@ -281,3 +281,22 @@ every frame and encodes an MP4, 3) GI with a Pixar/Disney-like look while keepin
   info, so no local PDB path in the exe) and zips `dist/MMDX12-<ver>-win64.zip`: exe, shaders, fonts, DXC + upscaler DLLs, app-local
   VC++ runtime, licences, an empty `library/` with a README. Tested from an extracted copy outside the repo (empty library; PT + DLSS
   frame with the repo library). READMEs: download section, 58 s promo (https://youtu.be/vNztzqvVV4M) on the preview.
+
+## 2026-10-04 — UI localisation (Korean / English / Japanese)
+
+### Done
+- `core/I18n.h/.cpp`: `Tr("한국어")` takes the Korean source text as its key and returns the English / Japanese entry
+  (`I18nEn.cpp`, `I18nJa.cpp`; a missing entry falls back to Korean). `Language::Auto` follows the Windows user locale
+  (ko / ja, otherwise English). `AppSettings::language` (ini `language=0..3`), `--lang auto|ko|en|ja` for one run.
+- Every UI literal in `src/app/*.cpp` is wrapped in `Tr()` (about 300 sites, about 270 table entries; long help texts are single keys).
+  Table-driven names (colour LUTs, benchmark tier titles, video renderer / quality labels) are translated where they are displayed.
+  Strings stored as `std::string` at creation (load status, errors) keep the language of that moment.
+- Language picker: globe icon button in the app bar (system / 한국어 / English / 日本語 popup), saved at once.
+- Japanese font: bundled Noto Sans CJK JP (Regular for the body face, Bold for the others) merged after Pretendard; system
+  fonts remain the fallback. Licence added to the release package. README.ja.md added.
+- Checked: build; captures with `--lang ja` (lobby), `--lang en` (benchmark lobby), `--lang ko` (lobby with the globe button).
+
+### Not verified
+- The language popup was not clicked (headless captures); play screen, video dialog and offline progress screens were not captured
+  in en/ja (only the table coverage was checked: every `Tr("...")` literal has an entry).
+- Translations were written by the model, not reviewed by native speakers.

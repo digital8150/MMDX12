@@ -1,3 +1,4 @@
+#include "core/I18n.h"
 #include "app/App.h"
 
 #include <ShlObj.h>
@@ -61,6 +62,9 @@ AppOptions ParseCommandLine(int argc, wchar_t** argv) {
             opt.debugLayer = true;
         } else if (arg == L"--screen") {
             opt.startScreen = WideToUtf8(next());
+        } else if (arg == L"--lang") {
+            const std::string v = ToLowerAscii(WideToUtf8(next()));
+            opt.language = v == "ko" ? 1 : v == "en" ? 2 : v == "ja" ? 3 : 0;
         } else if (arg == L"--lighting") {
             opt.lighting = _wtoi(next().c_str());
         } else if (arg == L"--quality") {
@@ -149,6 +153,7 @@ int App::Run(HINSTANCE instance, const AppOptions& options) {
     options_ = options;
     settingsPath_ = ExecutableDir() / L"mmdx12.ini";
     settings_.Load(settingsPath_);
+    SetLanguage((Language)(options_.language >= 0 ? options_.language : settings_.language));
     const AppSettings persisted = settings_;  // CLI overrides below are for this run only
     if (options_.lighting >= 0) settings_.lighting = std::clamp(options_.lighting, 0, kLightingPresetCount - 1);
     if (options_.quality >= 0) ApplyGraphicsPreset(std::clamp(options_.quality, 0, 3));
@@ -169,7 +174,7 @@ int App::Run(HINSTANCE instance, const AppOptions& options) {
     GetClientRect(hwnd_, &rc);
     if (!ctx_.Initialize(hwnd_, (uint32_t)(rc.right - rc.left), (uint32_t)(rc.bottom - rc.top),
                          options_.debugLayer)) {
-        MessageBoxW(hwnd_, L"Direct3D 12 초기화에 실패했습니다.", L"MMDX12", MB_ICONERROR);
+        MessageBoxW(hwnd_, Utf8ToWide(Tr("Direct3D 12 초기화에 실패했습니다.")).c_str(), L"MMDX12", MB_ICONERROR);
         return 1;
     }
 
@@ -179,7 +184,7 @@ int App::Run(HINSTANCE instance, const AppOptions& options) {
         if (!found.empty()) shaderDir = found / L"shaders";
     }
     if (!renderer_.Initialize(ctx_, shaderDir)) {
-        MessageBoxW(hwnd_, L"렌더러 초기화에 실패했습니다.", L"MMDX12", MB_ICONERROR);
+        MessageBoxW(hwnd_, Utf8ToWide(Tr("렌더러 초기화에 실패했습니다.")).c_str(), L"MMDX12", MB_ICONERROR);
         return 1;
     }
 
@@ -790,7 +795,7 @@ void App::PollLoad() {
     bool ok = loadFuture_.get();
     if (ok) {
         ok = BuildSceneRuntime(*loadPackage_);
-        if (!ok) loadError_ = "GPU 리소스 생성 실패";
+        if (!ok) loadError_ = Tr("GPU 리소스 생성 실패");
     }
     loadPackage_.reset();
 

@@ -81,6 +81,7 @@ bool AppSettings::Load(const std::filesystem::path& file) {
         float f;
         if (key == "libraryPath") libraryPath = value;
         else if (key == "nickname") nickname = value;
+        else if (key == "language" && ParseInt(value, i)) language = std::clamp(i, 0, 3);
         else if (key == "vsync" && ParseBool(value, b)) vsync = b;
         else if (key == "msaa" && ParseInt(value, i)) msaa = i;
         else if (key == "renderScale" && ParseFloat(value, f)) renderScale = f;
