@@ -119,7 +119,8 @@ void App::DrawAppBar(int activeNav) {
     ImGui::SetNextWindowSize(ImVec2(Dp(200.0f), 0));
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(Dp(12.0f), Dp(12.0f)));
     if (ImGui::BeginPopup("##langpopup")) {
-        const Language langs[] = {Language::Auto, Language::Korean, Language::English, Language::Japanese};
+        const Language langs[] = {Language::Auto, Language::Korean, Language::English, Language::Japanese,
+                                Language::Chinese};
         for (const Language l : langs) {
             const std::string label = l == Language::Auto ? std::string(Tr("시스템 언어")) + "  (" +
                                                                 LanguageName(DetectSystemLanguage()) + ")"

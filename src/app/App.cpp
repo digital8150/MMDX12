@@ -64,7 +64,7 @@ AppOptions ParseCommandLine(int argc, wchar_t** argv) {
             opt.startScreen = WideToUtf8(next());
         } else if (arg == L"--lang") {
             const std::string v = ToLowerAscii(WideToUtf8(next()));
-            opt.language = v == "ko" ? 1 : v == "en" ? 2 : v == "ja" ? 3 : 0;
+            opt.language = v == "ko" ? 1 : v == "en" ? 2 : v == "ja" ? 3 : v == "zh" ? 4 : 0;
         } else if (arg == L"--lighting") {
             opt.lighting = _wtoi(next().c_str());
         } else if (arg == L"--quality") {

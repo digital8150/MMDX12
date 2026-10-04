@@ -23,12 +23,17 @@ const Table& TableFor(Language l) {
         for (int i = 0; i < i18n::kEnglishCount; ++i) t.emplace(i18n::kEnglish[i].ko, i18n::kEnglish[i].tr);
         return t;
     }();
+    static const Table zh = [] {
+        Table t;
+        for (int i = 0; i < i18n::kChineseCount; ++i) t.emplace(i18n::kChinese[i].ko, i18n::kChinese[i].tr);
+        return t;
+    }();
     static const Table ja = [] {
         Table t;
         for (int i = 0; i < i18n::kJapaneseCount; ++i) t.emplace(i18n::kJapanese[i].ko, i18n::kJapanese[i].tr);
         return t;
     }();
-    return l == Language::Japanese ? ja : en;
+    return l == Language::Japanese ? ja : l == Language::Chinese ? zh : en;
 }
 
 } // namespace
@@ -40,6 +45,7 @@ Language DetectSystemLanguage() {
         const std::wstring_view n(name);
         if (n.substr(0, 2) == L"ko") return Language::Korean;
         if (n.substr(0, 2) == L"ja") return Language::Japanese;
+        if (n.substr(0, 2) == L"zh") return Language::Chinese;
     }
 #endif
     return Language::English;
@@ -57,6 +63,7 @@ const char* LanguageName(Language lang) {
     case Language::Korean: return "한국어";
     case Language::English: return "English";
     case Language::Japanese: return "日本語";
+    case Language::Chinese: return "简体中文";
     default: return "Auto";
     }
 }

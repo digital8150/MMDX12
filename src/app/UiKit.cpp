@@ -1,5 +1,6 @@
 #include "app/UiKit.h"
 #include "app/Icons.h"
+#include "core/I18n.h"
 #include "imgui_internal.h"
 #include <algorithm>
 #include <cmath>
@@ -97,11 +98,21 @@ bool LoadFonts(const std::filesystem::path& assetsDir) {
             ic.GlyphOffset = ImVec2(0, 1.5f);
             io.Fonts->AddFontFromFileTTF(iconFile.c_str(), size::Body, &ic);
         }
-        // Japanese UI text and kana/kanji in asset titles: bundled Noto Sans CJK JP (system fonts as fallback).
-        const std::string noto = (fontDir / (i == 0 ? "NotoSansCJKjp-Regular.otf" : "NotoSansCJKjp-Bold.otf")).string();
-        if (std::filesystem::exists(noto))
+        // Japanese / Chinese UI text and CJK names in asset titles: bundled Noto Sans CJK. The face of the
+        // active language goes first so shared Han characters use its glyph forms (switching to the other
+        // forms fully takes effect after a restart). System fonts are the fallback.
+        const bool zhFirst = ActiveLanguage() == Language::Chinese;
+        bool haveNoto = false;
+        for (int k = 0; k < 2; ++k) {
+            const bool sc = (k == 0) == zhFirst;
+            const std::string noto = (fontDir / (std::string(sc ? "NotoSansCJKsc-" : "NotoSansCJKjp-") +
+                                                 (i == 0 ? "Regular.otf" : "Bold.otf"))).string();
+            if (!std::filesystem::exists(noto)) continue;
             io.Fonts->AddFontFromFileTTF(noto.c_str(), size::Body, &merge);
-        else if (std::filesystem::exists(L"C:\\Windows\\Fonts\\YuGothM.ttc"))
+            haveNoto = true;
+        }
+        if (haveNoto) {
+        } else if (std::filesystem::exists(L"C:\\Windows\\Fonts\\YuGothM.ttc"))
             io.Fonts->AddFontFromFileTTF("C:\\Windows\\Fonts\\YuGothM.ttc", size::Body, &merge);
         else if (std::filesystem::exists(L"C:\\Windows\\Fonts\\msgothic.ttc"))
             io.Fonts->AddFontFromFileTTF("C:\\Windows\\Fonts\\msgothic.ttc", size::Body, &merge);

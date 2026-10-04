@@ -300,3 +300,15 @@ every frame and encodes an MP4, 3) GI with a Pixar/Disney-like look while keepin
 - The language popup was not clicked (headless captures); play screen, video dialog and offline progress screens were not captured
   in en/ja (only the table coverage was checked: every `Tr("...")` literal has an entry).
 - Translations were written by the model, not reviewed by native speakers.
+
+## 2026-10-04 — Chinese (Simplified) UI, release 0.3.0
+
+### Done
+- `Language::Chinese` (ini `language=4`, `--lang zh`, auto-detected from a `zh*` Windows locale), table `core/I18nZh.cpp` (same 274 keys as English),
+  "简体中文" in the globe popup. Bundled Noto Sans CJK SC (Regular/Bold, same OFL licence file); `LoadFonts` merges the SC face before JP when the
+  language at startup is Chinese (shared Han characters get the matching glyph forms), JP first otherwise.
+- Checked: build; `--lang zh` captures of the lobby and the benchmark lobby.
+
+### Not verified
+- Switching to Chinese from the popup in a running session keeps the Japanese Han glyph forms until the next start (font atlas is built once).
+- Translations are model-written, not reviewed by a native speaker; play screen / video dialog not captured in zh.
