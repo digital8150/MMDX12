@@ -49,6 +49,16 @@
   </tr>
 </table>
 
+## 動画
+
+MMDX12 の動画モードで 1 曲まるごとレンダリングして、そのままアップロードしました。
+
+<ul>
+  <li><a href="https://youtu.be/tng53F--jEM">モニタリング (Best Friend Remix)</a> (パストレーシング 4K 60FPS)</li>
+  <li><a href="https://youtu.be/WqZzpxBWhj4">Cute Medley: Idol Sounds</a> (パストレーシング QHD 60FPS)</li>
+  <li><a href="https://youtu.be/6JerS9iSD50">World is Mine</a> (パストレーシング QHD 24FPS)</li>
+</ul>
+
 ## できること
 
 - **ファイルは放り込むだけ。** フォルダを整理しなくても、キャラクター、ステージ、ダンスを自動で見分けます。

@@ -49,6 +49,16 @@ Straight out of the built-in renderer, no touch-ups.
   </tr>
 </table>
 
+## Videos
+
+Full songs rendered with MMDX12's video mode, uploaded as-is.
+
+<ul>
+  <li><a href="https://youtu.be/tng53F--jEM">モニタリング (Best Friend Remix)</a> (Path-traced 4K 60FPS)</li>
+  <li><a href="https://youtu.be/WqZzpxBWhj4">Cute Medley: Idol Sounds</a> (Path-traced QHD 60FPS)</li>
+  <li><a href="https://youtu.be/6JerS9iSD50">World is Mine</a> (Path-traced QHD 24FPS)</li>
+</ul>
+
 ## What it does
 
 - **Just throw your files in.** Any folder layout works. MMDX12 figures out which files are characters, stages and dances on its own.

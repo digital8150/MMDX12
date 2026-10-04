@@ -49,6 +49,16 @@
   </tr>
 </table>
 
+## 视频
+
+用 MMDX12 的视频模式整首歌渲染后,原样上传。
+
+<ul>
+  <li><a href="https://youtu.be/tng53F--jEM">モニタリング (Best Friend Remix)</a> (路径追踪 4K 60FPS)</li>
+  <li><a href="https://youtu.be/WqZzpxBWhj4">Cute Medley: Idol Sounds</a> (路径追踪 QHD 60FPS)</li>
+  <li><a href="https://youtu.be/6JerS9iSD50">World is Mine</a> (路径追踪 QHD 24FPS)</li>
+</ul>
+
 ## 功能
 
 - **文件直接丢进去就行。** 不用整理文件夹,角色、舞台和舞蹈会自动识别。

@@ -49,6 +49,16 @@
   </tr>
 </table>
 
+## 영상
+
+MMDX12의 영상 모드로 노래 한 곡을 통째로 렌더해서 그대로 올렸어요.
+
+<ul>
+  <li><a href="https://youtu.be/tng53F--jEM">モニタリング (Best Friend Remix)</a> (패스 트레이싱 4K 60FPS)</li>
+  <li><a href="https://youtu.be/WqZzpxBWhj4">Cute Medley: Idol Sounds</a> (패스 트레이싱 QHD 60FPS)</li>
+  <li><a href="https://youtu.be/6JerS9iSD50">World is Mine</a> (패스 트레이싱 QHD 24FPS)</li>
+</ul>
+
 ## 할 수 있는 것
 
 - **파일은 그냥 던져 넣으면 끝.** 폴더 정리 안 해도 캐릭터, 무대, 춤을 알아서 구분해요.
