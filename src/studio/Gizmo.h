@@ -121,4 +121,51 @@ DirectX::XMFLOAT3 GizmoDragTranslation(const GizmoDrag& d, ImVec2 mouse);
 // angle means XMQuaternionRotationAxis(axis, angle) rotates the grabbed ring point towards where the mouse moved.
 float GizmoDragAngle(const GizmoDrag& d, ImVec2 mouse, DirectX::XMFLOAT3* axis);
 
+// ---- camera path ----
+
+// Clips the world segment a-b against the viewing camera's near plane (view-space z >= vp.nearZ) and projects the
+// visible part. False when the whole segment is behind the near plane. The projection is the same as Project().
+bool ProjectSegment(const ViewProj& vp, const DirectX::XMFLOAT3& a, const DirectX::XMFLOAT3& b, ImVec2& pa, ImVec2& pb);
+
+struct CameraPathStyle {
+    float lineWidth = 2.0f;        // screen px (caller scales by DPI)
+    float keyRadius = 4.0f;
+    float currentRadius = 5.5f;
+    ImU32 path = IM_COL32(255, 196, 64, 230);       // eye path
+    ImU32 key = IM_COL32(255, 255, 255, 240);       // key positions (eye at the key frame)
+    ImU32 selectedKey = IM_COL32(255, 90, 90, 255); // keys in `selectedKeys`
+    ImU32 current = IM_COL32(64, 220, 255, 255);    // camera at the current frame: dot + frustum
+    ImU32 target = IM_COL32(64, 220, 255, 160);     // line eye -> look-at target of the current frame
+    ImU32 outline = IM_COL32(10, 14, 20, 190);      // dark outline under lines and dots (contrast)
+};
+
+// One sample of the motion camera (built by the caller with CameraMotion::Evaluate + ToView).
+struct CameraPathPoint {
+    DirectX::XMFLOAT3 eye{};
+    DirectX::XMFLOAT3 target{};
+    DirectX::XMFLOAT4X4 view{};    // the motion camera's LH view matrix (for the frustum)
+    float fovY = 0.5f;             // radians
+};
+
+// Draws the motion camera's path as seen from the viewing camera `vp`:
+// - `path`: eye samples in frame order (one per frame typically); consecutive samples are joined by line segments
+//   (outline colour 2 px wider underneath, then the path colour). A segment whose two eyes are farther apart than
+//   `cutDistance` world units is a camera cut: it is NOT drawn (MMD camera cuts are 1-frame jumps).
+// - `keys`: eye positions at the key frames, drawn as filled circles (keyRadius, outline ring); keys whose index is in
+//   `selectedKeys` use selectedKey and radius keyRadius + 1.5.
+// - `current`: the camera at the current frame: a filled circle (currentRadius) at its eye, a thin line from the eye
+//   to its target (the target colour) with a small 3 px dot at the target, and its view frustum drawn as a wireframe
+//   pyramid: apex at the eye, a rectangle at distance `frustumLength` world units in front of it with half-height
+//   `frustumLength * tan(fovY / 2)` and half-width = half-height * `aspect`, the 4 edges apex->corners and the rectangle,
+//   plus a small filled triangle above the rectangle's top edge marking "up" (like Blender's camera gizmo). The
+//   frustum corners are computed in the motion camera's view space and transformed to world with the inverse of
+//   `current.view`. Pass `current == nullptr` to skip it.
+// Every line goes through ProjectSegment (clipped at the near plane), every dot through Project (skipped when behind).
+void DrawCameraPath(ImDrawList* dl, const ViewProj& vp, const CameraPathPoint* path, int pathCount,
+                    const DirectX::XMFLOAT3* keys, int keyCount, const std::set<int>& selectedKeys,
+                    const CameraPathPoint* current, float aspect, float frustumLength, float cutDistance,
+                    const CameraPathStyle& style);
+// Index of the key (in `keys`) whose projected position is nearest to `mouse` within `radius` px, -1 if none.
+int PickCameraKey(const ViewProj& vp, const DirectX::XMFLOAT3* keys, int keyCount, ImVec2 mouse, float radius);
+
 } // namespace mmdx::studio

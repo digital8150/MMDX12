@@ -66,6 +66,7 @@ int MotionData::EndFrame() const {
     for (const auto& [n, k] : ik) if (!k.empty()) end = std::max(end, k.back().frame);
     if (!camera.empty()) end = std::max(end, camera.back().frame);
     if (!light.empty()) end = std::max(end, light.back().frame);
+    if (!shadow.empty()) end = std::max(end, shadow.back().frame);
     return end;
 }
 
@@ -77,9 +78,7 @@ bool MotionData::InsertFrames(int at, int count) {
     for (auto& [name, keys] : ik) changed |= InsertFrameSpan(keys, at, count);
     changed |= InsertFrameSpan(camera, at, count);
     changed |= InsertFrameSpan(light, at, count);
-    for (VmdShadowKey& k : shadow) {
-        if ((int64_t)k.frame >= (int64_t)at) { k.frame = (uint32_t)((int64_t)k.frame + count); changed = true; }
-    }
+    changed |= InsertFrameSpan(shadow, at, count);
     return changed;
 }
 
@@ -91,21 +90,11 @@ bool MotionData::DeleteFrames(int at, int count) {
     for (auto& [name, keys] : ik) changed |= DeleteFrameSpan(keys, at, count);
     changed |= DeleteFrameSpan(camera, at, count);
     changed |= DeleteFrameSpan(light, at, count);
+    changed |= DeleteFrameSpan(shadow, at, count);
     // Tracks that lost their last key are removed from the maps.
     for (auto it = bones.begin(); it != bones.end();) it = it->second.empty() ? bones.erase(it) : std::next(it);
     for (auto it = morphs.begin(); it != morphs.end();) it = it->second.empty() ? morphs.erase(it) : std::next(it);
     for (auto it = ik.begin(); it != ik.end();) it = it->second.empty() ? ik.erase(it) : std::next(it);
-    const int64_t lo = at, hi = (int64_t)at + count;
-    std::vector<VmdShadowKey> out;
-    out.reserve(shadow.size());
-    for (const VmdShadowKey& k : shadow) {
-        const int64_t f = (int64_t)k.frame;
-        if (f >= lo && f < hi) { changed = true; continue; }  // erased
-        VmdShadowKey copy = k;
-        if (f >= hi) { copy.frame = (uint32_t)(f - count); changed = true; }
-        out.push_back(copy);
-    }
-    shadow.swap(out);
     return changed;
 }
 
@@ -121,7 +110,7 @@ size_t MotionData::ApproxBytes() const {
     bytes += mapBytes(ik);
     bytes += camera.capacity() * sizeof(CameraKf);
     bytes += light.capacity() * sizeof(LightKf);
-    bytes += shadow.capacity() * sizeof(VmdShadowKey);
+    bytes += shadow.capacity() * sizeof(ShadowKf);
     return bytes;
 }
 
@@ -145,8 +134,7 @@ MotionData MotionData::FromVmd(const VmdMotion& vmd) {
         UpsertKey(d.camera, kf);
     }
     for (const VmdLightKey& k : vmd.lightKeys) UpsertKey(d.light, LightKf{(int)k.frame, k.color, k.direction});
-    d.shadow = vmd.shadowKeys;
-    std::sort(d.shadow.begin(), d.shadow.end(), [](const VmdShadowKey& a, const VmdShadowKey& b) { return a.frame < b.frame; });
+    for (const VmdShadowKey& k : vmd.shadowKeys) UpsertKey(d.shadow, ShadowKf{(int)k.frame, k.mode, k.distance});
     return d;
 }
 
@@ -156,6 +144,7 @@ void MotionData::Merge(const MotionData& o) {
     for (const auto& [name, keys] : o.ik) for (const IkKf& k : keys) UpsertKey(ik[name], k);
     for (const CameraKf& k : o.camera) UpsertKey(camera, k);
     for (const LightKf& k : o.light) UpsertKey(light, k);
+    for (const ShadowKf& k : o.shadow) UpsertKey(shadow, k);
 }
 
 namespace {
@@ -265,6 +254,37 @@ CameraKf SampleCamera(const std::vector<CameraKf>& keys, int frame) {
     return out;
 }
 
+LightKf SampleLight(const std::vector<LightKf>& keys, float frame) {
+    const int f = (int)std::floor(frame);
+    if (f <= keys.front().frame || keys.size() == 1) { LightKf k = keys.front(); k.frame = f; return k; }
+    if (f >= keys.back().frame) { LightKf k = keys.back(); k.frame = f; return k; }
+    // last key at or before `frame`
+    auto it = std::upper_bound(keys.begin(), keys.end(), f, [](int v, const LightKf& k) { return v < k.frame; });
+    const size_t i = (size_t)(it - keys.begin()) - 1;
+    const LightKf& a = keys[i];
+    const LightKf& b = keys[i + 1];
+    const float t = (frame - (float)a.frame) / (float)(b.frame - a.frame);
+    LightKf out;
+    out.frame = f;
+    out.color.x = a.color.x + (b.color.x - a.color.x) * t;
+    out.color.y = a.color.y + (b.color.y - a.color.y) * t;
+    out.color.z = a.color.z + (b.color.z - a.color.z) * t;
+    out.direction.x = a.direction.x + (b.direction.x - a.direction.x) * t;
+    out.direction.y = a.direction.y + (b.direction.y - a.direction.y) * t;
+    out.direction.z = a.direction.z + (b.direction.z - a.direction.z) * t;
+    return out;
+}
+
+ShadowKf SampleShadow(const std::vector<ShadowKf>& keys, float frame) {
+    const int f = (int)std::floor(frame);
+    // no interpolation: the last key at or before `frame` holds until the next
+    auto it = std::upper_bound(keys.begin(), keys.end(), f, [](int v, const ShadowKf& k) { return v < k.frame; });
+    const ShadowKf& k = it != keys.begin() ? *(it - 1) : keys.front();
+    ShadowKf out = k;
+    out.frame = f;
+    return out;
+}
+
 VmdMotion MotionData::ToVmd() const {
     VmdMotion v;
     v.modelName = modelName;
@@ -289,7 +309,7 @@ VmdMotion MotionData::ToVmd() const {
         v.cameraKeys.push_back(o);
     }
     for (const LightKf& k : light) v.lightKeys.push_back({(uint32_t)k.frame, k.color, k.direction});
-    v.shadowKeys = shadow;
+    for (const ShadowKf& k : shadow) v.shadowKeys.push_back({(uint32_t)k.frame, k.mode, k.distance});
 
     // IK: one record per frame that has a key in any track, with the state of every track at that frame.
     std::set<int> frames;
@@ -310,6 +330,7 @@ VmdMotion MotionData::ToVmd() const {
     for (const auto& k : v.morphKeys) maxFrame = std::max(maxFrame, k.frame);
     for (const auto& k : v.cameraKeys) maxFrame = std::max(maxFrame, k.frame);
     for (const auto& k : v.lightKeys) maxFrame = std::max(maxFrame, k.frame);
+    for (const auto& k : v.shadowKeys) maxFrame = std::max(maxFrame, k.frame);
     for (const auto& k : v.ikKeys) maxFrame = std::max(maxFrame, k.frame);
     v.maxFrame = maxFrame;
     return v;

@@ -307,7 +307,7 @@ void Renderer::FillSceneConstants(const FrameView& view, uint32_t w, uint32_t h,
     XMVECTOR L = XMVector3Normalize(XMLoadFloat3(&view.light.direction));
     const uint32_t mapSize = targets_.shadowMap ? targets_.shadowMap.width : 2048;
     const float n = cam.nearZ;
-    const float f = std::max(n + 1.0f, std::min(settings_.shadowDistance, cam.farZ));
+    const float f = std::max(n + 1.0f, std::min(view.shadowDistance > 0.0f ? view.shadowDistance : settings_.shadowDistance, cam.farZ));
     float splits[kShadowCascades + 1];
     for (uint32_t i = 0; i <= kShadowCascades; ++i) {
         const float p = (float)i / kShadowCascades;
@@ -366,8 +366,8 @@ void Renderer::FillSceneConstants(const FrameView& view, uint32_t w, uint32_t h,
         spotSlices = slice;
     }
     sc.spotShadowParams = {(float)spotSlices, 1.0f / (float)std::max(targets_.spotShadowMap.width, 1u), 0, 0};
-    sc.cascadeSplits = {splits[1], splits[2], splits[3], settings_.shadows ? 1.0f : 0.0f};
-    sc.shadowParams = {1.0f / mapSize, 1.2f, 1.6f, 0};
+    sc.cascadeSplits = {splits[1], splits[2], splits[3], settings_.shadows && !view.shadowsOff ? 1.0f : 0.0f};
+    sc.shadowParams = {1.0f / mapSize, 1.2f, 1.6f, view.shadowsOff ? 1.0f : 0.0f};  // w: path tracer sun shadows off
     sc.cascadeTexel = {texel[0], texel[1], texel[2], 0};
 
     const LightParams& lp = view.light;

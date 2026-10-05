@@ -32,6 +32,9 @@ struct CameraKf {
     bool perspective = true;
 };
 struct LightKf { int frame = 0; DirectX::XMFLOAT3 color{0.6f, 0.6f, 0.6f}; DirectX::XMFLOAT3 direction{-0.5f, -1.0f, 0.5f}; };
+// Self-shadow key: mode 0 off, 1 mode1, 2 mode2; distance as stored in VMD (0.1 - MMD's 0..9999 UI value * 1e-5,
+// MMD default 8875 -> 0.01125).
+struct ShadowKf { int frame = 0; uint8_t mode = 1; float distance = 0.01125f; };
 
 // Bone interpolation block (64 bytes). The true table T is 16 bytes: x1 of channels X,Y,Z,R, then y1, x2, y2 (4 each).
 // MMD stores T in row 0 with bytes 2 and 3 overwritten by physics flags (0 = physics on), and rows 1..3 as T shifted
@@ -135,9 +138,9 @@ struct MotionData {
     std::map<std::string, std::vector<IkKf>> ik;  // IK bone name -> enable keys
     std::vector<CameraKf> camera;                 // camera tracks live in the project's camera, not in model motions
     std::vector<LightKf> light;
-    std::vector<VmdShadowKey> shadow;
+    std::vector<ShadowKf> shadow;
 
-    bool Empty() const { return bones.empty() && morphs.empty() && ik.empty() && camera.empty() && light.empty(); }
+    bool Empty() const { return bones.empty() && morphs.empty() && ik.empty() && camera.empty() && light.empty() && shadow.empty(); }
     int EndFrame() const;  // last key frame over everything (0 when empty)
 
     // Frame insert/delete over every track (bones, morphs, IK, camera, light, shadow); see InsertFrameSpan/DeleteFrameSpan.
@@ -163,5 +166,15 @@ struct MotionData {
 BoneKf SampleBone(const std::vector<BoneKf>& keys, int frame);
 float SampleMorph(const std::vector<MorphKf>& keys, int frame);
 CameraKf SampleCamera(const std::vector<CameraKf>& keys, int frame);
+// Light: linear interpolation of colour and direction between keys (MMD interpolates lights linearly; the direction
+// is lerped component-wise, not normalised). Before the first key: the first; after the last: the last.
+// `frame` may be fractional (smooth playback). The returned key's frame is (int)floor(frame). `keys` non-empty.
+LightKf SampleLight(const std::vector<LightKf>& keys, float frame);
+// Self-shadow: no interpolation (MMD holds each key until the next): the last key at or before `frame`, the first key
+// before it. The returned key's frame is (int)floor(frame). `keys` non-empty.
+ShadowKf SampleShadow(const std::vector<ShadowKf>& keys, float frame);
+// MMD's self-shadow distance UI value (0..9999) <-> the VMD value.
+inline float ShadowUiFromVmd(float d) { return (0.1f - d) * 100000.0f; }
+inline float ShadowVmdFromUi(float ui) { return 0.1f - ui * 0.00001f; }
 
 } // namespace mmdx::studio

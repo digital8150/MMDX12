@@ -51,13 +51,16 @@ struct StudioModel {
 };
 
 // Timeline row ids: kind in the top byte, then a 24-bit group and a 32-bit index.
-enum class RowKind : uint8_t { Group = 1, Bone = 2, Morph = 3, Camera = 4 };
+enum class RowKind : uint8_t { Group = 1, Bone = 2, Morph = 3, Camera = 4, Light = 5, Shadow = 6 };
 inline uint64_t MakeRowId(RowKind k, uint32_t group, uint32_t index) {
     return ((uint64_t)k << 56) | ((uint64_t)(group & 0xFFFFFF) << 32) | index;
 }
 inline RowKind RowKindOf(uint64_t id) { return (RowKind)(id >> 56); }
 inline uint32_t RowIndexOf(uint64_t id) { return (uint32_t)id; }
 inline uint32_t RowGroupOf(uint64_t id) { return (uint32_t)(id >> 32) & 0xFFFFFF; }
+// Camera, Light and Shadow all live in the camera MotionData (model -1): they are selected, edited and
+// undone through it together.
+inline bool IsCameraKind(RowKind k) { return k == RowKind::Camera || k == RowKind::Light || k == RowKind::Shadow; }
 
 // The row that represents a bone/morph track in the key selection: a bone listed in two display frames has two rows,
 // but its keys are selected through the first one only (CanonicalRow), so counts and edits see each key once.
@@ -69,7 +72,7 @@ using KeyId = std::pair<uint64_t, int>;
 struct ClipboardKey {
     uint64_t row = 0;
     int offset = 0;  // frame relative to the first copied key
-    BoneKf bone; MorphKf morph; CameraKf camera;
+    BoneKf bone; MorphKf morph; CameraKf camera; LightKf light; ShadowKf shadow;
 };
 
 struct StudioDoc {
@@ -88,6 +91,9 @@ struct StudioDoc {
     bool playing = false;
     float physicsFrame = -1;    // frame of the last physics step (-1: reset)
     bool useMotionCamera = true;
+    bool useLightTrack = true;      // the light track drives the renderer's key light (else the lighting preset)
+    bool useShadowTrack = true;     // the self-shadow track drives the shadows (else the render settings)
+    bool showCameraPath = true;     // camera path overlay in the viewport (free camera only)
 
     // editor
     int selectedModel = -1;     // index into models; -1 = camera
@@ -98,6 +104,7 @@ struct StudioDoc {
     std::vector<ClipboardKey> clipboard;
     int clipboardModel = -2;          // model the clipboard came from (-1 camera, -2 empty)
     int curveChannel = 3;             // inspector: bone 0..3 (X,Y,Z,R), camera 0..5
+    bool curveAllChannels = false;    // inspector: a curve edit / preset applies to every channel of the key
     std::vector<TimelineRow> rows;    // cached timeline rows
     uint64_t rowsKey = ~0ull;         // inputs the cache was built from
     bool curveEditing = false;        // a curve edit is in progress (one undo step per drag)
@@ -137,16 +144,19 @@ struct StudioDoc {
 // every operation (move, delete, paste, curve, insert) trivially reversible.
 struct TrackState {
     int model = -1;                // -1 camera
-    RowKind kind = RowKind::Bone;  // Bone, Morph or Camera
+    RowKind kind = RowKind::Bone;  // Bone, Morph, Camera, Light or Shadow
     std::string name;              // bone/morph name (unused for the camera)
     bool existed = false;          // the track existed (absent tracks are erased again)
     std::vector<BoneKf> bones;
     std::vector<MorphKf> morphs;
     std::vector<CameraKf> cameras;
+    std::vector<LightKf> lights;
+    std::vector<ShadowKf> shadows;
 
     size_t Bytes() const {
         return sizeof(TrackState) + name.size() + bones.capacity() * sizeof(BoneKf) + morphs.capacity() * sizeof(MorphKf) +
-               cameras.capacity() * sizeof(CameraKf);
+               cameras.capacity() * sizeof(CameraKf) + lights.capacity() * sizeof(LightKf) +
+               shadows.capacity() * sizeof(ShadowKf);
     }
 };
 TrackState CaptureTrack(StudioDoc& doc, int model, RowKind kind, const std::string& name);

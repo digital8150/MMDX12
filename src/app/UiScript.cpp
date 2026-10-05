@@ -129,10 +129,14 @@ void App::PumpUiScript() {
                     if (++listed > 16) { sel += " ..."; break; }
                     sel += " " + std::to_string(k.second);
                 }
-                LOG_INFO("STUDIOSTATE frame=%d model=%d boneKeys=%zu morphKeys=%zu cameraKeys=%zu selected=%zu selection=[%s ] "
+                LOG_INFO("STUDIOSTATE frame=%d model=%d boneKeys=%zu morphKeys=%zu cameraKeys=%zu "
+                         "lightKeys=%zu shadowKeys=%zu motionCam=%d lightTrack=%d shadowTrack=%d "
+                         "selected=%zu selection=[%s ] "
                          "rows=%zu range=%d..%d loop=%d playing=%d physics=%d undo='%s' redo='%s' undoCount=%zu undoMB=%.1f "
                          "scroll=%.1f zoom=%.2f hoveredWindow=%s activeId=%08x",
-                         d.Frame(), d.selectedModel, bones, morphs, d.camera.camera.size(), d.selection.size(), sel.c_str(),
+                         d.Frame(), d.selectedModel, bones, morphs, d.camera.camera.size(), d.camera.light.size(),
+                         d.camera.shadow.size(), (int)d.useMotionCamera, (int)d.useLightTrack, (int)d.useShadowTrack,
+                         d.selection.size(), sel.c_str(),
                          d.selectedRows.size(), d.view.rangeStart, d.view.rangeEnd, (int)d.loop, (int)d.playing,
                          (int)d.physics, d.history.UndoName().c_str(), d.history.RedoName().c_str(), d.history.Count(),
                          d.history.Bytes() / 1048576.0, d.view.scrollFrame, d.view.pxPerFrame,

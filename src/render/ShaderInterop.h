@@ -21,7 +21,7 @@ struct SceneConstants {               // b0, kSceneCbSize-byte slot per frame
     DirectX::XMFLOAT4X4 prevViewProjNoJitter;
     DirectX::XMFLOAT4X4 shadowViewProj[kShadowCascades];
     DirectX::XMFLOAT4 cascadeSplits;   // view-space far z of cascade 0..2, w = shadows enabled (0/1)
-    DirectX::XMFLOAT4 shadowParams;    // x = 1/mapSize, y = normal offset scale, z = softness (texels), w = unused
+    DirectX::XMFLOAT4 shadowParams;    // x = 1/mapSize, y = normal offset scale, z = softness (texels), w = 1: no sun shadows (studio self-shadow track off; the path tracer reads it)
     DirectX::XMFLOAT4 cascadeTexel;    // world size of one shadow texel per cascade
     DirectX::XMFLOAT3 eyePos;      float time;
     DirectX::XMFLOAT3 lightDir;    float sunIntensity;   // lightDir normalized, from light toward scene

@@ -82,6 +82,10 @@ progress.md is the session log. Read its latest entry first.
     clears the layer in one `CompositeCommand`. Bone values are VMD-local (parent frame); the gizmo converts world deltas
     with the parent's world rotation. Bones listed in two display frames select keys through `CanonicalRow`.
   - `asset/ModelImport.h` and `render/GpuModel.h` both declare `mmdx::ModelRole`: never include both in one .cpp.
+  - Camera/light/self-shadow (`app/UiStudioCamera.cpp`): `StudioDoc::camera` holds the camera, light (`LightKf`, linear) and
+    self-shadow (`ShadowKf`, stepped, VMD distance = 0.1 - UI*1e-5) tracks as timeline rows `RowKind::Camera/Light/Shadow`.
+    In the studio the light track overrides the preset's key light and the shadow track sets `FrameView::shadowsOff`/
+    `shadowDistance` (play mode ignores VMD light/shadow). Perspective-off keys render as a 3 degree lens from far away.
 - `OfflineRenderer` (render/OfflineRenderer.h) is independent of `RenderSettings`: `Renderer::BeginOffline` builds the TLAS,
   then `Renderer::RenderOffline` replaces `Render` each frame (GPU-time-budgeted iterations, preview present) until Done.
   Motion blur: each iteration re-skins the character at its shutter time (`RtScene::Build(..., time)`) from the models'

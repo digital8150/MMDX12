@@ -73,6 +73,7 @@ bool LoadStudioPackage(const CharacterAsset& character, const StageAsset* stage,
                 MotionData d = MotionData::FromVmd(vmd);
                 d.camera.clear();
                 d.light.clear();
+                d.shadow.clear();
                 if (ch.motion.Empty()) ch.motion.modelName = d.modelName;
                 ch.motion.Merge(d);
             }

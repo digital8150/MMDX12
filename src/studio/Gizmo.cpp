@@ -547,4 +547,145 @@ float GizmoDragAngle(const GizmoDrag& d, ImVec2 mouse, XMFLOAT3* axis) {
     return DotV(mouse - d.startMouse, d.tangent) / d.radiusPx;
 }
 
+// ---- camera path ------------------------------------------------------------------------------------------------
+
+bool ProjectSegment(const ViewProj& vp, const DirectX::XMFLOAT3& a, const DirectX::XMFLOAT3& b, ImVec2& pa, ImVec2& pb) {
+    const float za = XMVectorGetZ(XMVector3TransformCoord(Load(a), XMLoadFloat4x4(&vp.view)));
+    const float zb = XMVectorGetZ(XMVector3TransformCoord(Load(b), XMLoadFloat4x4(&vp.view)));
+    const float clipZ = vp.nearZ * 1.001f;
+    if (za < clipZ && zb < clipZ) return false;
+
+    XMFLOAT3 ca = a;
+    XMFLOAT3 cb = b;
+    if (za < clipZ) {
+        const float t = (clipZ - za) / (zb - za);
+        ca.x = a.x + t * (b.x - a.x);
+        ca.y = a.y + t * (b.y - a.y);
+        ca.z = a.z + t * (b.z - a.z);
+    } else if (zb < clipZ) {
+        const float t = (clipZ - za) / (zb - za);
+        cb.x = a.x + t * (b.x - a.x);
+        cb.y = a.y + t * (b.y - a.y);
+        cb.z = a.z + t * (b.z - a.z);
+    }
+    return vp.Project(ca, pa) && vp.Project(cb, pb);
+}
+
+void DrawCameraPath(ImDrawList* dl, const ViewProj& vp, const CameraPathPoint* path, int pathCount,
+                    const DirectX::XMFLOAT3* keys, int keyCount, const std::set<int>& selectedKeys,
+                    const CameraPathPoint* current, float aspect, float frustumLength, float cutDistance,
+                    const CameraPathStyle& style) {
+    const auto dist2 = [](const XMFLOAT3& a, const XMFLOAT3& b) {
+        return (a.x - b.x)*(a.x - b.x) + (a.y - b.y)*(a.y - b.y) + (a.z - b.z)*(a.z - b.z);
+    };
+    const float cutSq = cutDistance * cutDistance;
+
+    for (int pass = 0; pass < 2; ++pass) {
+        const float thick = pass == 0 ? style.lineWidth + 2.0f : style.lineWidth;
+        const ImU32 col = pass == 0 ? style.outline : style.path;
+        for (int i = 0; i < pathCount - 1; ++i) {
+            if (dist2(path[i].eye, path[i+1].eye) > cutSq) continue;
+            ImVec2 pa, pb;
+            if (ProjectSegment(vp, path[i].eye, path[i+1].eye, pa, pb)) {
+                dl->AddLine(pa, pb, col, thick);
+            }
+        }
+    }
+
+    if (current) {
+        ImVec2 pa, pb;
+        if (ProjectSegment(vp, current->eye, current->target, pa, pb)) {
+            dl->AddLine(pa, pb, style.target, style.lineWidth);
+        }
+        ImVec2 pt;
+        if (vp.Project(current->target, pt)) {
+            dl->AddCircleFilled(pt, 3.0f, style.target);
+            dl->AddCircle(pt, 3.0f, style.outline, 0, 1.5f);
+        }
+
+        const XMMATRIX invView = XMMatrixInverse(nullptr, XMLoadFloat4x4(&current->view));
+        const float hh = frustumLength * std::tan(current->fovY * 0.5f);
+        const float hw = hh * aspect;
+        const XMFLOAT3 cornersV[5] = {
+            {0, 0, 0},
+            {-hw, hh, frustumLength},
+            {hw, hh, frustumLength},
+            {hw, -hh, frustumLength},
+            {-hw, -hh, frustumLength}
+        };
+        XMFLOAT3 cornersW[5];
+        for (int i = 0; i < 5; ++i) {
+            cornersW[i] = Store(XMVector3TransformCoord(Load(cornersV[i]), invView));
+        }
+
+        for (int pass = 0; pass < 2; ++pass) {
+            const float thick = pass == 0 ? style.lineWidth + 2.0f : style.lineWidth;
+            const ImU32 col = pass == 0 ? style.outline : style.current;
+            for (int i = 1; i <= 4; ++i) {
+                if (ProjectSegment(vp, cornersW[0], cornersW[i], pa, pb)) {
+                    dl->AddLine(pa, pb, col, thick);
+                }
+                const int next = i == 4 ? 1 : i + 1;
+                if (ProjectSegment(vp, cornersW[i], cornersW[next], pa, pb)) {
+                    dl->AddLine(pa, pb, col, thick);
+                }
+            }
+        }
+
+        const XMFLOAT3 triV[3] = {
+            {0, hh + hh * 0.2f, frustumLength},
+            {-hw * 0.1f, hh, frustumLength},
+            {hw * 0.1f, hh, frustumLength}
+        };
+        XMFLOAT3 triW[3];
+        ImVec2 ptri[3];
+        bool triOk = true;
+        for (int i = 0; i < 3; ++i) {
+            triW[i] = Store(XMVector3TransformCoord(Load(triV[i]), invView));
+            if (!vp.Project(triW[i], ptri[i])) triOk = false;
+        }
+        if (triOk) {
+            dl->AddTriangleFilled(ptri[0], ptri[1], ptri[2], style.current);
+            dl->AddTriangle(ptri[0], ptri[1], ptri[2], style.outline, 1.5f);
+        }
+    }
+
+    for (int i = 0; i < keyCount; ++i) {
+        ImVec2 pk;
+        if (vp.Project(keys[i], pk)) {
+            const bool sel = selectedKeys.count(i) > 0;
+            const float r = sel ? style.keyRadius + 1.5f : style.keyRadius;
+            const ImU32 col = sel ? style.selectedKey : style.key;
+            dl->AddCircleFilled(pk, r + 1.5f, style.outline);
+            dl->AddCircleFilled(pk, r, col);
+        }
+    }
+
+    if (current) {
+        ImVec2 pc;
+        if (vp.Project(current->eye, pc)) {
+            dl->AddCircleFilled(pc, style.currentRadius + 1.5f, style.outline);
+            dl->AddCircleFilled(pc, style.currentRadius, style.current);
+        }
+    }
+}
+
+int PickCameraKey(const ViewProj& vp, const DirectX::XMFLOAT3* keys, int keyCount, ImVec2 mouse, float radius) {
+    int best = -1;
+    float bestD = radius;
+    for (int i = 0; i < keyCount; ++i) {
+        ImVec2 pk;
+        if (vp.Project(keys[i], pk)) {
+            const float d = std::hypot(mouse.x - pk.x, mouse.y - pk.y);
+            if (d <= bestD) {
+                if (d < bestD || best == -1) {
+                    bestD = d;
+                    best = i;
+                }
+            }
+        }
+    }
+    return best;
+}
+
 } // namespace mmdx::studio

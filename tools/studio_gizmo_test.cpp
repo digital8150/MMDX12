@@ -356,6 +356,86 @@ int main() {
         Check(ok, "Draw smoke (vertex count)");
     }
 
+    // ---- 11. ProjectSegment
+    {
+        const ViewProj vp = MakeViewProj(TestView({0, 10, -50}, {0, 10, 0}), {0, 10, -50}, kFovY,
+                                         0.5f, 3000.0f, 0.0f, 0.0f, 800.0f, 600.0f);
+        ImVec2 pa, pb;
+        
+        // both in front
+        bool ok = ProjectSegment(vp, {0, 10, 0}, {5, 10, 0}, pa, pb);
+        ImVec2 ea, eb;
+        vp.Project({0, 10, 0}, ea);
+        vp.Project({5, 10, 0}, eb);
+        Check(ok && std::fabs(pa.x - ea.x) < 1e-4f && std::fabs(pb.x - eb.x) < 1e-4f, "ProjectSegment front");
+        
+        // a in front (0,10,0) and b behind (0,10,-60)
+        ok = ProjectSegment(vp, {0, 10, 0}, {0, 10, -60}, pa, pb);
+        Check(ok && std::fabs(pa.x - ea.x) < 1e-4f && std::fabs(pb.x - 400.0f) < 1.0f && std::isfinite(pb.x) && std::isfinite(pb.y), "ProjectSegment clipped");
+
+        // both behind
+        ok = ProjectSegment(vp, {0, 10, -60}, {0, 10, -70}, pa, pb);
+        Check(!ok, "ProjectSegment behind");
+    }
+
+    // ---- 12. PickCameraKey
+    {
+        const ViewProj vp = MakeViewProj(TestView({0, 10, -50}, {0, 10, 0}), {0, 10, -50}, kFovY,
+                                         0.5f, 3000.0f, 0.0f, 0.0f, 800.0f, 600.0f);
+        XMFLOAT3 keys[2] = {{0, 10, 0}, {5, 10, 0}};
+        ImVec2 ea;
+        vp.Project(keys[0], ea);
+        ImVec2 mouse = {ea.x + 2.0f, ea.y + 1.0f};
+        int pick1 = PickCameraKey(vp, keys, 2, mouse, 5.0f);
+        int pickFar = PickCameraKey(vp, keys, 2, {ea.x + 100.0f, ea.y}, 5.0f);
+        Check(pick1 == 0 && pickFar == -1, "PickCameraKey");
+    }
+
+    // ---- 13. DrawCameraPath smoke
+    {
+        ImGui::CreateContext();
+        ImGuiIO& io = ImGui::GetIO();
+        io.IniFilename = nullptr;  // no imgui.ini in the working directory
+        io.DisplaySize = ImVec2(800.0f, 600.0f);
+        unsigned char* pixels;
+        int width, height;
+        io.Fonts->GetTexDataAsRGBA32(&pixels, &width, &height);
+        ImGui::NewFrame();
+        
+        ImDrawList* dl = ImGui::GetForegroundDrawList();
+        const ViewProj vp = MakeViewProj(TestView({0, 10, -50}, {0, 10, 0}), {0, 10, -50}, kFovY,
+                                         0.5f, 3000.0f, 0.0f, 0.0f, 800.0f, 600.0f);
+        
+        std::vector<CameraPathPoint> path;
+        for (int i = 0; i < 100; ++i) {
+            float a = i * 2.0f * kPi / 100.0f;
+            CameraPathPoint pt;
+            pt.eye = {30.0f * std::cos(a), 10.0f, 30.0f * std::sin(a)};
+            if (i == 50) pt.eye.x += 100.0f; // cut
+            pt.target = {0, 10, 0};
+            pt.fovY = 0.5f;
+            XMStoreFloat4x4(&pt.view, XMMatrixLookAtLH(Load(pt.eye), Load(pt.target), XMVectorSet(0, 1, 0, 0)));
+            path.push_back(pt);
+        }
+        XMFLOAT3 keys[5];
+        for (int i = 0; i < 5; ++i) keys[i] = path[i * 20].eye;
+        
+        std::set<int> selected = {1};
+        CameraPathStyle style;
+        
+        DrawCameraPath(dl, vp, path.data(), 100, keys, 5, selected, &path[0], 1.5f, 10.0f, 90.0f, style);
+        bool ok = dl->VtxBuffer.Size > 0;
+        
+        int prevSize = dl->VtxBuffer.Size;
+        DrawCameraPath(dl, vp, nullptr, 0, nullptr, 0, selected, nullptr, 1.5f, 10.0f, 90.0f, style);
+        bool ok2 = dl->VtxBuffer.Size == prevSize;
+        
+        Check(ok && ok2, "DrawCameraPath smoke test");
+        
+        ImGui::EndFrame();
+        ImGui::DestroyContext();
+    }
+
     std::printf("studio_gizmo_test: %d passed, %d failed\n", g_passed, g_failed);
     return g_failed > 0 ? 1 : 0;
 }

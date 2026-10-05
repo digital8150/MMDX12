@@ -144,7 +144,7 @@ void CSPathTrace(uint3 id : SV_DispatchThreadID) {
                     toon = true;
                     flat = (g.flags & MAT_FLAT) ? 1.0 : 0.0;
                     float sh = 1.0;
-                    if (receive) {
+                    if (receive && gShadowParams.w < 0.5) {
                         float3 sd = SampleCone(float2(Rand(rng), Rand(rng)), -gLightDir, kSunCosMax);
                         sh = TraceShadowRay(OffsetRayOrigin(pos, faceN), sd, 1e5);
                     }
@@ -185,7 +185,7 @@ void CSPathTrace(uint3 id : SV_DispatchThreadID) {
             float ndl = dot(n, L);
             if (!toon && ndl > 0.0 && dot(faceN, L) > 0.0) {
                 float3 sd = SampleCone(float2(Rand(rng), Rand(rng)), L, kSunCosMax);
-                float vis = receive ? TraceShadowRay(OffsetRayOrigin(pos, faceN), sd, 1e5) : 1.0;
+                float vis = receive && gShadowParams.w < 0.5 ? TraceShadowRay(OffsetRayOrigin(pos, faceN), sd, 1e5) : 1.0;
                 radiance += throughput * (1.0 - pSpec) * albedo / PI * SunIrradiance() * ndl * vis;
             }
 

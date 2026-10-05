@@ -51,9 +51,11 @@ TrackState CaptureTrack(StudioDoc& doc, int model, RowKind kind, const std::stri
     s.model = model;
     s.kind = kind;
     s.name = name;
-    if (kind == RowKind::Camera) {
+    if (IsCameraKind(kind)) {
         s.existed = true;
-        s.cameras = doc.camera.camera;
+        if (kind == RowKind::Light) s.lights = doc.camera.light;
+        else if (kind == RowKind::Shadow) s.shadows = doc.camera.shadow;
+        else s.cameras = doc.camera.camera;
         return s;
     }
     MotionData& m = doc.models[model]->motion;
@@ -70,8 +72,10 @@ TrackState CaptureTrack(StudioDoc& doc, int model, RowKind kind, const std::stri
 }
 
 void RestoreTrack(StudioDoc& doc, const TrackState& s) {
-    if (s.kind == RowKind::Camera) {
-        doc.camera.camera = s.cameras;
+    if (IsCameraKind(s.kind)) {
+        if (s.kind == RowKind::Light) doc.camera.light = s.lights;
+        else if (s.kind == RowKind::Shadow) doc.camera.shadow = s.shadows;
+        else doc.camera.camera = s.cameras;
     } else if (s.model >= 0 && s.model < (int)doc.models.size()) {
         MotionData& m = doc.models[s.model]->motion;
         // A track that ends up empty is removed, so an undone insert leaves no empty track behind.
@@ -83,7 +87,7 @@ void RestoreTrack(StudioDoc& doc, const TrackState& s) {
             else m.morphs[s.name] = s.morphs;
         }
     }
-    doc.TouchModel(s.kind == RowKind::Camera ? -1 : s.model);
+    doc.TouchModel(IsCameraKind(s.kind) ? -1 : s.model);
 }
 
 } // namespace mmdx::studio

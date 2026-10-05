@@ -1,9 +1,13 @@
-// Console tests for the Studio keyframe editing core (StudioMotion.h, CommandStack.h).
+// Console tests for the Studio keyframe editing core (StudioMotion.h, StudioDoc.h, CommandStack.h).
 #include "studio/CommandStack.h"
+#include "studio/StudioDoc.h"
 #include "studio/StudioMotion.h"
 #include <chrono>
 #include <cstdarg>
+#include <cstdint>
 #include <cstdio>
+#include <cstring>
+#include <cmath>
 #include <set>
 #include <string>
 #include <vector>
@@ -203,6 +207,205 @@ static void TestCommandStackBudget() {
     Check(ok2, "CommandStack trim/redo", "count %zu bytes %zu", stack2.Count(), stack2.Bytes());
 }
 
+// Light/shadow helpers for the new tests.
+static std::vector<LightKf> Lights(std::initializer_list<int> frames) {
+    std::vector<LightKf> keys;
+    for (int f : frames) keys.push_back(LightKf{f, {}, {}});
+    return keys;
+}
+static std::vector<ShadowKf> Shadows(std::initializer_list<int> frames) {
+    std::vector<ShadowKf> keys;
+    for (int f : frames) keys.push_back(ShadowKf{f, 1, 0.01f});
+    return keys;
+}
+static std::string ShadowModes(const std::vector<ShadowKf>& keys) {
+    std::string s;
+    for (const ShadowKf& k : keys) {
+        if (!s.empty()) s += ',';
+        s += std::to_string(k.mode);
+    }
+    return s;
+}
+
+// 10. SampleLight: linear colour/direction interpolation, clamped past the ends.
+static void TestSampleLight() {
+    std::vector<LightKf> keys = {{{10, {0.2f, 0.4f, 0.6f}, {0, -1, 0}}, {20, {0.4f, 0.4f, 0.2f}, {1, -1, 1}}}};
+    bool ok = true;
+    const char* detail = "";
+    LightKf k = SampleLight(keys, 0.0f);
+    if (k.frame != 0 || k.color.x != 0.2f || k.color.y != 0.4f || k.color.z != 0.6f || k.direction.x != 0.0f ||
+        k.direction.y != -1.0f || k.direction.z != 0.0f) {
+        ok = false; detail = "before the first key should be the first key";
+    }
+    k = SampleLight(keys, 15.0f);
+    if (ok && (std::fabs(k.color.x - 0.3f) > 1e-5f || std::fabs(k.color.y - 0.4f) > 1e-5f ||
+               std::fabs(k.color.z - 0.4f) > 1e-5f || std::fabs(k.direction.x - 0.5f) > 1e-5f ||
+               std::fabs(k.direction.y + 1.0f) > 1e-5f || std::fabs(k.direction.z - 0.5f) > 1e-5f)) {
+        ok = false; detail = "midpoint interpolation wrong";
+    }
+    k = SampleLight(keys, 12.5f);
+    if (ok && std::fabs(k.color.x - 0.25f) > 1e-5f) { ok = false; detail = "frame 12.5 color.x wrong"; }
+    k = SampleLight(keys, 25.0f);
+    if (ok && (k.color.x != 0.4f || k.color.z != 0.2f || k.direction.x != 1.0f)) {
+        ok = false; detail = "after the last key should be the last key";
+    }
+    std::vector<LightKf> single = {{{7, {0.1f, 0.2f, 0.3f}, {0, -1, 0}}}};
+    k = SampleLight(single, 99.0f);
+    if (ok && (k.frame != 99 || k.color.x != 0.1f)) { ok = false; detail = "single key wrong"; }
+    k = SampleLight(keys, 15.7f);
+    if (ok && k.frame != 15) { ok = false; detail = "returned frame should be (int)floor(15.7)"; }
+    if (!ok) Check(false, "SampleLight", "%s", detail);
+    else Check(true, "SampleLight");
+}
+
+// 11. SampleShadow: the last key at or before the frame holds until the next.
+static void TestSampleShadow() {
+    std::vector<ShadowKf> keys = {{{10, 1, 0.01f}, {20, 0, 0.05f}}};
+    bool ok = true;
+    const char* detail = "";
+    ShadowKf k = SampleShadow(keys, 5.0f);
+    if (k.mode != 1) { ok = false; detail = "before the first key should be the first key"; }
+    k = SampleShadow(keys, 10.0f);
+    if (ok && k.mode != 1) { ok = false; detail = "at the key should be that key"; }
+    k = SampleShadow(keys, 19.9f);
+    if (ok && (k.mode != 1 || std::fabs(k.distance - 0.01f) > 1e-6f)) {
+        ok = false; detail = "19.9 should hold key 10 (mode 1, d 0.01)";
+    }
+    k = SampleShadow(keys, 20.0f);
+    if (ok && k.mode != 0) { ok = false; detail = "at 20 should be mode 0"; }
+    k = SampleShadow(keys, 100.0f);
+    if (ok && k.mode != 0) { ok = false; detail = "after the last key should be the last key"; }
+    // MMD's self-shadow distance UI value <-> the VMD value.
+    if (ok && std::fabs(ShadowUiFromVmd(0.01125f) - 8875.0f) >= 0.5f) {
+        ok = false; detail = "ShadowUiFromVmd(0.01125) should be 8875";
+    }
+    if (ok) {
+        const float ui = 2500.0f;
+        if (std::fabs(ShadowVmdFromUi(ShadowUiFromVmd(ui)) - ui) > 1e-2f) { ok = false; detail = "UI value round trip"; }
+        const float d = 0.05f;
+        if (std::fabs(ShadowUiFromVmd(ShadowVmdFromUi(d)) - d) > 1e-2f) { ok = false; detail = "VMD value round trip"; }
+    }
+    if (!ok) Check(false, "SampleShadow", "%s", detail);
+    else Check(true, "SampleShadow");
+}
+
+// 12. InsertFrames / DeleteFrames / EndFrame / Empty over the light and shadow tracks.
+static void TestLightShadowSpans() {
+    MotionData d;
+    d.light = Lights({0, 10, 20});
+    d.shadow = Shadows({0, 10, 20});
+
+    bool ok = d.InsertFrames(5, 3);
+    const char* detail = "";
+    if (!ok) { ok = false; detail = "InsertFrames(5,3) returned false"; }
+    if (ok && (d.light.size() != 3 || d.light[0].frame != 0 || d.light[1].frame != 13 || d.light[2].frame != 23))
+        ok = false, detail = "light insert frames wrong";
+    if (ok && (d.shadow.size() != 3 || d.shadow[0].frame != 0 || d.shadow[1].frame != 13 || d.shadow[2].frame != 23))
+        ok = false, detail = "shadow insert frames wrong";
+    if (!ok) { Check(false, "LightShadow spans insert", "%s", detail); return; }
+
+    ok = d.DeleteFrames(13, 1);
+    if (!ok) { ok = false; detail = "DeleteFrames(13,1) returned false"; }
+    if (ok && (d.light.size() != 2 || d.light[0].frame != 0 || d.light[1].frame != 22))
+        ok = false, detail = "light delete frames wrong";
+    if (ok && (d.shadow.size() != 2 || d.shadow[0].frame != 0 || d.shadow[1].frame != 22))
+        ok = false, detail = "shadow delete frames wrong";
+    if (ok && d.EndFrame() != 22) ok = false, detail = "EndFrame should be 22";
+    if (!ok) { Check(false, "LightShadow spans delete", "%s", detail); return; }
+
+    MotionData onlyShadow;
+    onlyShadow.shadow = Shadows({5});
+    if (onlyShadow.Empty()) Check(false, "LightShadow spans empty", "Empty() true with only a shadow key");
+    else Check(true, "LightShadow spans");
+}
+
+// 13. VMD round trip of the light and shadow tracks (out of order keys, values preserved).
+static void TestVmdRoundTripLightShadow() {
+    mmdx::VmdMotion vmd;
+    vmd.shadowKeys = {{30, 2, 0.02f}, {0, 1, 0.01f}, {15, 0, 0.05f}};
+    vmd.lightKeys = {{30, {0.4f, 0.4f, 0.2f}, {1, -1, 1}}, {0, {0.2f, 0.4f, 0.6f}, {0, -1, 0}}};
+    MotionData d = MotionData::FromVmd(vmd);
+
+    bool ok = d.shadow.size() == 3 && d.shadow[0].frame == 0 && d.shadow[1].frame == 15 && d.shadow[2].frame == 30;
+    const char* detail = "";
+    if (!ok) { detail = "FromVmd shadow keys not sorted"; }
+    if (ok && (d.shadow[0].mode != 1 || std::fabs(d.shadow[0].distance - 0.01f) > 1e-6f || d.shadow[1].mode != 0 ||
+               std::fabs(d.shadow[1].distance - 0.05f) > 1e-6f || d.shadow[2].mode != 2 ||
+               std::fabs(d.shadow[2].distance - 0.02f) > 1e-6f)) {
+        ok = false; detail = "FromVmd shadow key values wrong";
+    }
+    if (ok && (d.light.size() != 2 || d.light[0].frame != 0 || d.light[1].frame != 30)) {
+        ok = false; detail = "FromVmd light keys not sorted";
+    }
+    if (!ok) { Check(false, "VMD round trip light/shadow", "%s", detail); return; }
+
+    mmdx::VmdMotion out = d.ToVmd();
+    ok = out.shadowKeys.size() == 3;
+    if (!ok) { detail = "ToVmd shadowKeys count wrong"; }
+    if (ok && (out.shadowKeys[0].frame != 0 || out.shadowKeys[0].mode != 1 ||
+               std::fabs(out.shadowKeys[0].distance - 0.01f) > 1e-6f || out.shadowKeys[1].frame != 15 ||
+               out.shadowKeys[1].mode != 0 || std::fabs(out.shadowKeys[1].distance - 0.05f) > 1e-6f ||
+               out.shadowKeys[2].frame != 30 || out.shadowKeys[2].mode != 2 ||
+               std::fabs(out.shadowKeys[2].distance - 0.02f) > 1e-6f)) {
+        ok = false; detail = "ToVmd shadow key values wrong";
+    }
+    if (ok && out.maxFrame < 30) ok = false, detail = "maxFrame should be >= 30";
+    if (ok && (out.lightKeys.size() != 2 || out.lightKeys[0].frame != 0 || out.lightKeys[1].frame != 30)) {
+        ok = false; detail = "ToVmd light keys wrong";
+    }
+    if (ok) {  // colour/direction bit-exact
+        const mmdx::VmdLightKey& a = out.lightKeys[0];
+        const mmdx::VmdLightKey& b = vmd.lightKeys[1];
+        if (std::memcmp(&a.color, &b.color, sizeof(DirectX::XMFLOAT3)) != 0 ||
+            std::memcmp(&a.direction, &b.direction, sizeof(DirectX::XMFLOAT3)) != 0) {
+            ok = false; detail = "ToVmd light values not bit-exact";
+        }
+    }
+    if (!ok) Check(false, "VMD round trip light/shadow", "%s", detail);
+    else Check(true, "VMD round trip light/shadow");
+}
+
+// 14. TrackEditCommand undo/redo of the light and shadow tracks (whole-track snapshots).
+static void TestLightShadowUndo() {
+    StudioDoc doc;
+    UpsertKey(doc.camera.light, LightKf{0, {0.2f, 0.4f, 0.6f}, {0, -1, 0}});
+    UpsertKey(doc.camera.light, LightKf{10, {0.4f, 0.4f, 0.2f}, {1, -1, 1}});
+    UpsertKey(doc.camera.shadow, ShadowKf{5, 1, 0.01125f});
+    const uint64_t versionBefore = doc.cameraVersion;
+
+    std::vector<TrackState> before;
+    before.push_back(CaptureTrack(doc, -1, RowKind::Light, ""));
+    before.push_back(CaptureTrack(doc, -1, RowKind::Shadow, ""));
+
+    // modify: erase a light key, change the shadow mode
+    EraseKey(doc.camera.light, 0);
+    doc.camera.shadow[0].mode = 2;
+
+    std::vector<TrackState> after;
+    after.push_back(CaptureTrack(doc, -1, RowKind::Light, ""));
+    after.push_back(CaptureTrack(doc, -1, RowKind::Shadow, ""));
+
+    doc.history.Push(std::make_unique<TrackEditCommand>(doc, "edit", before, after));
+
+    bool ok = doc.camera.light.size() == 1 && doc.camera.shadow[0].mode == 2;
+    const char* detail = "";
+    if (!ok) detail = "Push did not apply the modified state";
+    doc.history.Undo();
+    if (ok && (doc.camera.light.size() != 2 || doc.camera.light[0].frame != 0 || doc.camera.light[1].frame != 10 ||
+               doc.camera.shadow[0].mode != 1 || std::fabs(doc.camera.shadow[0].distance - 0.01125f) > 1e-6f)) {
+        ok = false; detail = "Undo did not restore the original keys exactly";
+    }
+    if (ok && doc.cameraVersion <= versionBefore) ok = false, detail = "cameraVersion not bumped by restore";
+    const uint64_t versionAfterUndo = doc.cameraVersion;
+    doc.history.Redo();
+    if (ok && (doc.camera.light.size() != 1 || doc.camera.shadow[0].mode != 2)) {
+        ok = false; detail = "Redo did not re-apply the modified state";
+    }
+    if (ok && doc.cameraVersion <= versionAfterUndo) ok = false, detail = "cameraVersion not bumped by redo";
+    if (!ok) Check(false, "LightShadow undo", "%s", detail);
+    else Check(true, "LightShadow undo");
+}
+
 // 9. Performance: 100k keys, move + erase.
 static void TestPerformance() {
     const int kTracks = 40, kKeys = 2500;
@@ -248,6 +451,11 @@ int main() {
     TestDeleteSpan();
     TestMotionDataSpans();
     TestCommandStackBudget();
+    TestSampleLight();
+    TestSampleShadow();
+    TestLightShadowSpans();
+    TestVmdRoundTripLightShadow();
+    TestLightShadowUndo();
     TestPerformance();
     std::printf("studio_edit_test: %d passed, %d failed\n", g_passed, g_failed);
     return g_failed > 0 ? 1 : 0;

@@ -24,7 +24,34 @@ void BezierPreset(int index, uint8_t out[4]) {
     }
 }
 
-bool BezierCurveEditor(const char* id, uint8_t c[4], float plotSize) {
+ImU32 BezierChannelColor(int channel) {
+    switch (channel) {
+        case 0: return IM_COL32(235, 75, 75, 200);
+        case 1: return IM_COL32(110, 205, 70, 200);
+        case 2: return IM_COL32(70, 130, 245, 200);
+        case 3: return IM_COL32(240, 170, 40, 200);
+        case 4: return IM_COL32(170, 110, 240, 200);
+        case 5: return IM_COL32(150, 150, 150, 200);
+        default: return IM_COL32(255, 255, 255, 200);
+    }
+}
+
+static void EvalBezier(ImVec2* pts, ImVec2 p0, ImVec2 p1, ImVec2 p2, ImVec2 p3) {
+    for (int i = 0; i < 48; ++i) {
+        float t = i / 47.0f;
+        float mt = 1.0f - t;
+        float b0 = mt * mt * mt;
+        float b1 = 3.0f * mt * mt * t;
+        float b2 = 3.0f * mt * t * t;
+        float b3 = t * t * t;
+        pts[i] = ImVec2(
+            b0 * p0.x + b1 * p1.x + b2 * p2.x + b3 * p3.x,
+            b0 * p0.y + b1 * p1.y + b2 * p2.y + b3 * p3.y
+        );
+    }
+}
+
+bool BezierCurveEditor(const char* id, uint8_t c[4], float plotSize, const uint8_t (*ghosts)[4], int ghostCount, const ImU32* ghostColors) {
     using namespace ui;
     bool changed = false;
 
@@ -97,6 +124,17 @@ bool BezierCurveEditor(const char* id, uint8_t c[4], float plotSize) {
     
     ImVec2 p0 = toScreen(0, 0);
     ImVec2 p3 = toScreen(127, 127);
+
+    if (ghosts && ghostCount > 0) {
+        for (int i = 0; i < ghostCount; ++i) {
+            ImVec2 g1 = toScreen(ghosts[i][0], ghosts[i][1]);
+            ImVec2 g2 = toScreen(ghosts[i][2], ghosts[i][3]);
+            ImVec2 gPts[48];
+            EvalBezier(gPts, p0, g1, g2, p3);
+            dl->AddPolyline(gPts, 48, ghostColors[i], 0, Dp(1.25f));
+        }
+    }
+
     p1 = toScreen(c[0], c[1]);
     p2 = toScreen(c[2], c[3]);
     
@@ -104,18 +142,7 @@ bool BezierCurveEditor(const char* id, uint8_t c[4], float plotSize) {
     dl->AddLine(p3, p2, p.ink3);
     
     ImVec2 pts[48];
-    for (int i = 0; i < 48; ++i) {
-        float t = i / 47.0f;
-        float mt = 1.0f - t;
-        float b0 = mt * mt * mt;
-        float b1 = 3.0f * mt * mt * t;
-        float b2 = 3.0f * mt * t * t;
-        float b3 = t * t * t;
-        pts[i] = ImVec2(
-            b0 * p0.x + b1 * p1.x + b2 * p2.x + b3 * p3.x,
-            b0 * p0.y + b1 * p1.y + b2 * p2.y + b3 * p3.y
-        );
-    }
+    EvalBezier(pts, p0, p1, p2, p3);
     dl->AddPolyline(pts, 48, p.accent, 0, Dp(2.0f));
     
     auto drawHandle = [&](ImVec2 hp, bool isActive) {

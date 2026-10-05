@@ -245,6 +245,21 @@ private:
     void DrawStudioTimeline(float x0, float y0, float x1, float y1);
     void DrawStudioViewport(float x0, float y0, float x1, float y1);
     void StudioCamera(CameraParams& cam) const;      // the view the viewport shows (motion or free camera)
+    studio::LightKf StudioPresetLightKey(int frame) const;  // the lighting preset's key light as a light key (empty track)
+    // --- camera / light / self-shadow (UiStudioCamera.cpp): inspector panel, key fields, camera path, render tracks
+    bool StudioCameraPerspective(float frame) const;  // the camera key's perspective switch in effect at `frame`
+    void StudioOrthoCamera(CameraPose& pose, CameraParams& camera) const;  // "perspective off" view (approximation)
+    void StudioApplyLightTracks(FrameView& view) const;  // light / self-shadow tracks -> the frame's light and shadows
+    studio::LightKf StudioCurrentLight() const;      // the key light in effect now (track or preset)
+    void StudioKeyCameraFromView();                  // camera key at the current frame from the view being shown
+    void StudioBeginKeyEdit(studio::RowKind kind);   // inspector key fields: one undo step per edit
+    void StudioEndKeyEdit();
+    void DrawStudioCameraPanel(float w);             // view / light / shadow sections of the camera inspector
+    bool DrawStudioCameraKeyFields(float w, studio::RowKind kind, int frame);  // true: no curve editor follows
+    void StudioUpdateCameraPath();                   // samples the motion camera (cached per cameraVersion)
+    void DrawStudioCameraPath(float x0, float y0, float x1, float y1);
+    bool StudioPickCameraKey(ImVec2 mouse);          // click on a key dot of the path: select it and seek
+    void StudioCameraPathWindow(int& lo, int& hi) const;  // frames of the path drawn: the range, else now +-3 s
     // --- pose editing (UiStudioPose.cpp): bone overlay, picking, gizmo, pose layer, morph panel, VPD, mirror
     studio::StudioModel* StudioPoseModel();          // the selected model if it is a character (pose editable)
     void StudioSelectBone(int bone, bool toggle);    // viewport pick / bone row click: selection sync (-1 clears)
@@ -468,6 +483,14 @@ private:
     int studioDragBone_ = -1;
     bool studioPoseFieldEdit_ = false;    // a numeric pose field / morph slider is being edited
     int studioHoverBone_ = -1;
+    // camera inspector / path
+    bool studioKeyEdit_ = false;                     // a camera/light/shadow key field is being edited
+    bool studioKeyChanged_ = false;                  // ... and its value changed (else no undo step)
+    std::vector<studio::TrackState> studioKeyBefore_;
+    std::vector<studio::CameraPathPoint> studioCamPath_;  // motion camera samples (per frame, strided when long)
+    std::vector<DirectX::XMFLOAT3> studioCamKeys_;   // eye at each camera key
+    uint64_t studioCamPathVersion_ = 0;
+    int studioCamPathStride_ = 1;
 
     // benchmark
     int benchCategory_ = 0;       // index into kBenchCategories

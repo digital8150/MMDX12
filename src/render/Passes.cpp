@@ -136,7 +136,7 @@ void ShadowPass::Execute(PassContext& pc) {
     Texture& spot = pc.targets.spotShadowMap;
     if (!sm) return;
     ID3D12GraphicsCommandList* cmd = pc.cmd;
-    const bool cascades = pc.settings.shadows && !pc.view.models.empty() &&
+    const bool cascades = pc.settings.shadows && !pc.view.shadowsOff && !pc.view.models.empty() &&
                           (pc.path == RenderPath::Raster || (pc.settings.volumetric && !pc.offscreen));
     // must match Renderer::FillSceneConstants (spotShadowParams.x)
     const uint32_t spots = (spot && SpotShadowsWanted(pc.settings, pc.path, pc.offscreen))
