@@ -630,7 +630,15 @@ bool ConvertCharacter(ImpScene& s, PmxModel& out, std::string* error) {
     XMFLOAT3 lo, hi;
     BoundsOf(s, lo, hi);
     const float height = hi.y - lo.y;
-    b.scale = (height > 0.5f && height < 3.0f) ? kUnitsPerMeter : (height > 1e-4f ? 20.0f / height : kUnitsPerMeter);
+    // Dancing-doll scale: about 1.4..1.8 m tall in MMD units. Models outside that range (giants,
+    // cm-scaled exports, chibis) are brought to its edge; the app's size slider does the rest.
+    if (height > 1e-4f) {
+        const float metres = (height > 0.5f && height < 3.0f) ? height : 1.7f;  // unit-less files: assume 1.7 m
+        const float unit = (height > 0.5f && height < 3.0f) ? 1.0f : 1.7f / height;
+        b.scale = kUnitsPerMeter * unit * std::clamp(metres, 1.4f, 1.8f) / metres;
+    } else {
+        b.scale = kUnitsPerMeter;
+    }
 
     // Skeleton: every skin joint, parented to its nearest joint ancestor.
     const std::vector<char> isJoint = JointSet(s);

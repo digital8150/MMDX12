@@ -31,6 +31,11 @@ public:
     // Placement of the whole model in the world (parent of the root bones; identity by default).
     // Not touched by ResetPose. Physics follows it (call ResetPhysics after changing it).
     void SetRootTransform(const XMFLOAT4X4& m);
+    // Uniform display scale about the model origin (feet), applied to the skinning matrices and
+    // BoneWorldPosition only. Physics keeps simulating at the original size, so hair and skirts
+    // behave the same at any scale. Takes effect at the next UpdatePose.
+    void SetScale(float s) { scale_ = s > 0.0f ? s : 1.0f; }
+    float Scale() const { return scale_; }
 
     // Rigid-body physics. Off by default (stages, thumbnails); the world is built on first enable.
     // Models without simulated bodies stay a no-op.
@@ -87,6 +92,7 @@ private:
     std::vector<XMFLOAT3> morphDelta_;
     uint64_t morphVersion_ = 0;
     std::vector<XMFLOAT4X4> skin_;
+    float scale_ = 1.0f;
     XMFLOAT4X4 root_{1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
 
     std::unique_ptr<PhysicsWorld> physics_;

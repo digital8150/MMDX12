@@ -283,6 +283,8 @@ const Entry kJapanese[] = {
     {"자동 분류로 되돌리기", "自動分類に戻す"},
     {"탐색기에서 보기", "エクスプローラーで表示"},
     {"숨긴 항목 다시 표시", "非表示の項目を再表示"},
+    {"캐릭터 크기", "キャラクターのサイズ"},
+    {"원래 크기", "元のサイズ"},
 };
 const int kJapaneseCount = (int)(sizeof(kJapanese) / sizeof(kJapanese[0]));
 

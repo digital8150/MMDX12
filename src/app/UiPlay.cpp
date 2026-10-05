@@ -294,7 +294,7 @@ void App::DrawPlayOverlay() {
     }
 
     // right cluster: volume icon + slider, offline still, camera, lighting, divider, exit
-    const float rightW = Dp(36.0f + 4.0f + 88.0f + 12.0f + 44.0f + 44.0f + 50.0f + 11.0f + 40.0f + 16.0f);
+    const float rightW = Dp(36.0f + 4.0f + 88.0f + 12.0f + 44.0f + 44.0f + 44.0f + 50.0f + 11.0f + 40.0f + 16.0f);
     const float seekW = std::max(Dp(120.0f), bb.x - rightW - x - Dp(20.0f));
     ImGui::SetCursorScreenPos(ImVec2(x, cy - Dp(14.0f)));
     double t = playTime_;
@@ -366,6 +366,34 @@ void App::DrawPlayOverlay() {
             settings_.Save(settingsPath_);
         }
         x += Dp(40.0f) + Dp(10.0f);
+    }
+    // character size (saved per character; for models whose height does not suit the song's camera)
+    if (!s->characterId.empty()) {
+        const float scale = settings_.CharacterScale(s->characterId);
+        ImGui::SetCursorScreenPos(ImVec2(x, cy - Dp(20.0f)));
+        const ImVec2 btn = ImGui::GetCursorScreenPos();
+        if (IconButton("##size", icon::ArrowsOut, Tr("캐릭터 크기"), std::fabs(scale - 1.0f) > 0.005f, 40.0f))
+            ImGui::OpenPopup("##sizepopup");
+        ImGui::SetNextWindowPos(ImVec2(btn.x + Dp(20.0f), btn.y - Dp(10.0f)), ImGuiCond_Always, ImVec2(0.5f, 1.0f));
+        ImGui::SetNextWindowSize(ImVec2(Dp(260.0f), 0));
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(Dp(16.0f), Dp(14.0f)));
+        if (ImGui::BeginPopup("##sizepopup")) {
+            float v = scale;
+            if (SliderRow("##charscale", Tr("캐릭터 크기"), &v, 0.5f, 2.0f, "%.2fx")) {
+                v = std::round(v * 100.0f) / 100.0f;
+                if (std::fabs(v - 1.0f) < 0.03f) v = 1.0f;  // snap to the original size
+                settings_.SetCharacterScale(s->characterId, v);
+                settings_.Save(settingsPath_);
+            }
+            Gap(8.0f);
+            if (Button("##charscalereset", Tr("원래 크기"), icon::Refresh, ButtonKind::Ghost)) {
+                settings_.SetCharacterScale(s->characterId, 1.0f);
+                settings_.Save(settingsPath_);
+            }
+            ImGui::EndPopup();
+        }
+        ImGui::PopStyleVar();
+        x += Dp(44.0f);
     }
     dl->AddLine(ImVec2(x, cy - Dp(14.0f)), ImVec2(x, cy + Dp(14.0f)), WithAlpha(p.ink, 0.12f));
     x += Dp(11.0f);

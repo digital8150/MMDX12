@@ -376,7 +376,9 @@ void ModelInstance::UpdatePose(float physicsDt) {
     for (size_t i = afterPhysicsBegin_; i < order_.size(); ++i) EvaluateAppendAndIk(order_[i]);
     for (int i = 0; i < n; ++i) {
         const XMFLOAT3& p = pbones[i].position;
-        XMStoreFloat4x4(&skin_[i], XMMatrixMultiply(XMMatrixTranslation(-p.x, -p.y, -p.z), XMLoadFloat4x4(&bones_[i].world)));
+        XMMATRIX m = XMMatrixMultiply(XMMatrixTranslation(-p.x, -p.y, -p.z), XMLoadFloat4x4(&bones_[i].world));
+        if (scale_ != 1.0f) m = XMMatrixMultiply(m, XMMatrixScaling(scale_, scale_, scale_));
+        XMStoreFloat4x4(&skin_[i], m);
     }
 }
 
@@ -462,7 +464,7 @@ void ModelInstance::RunPhysics(float dt) {
 XMFLOAT3 ModelInstance::BoneWorldPosition(int bone) const {
     if (bone < 0 || bone >= (int)bones_.size()) return {0, 0, 0};
     const XMFLOAT4X4& w = bones_[bone].world;
-    return {w._41, w._42, w._43};
+    return {w._41 * scale_, w._42 * scale_, w._43 * scale_};
 }
 
 }  // namespace mmdx

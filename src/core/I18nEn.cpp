@@ -283,6 +283,8 @@ const Entry kEnglish[] = {
     {"자동 분류로 되돌리기", "Back to automatic"},
     {"탐색기에서 보기", "Show in Explorer"},
     {"숨긴 항목 다시 표시", "Show hidden items"},
+    {"캐릭터 크기", "Character size"},
+    {"원래 크기", "Original size"},
 };
 const int kEnglishCount = (int)(sizeof(kEnglish) / sizeof(kEnglish[0]));
 

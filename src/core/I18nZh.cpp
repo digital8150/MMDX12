@@ -283,6 +283,8 @@ const Entry kChinese[] = {
     {"자동 분류로 되돌리기", "恢复自动分类"},
     {"탐색기에서 보기", "在资源管理器中显示"},
     {"숨긴 항목 다시 표시", "显示已隐藏的项目"},
+    {"캐릭터 크기", "角色大小"},
+    {"원래 크기", "原始大小"},
 };
 const int kChineseCount = (int)(sizeof(kChinese) / sizeof(kChinese[0]));
 

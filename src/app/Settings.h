@@ -1,5 +1,6 @@
 #pragma once
 #include <filesystem>
+#include <map>
 #include <string>
 #include <vector>
 
@@ -42,6 +43,9 @@ struct AppSettings {
     std::vector<VideoProbe> videoProbes;  // measured sample renders, oldest first
     std::string leaderboardUrl = "https://home.codingbot.kr/api/benchmark";
     std::string lastCharacter, lastStage, lastSong;  // asset ids
+    std::map<std::string, float> characterScales;    // character id -> display scale (absent = 1)
+    float CharacterScale(const std::string& id) const;
+    void SetCharacterScale(const std::string& id, float scale);  // ~1 removes the entry
     int windowWidth = 1600, windowHeight = 900;
 
     const VideoProbe* FindVideoProbe(uint64_t key) const;

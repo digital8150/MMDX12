@@ -134,6 +134,12 @@ bool AppSettings::Load(const std::filesystem::path& file) {
             }
         }
         else if (key == "leaderboardUrl") leaderboardUrl = value;
+        else if (key == "characterScale") {
+            // characterScale=<scale>|<character id>
+            const size_t bar = value.find('|');
+            if (bar != std::string::npos && ParseFloat(value.substr(0, bar), f) && f > 0.0f && std::isfinite(f))
+                characterScales[value.substr(bar + 1)] = std::clamp(f, 0.25f, 4.0f);
+        }
         else if (key == "lastCharacter") lastCharacter = value;
         else if (key == "lastStage") lastStage = value;
         else if (key == "lastSong") lastSong = value;
@@ -161,6 +167,16 @@ bool AppSettings::Load(const std::filesystem::path& file) {
     windowWidth = std::clamp(windowWidth, 640, 7680);
     windowHeight = std::clamp(windowHeight, 360, 4320);
     return true;
+}
+
+float AppSettings::CharacterScale(const std::string& id) const {
+    auto it = characterScales.find(id);
+    return it == characterScales.end() ? 1.0f : it->second;
+}
+
+void AppSettings::SetCharacterScale(const std::string& id, float scale) {
+    if (std::fabs(scale - 1.0f) < 0.005f) characterScales.erase(id);
+    else characterScales[id] = std::clamp(scale, 0.25f, 4.0f);
 }
 
 bool AppSettings::Save(const std::filesystem::path& file) const {
@@ -199,6 +215,7 @@ bool AppSettings::Save(const std::filesystem::path& file) const {
     for (const VideoProbe& pr : videoProbes)
         std::fprintf(f, "videoProbe=%llx:%.4f\n", (unsigned long long)pr.key, pr.secondsPerFrame);
     std::fprintf(f, "leaderboardUrl=%s\n", leaderboardUrl.c_str());
+    for (const auto& [id, scale] : characterScales) std::fprintf(f, "characterScale=%.3f|%s\n", scale, id.c_str());
     std::fprintf(f, "lastCharacter=%s\n", lastCharacter.c_str());
     std::fprintf(f, "lastStage=%s\n", lastStage.c_str());
     std::fprintf(f, "lastSong=%s\n", lastSong.c_str());

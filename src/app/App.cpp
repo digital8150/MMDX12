@@ -985,6 +985,8 @@ bool App::BuildSceneRuntime(ScenePackage& pkg) {
     UploadBatch batch(ctx_);
 
     s->character = std::make_unique<ModelInstance>(pkg.character.pmx);
+    if (selCharacter_ >= 0 && (size_t)selCharacter_ < library_.characters.size())
+        s->characterId = library_.characters[(size_t)selCharacter_].id;
     s->characterGpu = renderer_.CreateModel(batch, *pkg.character.pmx, pkg.character.textures);
     if (!s->characterGpu) return false;
 
@@ -1047,6 +1049,10 @@ void App::UpdateScene(float frame) {
     // normal frame step reset the bodies to the animated pose instead of simulating the jump.
     // The benchmark always simulates (fixed workload).
     ModelInstance& ch = *scene_->character;
+    // The saved per-character display scale (never in the benchmarks: they measure a fixed scene).
+    ch.SetScale(screen_ == Screen::BenchRun || screen_ == Screen::BenchRender || scene_->characterId.empty()
+                    ? 1.0f
+                    : settings_.CharacterScale(scene_->characterId));
     ch.EnablePhysics(screen_ == Screen::BenchRun || (settings_.physics && !options_.noPhysics));
     float physicsDt = 0.0f;
     if (scene_->physicsFrame >= 0.0f) physicsDt = (frame - scene_->physicsFrame) / kMmdFps;

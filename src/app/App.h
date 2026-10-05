@@ -113,6 +113,7 @@ private:
 
     struct SceneRuntime {
         std::unique_ptr<ModelInstance> character;
+        std::string characterId;  // library id, key of the saved display scale
         std::unique_ptr<GpuModel> characterGpu;
         std::vector<std::unique_ptr<ModelInstance>> stages;
         std::vector<std::unique_ptr<GpuModel>> stageGpu;

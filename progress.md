@@ -369,3 +369,18 @@ every frame and encodes an MP4, 3) GI with a Pixar/Disney-like look while keepin
 - The right-click menu was not clicked (overrides tested by writing the JSON); `package_release.ps1` not run.
 - dungeon_warkarma (enclosed, near-black materials) shows nothing useful from the free camera; no manual stage offset/scale yet.
 - Textured FBX characters and Draco/meshopt glTF (rejected with a warning) untested; imported characters have no physics.
+
+## 2026-10-05 (2) — character size slider, release 0.5.0
+
+### Done
+- `ModelInstance::SetScale`: uniform display scale about the origin applied to the skinning matrices and `BoneWorldPosition`
+  (DoF focus, spotlights follow it); physics keeps simulating at the original size, so hair and skirts behave the same.
+  Saved per character id (`characterScale=<scale>|<id>` in the ini, `AppSettings::CharacterScale`), applied in `UpdateScene`
+  (so live play, offline stills and videos use it; benchmarks always run at 1x). Play bar: new size icon (highlighted when
+  the scale is not 1) opens a 0.5..2.0 slider with a reset button, snaps to 1.0 near the original size.
+- Imported glTF/FBX characters taller than 1.8 m or shorter than 1.4 m (or unit-less files) are brought to that range on load.
+- Checked: Michelle at 0.6x and 1.8x in free-camera captures (feet stay on the floor, shadow scales, play bar icon active).
+  Built in `build_dev` because the user had `build\bin\MMDX12.exe` running.
+
+### Not verified
+- The size popup was not clicked (headless captures); thumbnails on the select screen show the unscaled model.
