@@ -67,6 +67,8 @@ AppOptions ParseCommandLine(int argc, wchar_t** argv) {
             opt.debugLayer = true;
         } else if (arg == L"--screen") {
             opt.startScreen = WideToUtf8(next());
+        } else if (arg == L"--ui-scale") {
+            opt.uiScale = (float)_wtof(next().c_str());
         } else if (arg == L"--project") {
             opt.project = next();
             opt.startScreen = "studio";
@@ -161,6 +163,7 @@ AppOptions ParseCommandLine(int argc, wchar_t** argv) {
 
 int App::Run(HINSTANCE instance, const AppOptions& options) {
     options_ = options;
+    LOG_INFO("MMDX12 %s", MMDX12_VERSION);
     settingsPath_ = ExecutableDir() / L"mmdx12.ini";
     settings_.Load(settingsPath_);
     SetLanguage((Language)(options_.language >= 0 ? options_.language : settings_.language));
@@ -359,7 +362,8 @@ bool App::InitImGui() {
         if (!found.empty()) assetsDir_ = found / L"assets";
     }
     if (!ui::LoadFonts(assetsDir_)) LOG_WARN("UI fonts not found under %s, using system fonts", PathToUtf8(assetsDir_).c_str());
-    ui::ApplyStyle(ImGui_ImplWin32_GetDpiScaleForHwnd(hwnd_));
+    // --ui-scale: a fixed scale instead of the monitor's (high-DPI captures on any monitor)
+    ui::ApplyStyle(options_.uiScale > 0.25f ? std::min(options_.uiScale, 4.0f) : ImGui_ImplWin32_GetDpiScaleForHwnd(hwnd_));
 
     if (!ImGui_ImplWin32_Init(hwnd_)) return false;
 
@@ -469,6 +473,7 @@ void App::RenderFrame() {
     case Screen::BenchRender: DrawRenderBenchOverlay(); break;
     case Screen::Studio:
         UpdateStudio(dt);
+        if (screen_ == Screen::Studio) UpdateOffline();   // CLI render trigger (may switch to Screen::Offline)
         if (screen_ == Screen::Studio) DrawStudio();
         break;
     }
@@ -481,7 +486,7 @@ void App::RenderFrame() {
     ID3D12GraphicsCommandList* cmd = ctx_.BeginFrame();
     FrameView view;
     const bool inScene = scene_ && (screen_ == Screen::Play || screen_ == Screen::BenchRun);
-    if (screen_ == Screen::Offline && scene_) {
+    if (screen_ == Screen::Offline && (scene_ || (offline_.studio && studio_))) {
         RecordOfflineFrame(cmd);
     } else if (screen_ == Screen::BenchRender && scene_) {
         RecordRenderBenchFrame(cmd);

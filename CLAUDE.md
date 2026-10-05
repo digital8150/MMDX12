@@ -28,6 +28,10 @@ progress.md is the session log. Read its latest entry first.
     stills use the effects chosen at scene entry (`AppSettings`). Check `build_dev` builds when `build/` is locked by a running render.
   - Studio: `--character <s> [--stage <s>] [--song <s>] --screen studio --seek <sec> --frames N --capture out.png`.
     `--screen studio` without `--character` opens a new empty project; `--project <file.mmdxproj>` opens a project.
+    Studio render (quits when done): `--project p.mmdxproj --offline-video out.mp4 [--offline-range a b]` (timeline
+    seconds; default: the timeline range, else the whole project; motion camera; project audio + offset) or
+    `--offline-still out.png [--seek s]` (GI, the view the viewport shows). `--offline-renderer/-size/-fps/-spp` apply.
+  - High-DPI captures: `--ui-scale 1.5` replaces the monitor's DPI scale (1080p window + 1.5 = a 150 % laptop screen).
   - Scripted UI input: `--ui-script file.txt` (lines `<frame> <command> [args]`: move/down/up/click/dblclick/wheel/key,
     `capture <png>`, `text <chars>`, `mod ctrl|shift down|up`, `studiostate` logs a `STUDIOSTATE` line,
     `studioexport`/`studioimport <vmd>` and `studiovpdexport`/`studiovpdimport <vpd>` skip the file dialogs; pose editing:
@@ -62,7 +66,8 @@ progress.md is the session log. Read its latest entry first.
   - `ModelImport`: `LoadModelFile(path, role)` reads PMX natively and converts glTF/GLB/VRM (cgltf) and FBX/OBJ (ufbx) into a
     `PmxModel` via `ImpScene` (ImportScene.h). Characters: humanoid map (VRM table or name dictionary) -> MMD bone names,
     synthesised センター/グルーブ + leg IK, arms re-posed to 38 deg (MMD A-pose), morph aliases (あいうえお, まばたき); no physics.
-    Stages: baked, one root bone, moved onto their main floor when nothing is under the origin. Embedded textures live in
+    Stages: baked, one root bone, moved onto their main floor when nothing is under the origin (`ModelRole::Prop`: baked,
+    not moved — studio props). Embedded textures live in
     `PmxModel::embeddedTextures`. Test assets: `captures/testlib` (messy layout) and `captures/assets_dl` (three.js/Khronos/VRM samples).
 - `anim`: `ModelInstance` (bones, append, IK, morphs) and `Motion` (VMD Bezier evaluation, camera).
   - `PhysicsWorld` (Bullet, `Physics.cpp` only) runs between the before- and after-physics bones in `UpdatePose(dt)`.
@@ -102,6 +107,12 @@ progress.md is the session log. Read its latest entry first.
     model indices). Kinds: character, stage (static BLAS), prop (GPU role Character so its BLAS follows it): the prop's
     root = `PropOffsetMatrix(attach) * parent bone world * parent scale`, set with `ModelInstance::SetRootTransform`
     after the other models are posed (props parent to characters/stages only).
+  - Rendering (`app/UiStudioRender.cpp`): the top bar's render menu opens the lobby's video dialog (`DrawVideoRenderDialog`
+    is studio-aware: range section, no sample-render probe) or starts a GI still. `OfflineJob::studio` routes the offline
+    job through `StudioPoseForRender` / `BuildStudioFrameView` (`OfflinePose`/`OfflineView` in UiOffline.cpp); the
+    viewport rect is cleared for the render and `StudioRestoreAfterRender` puts time, camera mode and physics back.
+    Videos skip unregistered pose edits. Audio: `VideoEncoder::Desc::audioStartSeconds` = start - audioOffset (negative:
+    leading silence). Shortcut overlay: `DrawStudioHelp` (? / F1); `StudioModal()` blocks the studio's shortcuts.
 - `OfflineRenderer` (render/OfflineRenderer.h) is independent of `RenderSettings`: `Renderer::BeginOffline` builds the TLAS,
   then `Renderer::RenderOffline` replaces `Render` each frame (GPU-time-budgeted iterations, preview present) until Done.
   Motion blur: each iteration re-skins the character at its shutter time (`RtScene::Build(..., time)`) from the models'

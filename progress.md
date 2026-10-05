@@ -384,3 +384,44 @@ every frame and encodes an MP4, 3) GI with a Pixar/Disney-like look while keepin
 
 ### Not verified
 - The size popup was not clicked (headless captures); thumbnails on the select screen show the unscaled model.
+
+## 2026-10-06 — Studio (M1–M6), release 1.0.0
+
+### Done
+- **Studio** (`Screen::Studio`, `src/studio` + `app/UiStudio*.cpp`): an MMD-style keyframe editor next to the untouched
+  player. Built in six milestones on `feature/studio`:
+  - M1: multi-model editor screen (outliner, viewport, inspector, timeline grouped by display frames, Bezier curve
+    editor), key add/move/delete/copy/paste, undo/redo (`CommandStack`), VMD import/export (`SaveVmd`), `--ui-script`
+    test driver. Found and fixed the VMD bone interpolation byte layout (Z/rotation x1 at bytes 17/18; 2/3 are physics flags).
+  - M2: timeline zoom/pan/range, row operations, frame insert/delete like MMD, curve-only paste, playback with audio,
+    loop range, physics toggle, full keyboard map, 200k-key projects stay responsive, 256 MB undo budget.
+  - M3: viewport pose editing (bone overlay, picking, rotate/translate gizmos local/global, IK), MMD-style pose layer
+    with register (I / Ctrl+I), morph sliders, mirror pose, VPD import/export.
+  - M4: camera / light / self-shadow tracks (key fields, key from view, camera path overlay, light ball), the renderer
+    uses the light and shadow tracks in the studio; curve editor overlays all channels.
+  - M5: `.mmdxproj` projects (JSON + standard VMDs that MMD opens), empty-project start, open/recent, autosave +
+    crash recovery, adding/removing characters, stages and props (bone-attached accessories), audio with offset.
+  - M6: rendering the project from the studio: the top bar's render menu opens the lobby's video dialog (raster / RT /
+    PT / GI, range section: timeline range or whole project) or renders a GI still of the current frame. The job goes
+    through the existing offline pipeline (`OfflineJob::studio`: `StudioPoseForRender`, `BuildStudioFrameView`, motion
+    blur pose ring over all studio models), motion camera, light/shadow tracks, props, project audio muxed with its
+    offset (`VideoEncoder` writes leading silence for a negative start), then returns to the studio with time, camera
+    mode and physics restored. CLI: `--project p.mmdxproj --offline-video out.mp4 [--offline-range a b]` /
+    `--offline-still out.png [--seek s]`. Shortcut overlay (? / F1, top bar keyboard button). `--ui-scale` for
+    high-DPI captures; the timeline shrinks to 30 % of short windows. Camera key inspector: light/shadow sections
+    collapse to their switches and the fields are slimmer (curves come into view). Library songs and audio files
+    are decoded on the worker (`AudioPlayer::Preload`), no hitch on the main thread. glTF/FBX props are no longer
+    moved onto a floor (`ModelRole::Prop`). Version 1.0.0 (`project(... VERSION)`, logged at start).
+  - READMEs (4 languages): Studio section, shortcut table.
+- Workers: opencode / antigravity wrote data layers, loaders, tests, translations and the README drafts; Claude did the
+  contracts, App wiring, UI, review and fixes (details per milestone in the session notes).
+- Checked (M6): studio videos via the CLI and through the dialog (raster/RT/PT/GI) match play-mode renders of the same
+  frames (plus the props); audio cross-correlates to the song at start − offset; returning from a render keeps
+  STUDIOSTATE identical; captures at 1080p and `--ui-scale 1.5`; all studio ui-scripts (t1–t6, m2_*–m5_*, new m6_a)
+  against the M5 build; studio unit tests (134 checks), vmd_roundtrip on library/motion (35/35), anim_probe on a dance;
+  player select / play / video dialog / bench captures unchanged.
+
+### Not verified
+- Real file dialogs (open/save/add/audio) were not clicked by a test; the audio-file worker path only by code review.
+- Studio videos at full 4K/60 GI length (only short ranges rendered); no sample-render time estimate in the studio
+  dialog (rough estimate only).

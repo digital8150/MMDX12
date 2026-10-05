@@ -19,7 +19,8 @@ ModelFormat ModelFormatFromPath(const std::filesystem::path& p);
 const char* ModelFormatName(ModelFormat f);  // "PMX", "glTF", "VRM", "FBX", "OBJ"
 inline bool IsModelFile(const std::filesystem::path& p) { return ModelFormatFromPath(p) != ModelFormat::Unknown; }
 
-enum class ModelRole { Character, Stage };
+// Prop: baked like a stage but kept where the file puts it (no move onto a floor): accessories in the Studio.
+enum class ModelRole { Character, Stage, Prop };
 
 // Full load. For PMX the role is ignored.
 bool LoadModelFile(const std::filesystem::path& path, ModelRole role, PmxModel& out, std::string* error = nullptr);

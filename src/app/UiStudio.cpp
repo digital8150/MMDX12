@@ -142,7 +142,7 @@ bool App::FinishStudioLoad() {
         const ProjectEditor& e = pkg.editor;
         const int sel = e.selectedModel >= 0 && e.selectedModel < (int)remap.size() ? remap[(size_t)e.selectedModel] : -1;
         doc->selectedModel = sel;
-        doc->time = std::max(0, e.frame) / (double)kMmdFps;
+        doc->time = options_.seekSeconds > 0 ? options_.seekSeconds : std::max(0, e.frame) / (double)kMmdFps;  // --seek wins
         doc->useMotionCamera = e.useMotionCamera && !doc->camera.camera.empty();
         doc->useLightTrack = e.useLightTrack;
         doc->useShadowTrack = e.useShadowTrack;
@@ -264,7 +264,11 @@ void App::UpdateStudio(double dt) {
     StudioDoc& d = *studio_;
     ImGuiIO& io = ImGui::GetIO();
     // The studio is one big ImGui window, so WantCaptureKeyboard is always set: only text input blocks shortcuts.
-    if (!io.WantTextInput && !studioLeaveConfirm_) {
+    // ? (or F1) opens / closes the shortcut list; dialogs over the studio (render, help, unsaved prompt) take the keys.
+    if (!io.WantTextInput && !videoDialogOpen_ && !studioLeaveConfirm_ &&
+        ((ImGui::IsKeyPressed(ImGuiKey_Slash, false) && io.KeyShift) || ImGui::IsKeyPressed(ImGuiKey_F1, false)))
+        studioHelpOpen_ = !studioHelpOpen_;
+    if (!io.WantTextInput && !StudioModal()) {
         const bool ctrl = io.KeyCtrl, shift = io.KeyShift;
         const auto pressed = [](ImGuiKey k, bool repeat = true) { return ImGui::IsKeyPressed(k, repeat); };
         if (pressed(ImGuiKey_Space, false)) StudioSetPlaying(!d.playing);
@@ -1201,7 +1205,9 @@ void App::DrawStudio() {
                      ImGuiWindowFlags_NoScrollWithMouse | ImGuiWindowFlags_NoScrollbar);
     ImGui::PopStyleVar();
 
-    const float top = Dp(kTopBarH), left = Dp(kOutlinerW), right = ds.x - Dp(kInspectorW), bottom = ds.y - Dp(kBottomH);
+    // a short window (high DPI scale, small screens) gives the viewport a bigger share: the timeline shrinks to 30 %
+    const float bottomH = std::clamp(ds.y / Dpi() * 0.3f, 220.0f, kBottomH);
+    const float top = Dp(kTopBarH), left = Dp(kOutlinerW), right = ds.x - Dp(kInspectorW), bottom = ds.y - Dp(bottomH);
     DrawStudioViewport(left, top, right, bottom);
     DrawStudioTopBar(0, 0, ds.x, top);
     if (studio_.get() != &d) {  // left the studio (back button) or replaced the project (project menu)
@@ -1218,6 +1224,9 @@ void App::DrawStudio() {
         return;
     }
     ImGui::End();
+    DrawStudioHelp();
+    DrawVideoRenderDialog();   // the render dialog (top bar render menu); starting it leaves for Screen::Offline
+    if (screen_ != Screen::Studio) return;
     DrawToast();
 
     // The 3D view fills the area between the panels (back buffer pixels = ImGui display pixels).
@@ -1300,6 +1309,16 @@ void App::DrawStudioTopBar(float x0, float y0, float x1, float y1) {
     if (IconButton("##projmenu", icon::List, Tr("프로젝트: 새로 만들기, 열기, 다른 이름으로 저장"))) ImGui::OpenPopup("##studioproj");
     ImGui::SetNextWindowPos(ImVec2(rx + Dp(36.0f), y1 + Dp(6.0f)), ImGuiCond_Always, ImVec2(1.0f, 0.0f));
     DrawStudioProjectMenu();
+    if (!studio_) return;
+    // render (video / still) and the shortcut list
+    rx -= Dp(4.0f + 36.0f);
+    ImGui::SetCursorScreenPos(ImVec2(rx, cy - Dp(18.0f)));
+    if (IconButton("##rendermenu", icon::FilmStrip, Tr("렌더: 영상, 고품질 스틸"))) ImGui::OpenPopup("##studiorender");
+    ImGui::SetNextWindowPos(ImVec2(rx + Dp(36.0f), y1 + Dp(6.0f)), ImGuiCond_Always, ImVec2(1.0f, 0.0f));
+    DrawStudioRenderMenu();
+    rx -= Dp(4.0f + 36.0f);
+    ImGui::SetCursorScreenPos(ImVec2(rx, cy - Dp(18.0f)));
+    if (IconButton("##help", icon::Keyboard, Tr("단축키  (?)"), studioHelpOpen_)) studioHelpOpen_ = !studioHelpOpen_;
 }
 
 void App::DrawStudioOutliner(float x0, float y0, float x1, float y1) {

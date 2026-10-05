@@ -85,6 +85,11 @@ namespace mmdx {
 //   --offline-renderer <r>       video renderer for this run: raster, rt, pt or gi (default: the lobby dialog's)
 //   --offline-probe              with --autoplay: sample render from the middle of the song (the lobby dialog's
 //                                time measurement) with the dialog's settings, log "VIDEO PROBE", then quit
+//                                Studio (--project / --screen studio): --offline-video renders the project once it is
+//                                open (range: --offline-range in timeline seconds, else the timeline range, else the
+//                                whole project; motion camera; project audio) and quits; --offline-still renders the
+//                                --seek frame (GI).
+//   --ui-scale <f>               UI scale for this run instead of the monitor's DPI scale (1.5 = 144 dpi; captures)
 struct AppOptions {
     std::filesystem::path libraryOverride;
     std::string character, stage, song;
@@ -121,6 +126,7 @@ struct AppOptions {
     bool offlineProbe = false;                         // --offline-probe: sample render for the time estimate, then quit
     int language = -1;  // --lang auto|ko|en|ja|zh for this run only (-1: keep the saved setting)
     std::filesystem::path project;  // --project
+    float uiScale = 0.0f;           // --ui-scale (0 = the window's DPI scale)
     std::string startScreen;  // --screen select|bench: open that screen after the scan; --frames then counts every frame  // --free-camera: start in the orbit camera instead of the VMD camera
 };
 AppOptions ParseCommandLine(int argc, wchar_t** argv);  // unknown args are logged and ignored
@@ -322,6 +328,18 @@ private:
     void DrawStudioProjectMenu();                     // top bar file menu (new / open / recent / save as)
     void DrawRecoveryPrompt();                        // select screen: offer the autosave of a crashed session
 
+    // --- rendering the project, shortcut help (UiStudioRender.cpp)
+    // Video (settings_.video through the render dialog) or GI still of the current frame. The video covers
+    // StudioRenderRange through the motion camera with the project's audio; the studio comes back as it was.
+    void StartStudioRender(bool video);
+    void StudioRenderRange(double& startSeconds, double& endSeconds) const;  // CLI range, else timeline range / whole
+    void StudioPoseForRender(float frame);            // offline frames: every model at `frame` (physics steps forward)
+    void StudioRestoreAfterRender();                  // FinishOffline: time, camera mode, physics back to the editor's
+    DirectX::XMFLOAT3 StudioPerformerCenter() const;  // center bone of the first character (teleport detection)
+    void DrawStudioRenderMenu();                      // top bar popup: video / still
+    void DrawStudioHelp();                            // shortcut overlay (? key / top bar button)
+    bool StudioModal() const { return videoDialogOpen_ || studioHelpOpen_ || studioLeaveConfirm_; }
+
     // --- scripted UI input for tests (UiScript.cpp)
     void PumpUiScript();  // before ImGui::NewFrame: feeds the events due at framesInScene_
 
@@ -385,6 +403,8 @@ private:
     void DrawToast();           // completion / error toast (Select, Play)
     std::filesystem::path OfflineOutputDir(bool video) const;  // Pictures\MMDX12 or Videos\MMDX12
     DirectX::XMFLOAT3 CharacterCenter() const;  // world position of the character's center bone (teleport detection)
+    void OfflinePose(float frame);              // UpdateScene, or StudioPoseForRender for a studio job
+    void OfflineView(float frame, FrameView& view);  // BuildFrameView, or BuildStudioFrameView for a studio job
     void SaveOfflinePose();                     // current scene pose -> offline_.prevPose (video motion blur)
     void UploadOfflinePrevPose(uint64_t slot);  // offline_.prevPose -> the models' bone/morph ring entry `slot`
 
@@ -462,6 +482,9 @@ private:
         float frameMmd = 0;            // real-time renderers: MMD frame of the image in progress
         bool realtime = false;         // frames come from the real-time renderer (Renderer::Render)
         bool wasPlaying = false;       // still: started during playback (the last live frame opens the shutter)
+        bool studio = false;           // the Studio's project is rendered (studio_ instead of scene_); back to the studio
+        double studioTime = 0;         // studio: the editor's time and camera mode before the render
+        bool studioMotionCamera = false;
         // video motion blur: the previous video frame's pose (character, then stages) and camera
         struct Pose {
             std::vector<DirectX::XMFLOAT4X4> skin;
@@ -514,6 +537,8 @@ private:
     struct StudioJob {
         std::string label;
         bool song = false;                         // library song: dance/camera/audio; else models
+        bool audioOnly = false;                    // just an audio file (the add menu's audio entry)
+        bool audioPreloaded = false;               // the worker decoded `audio` (AudioPlayer::Preload): release it
         std::vector<studio::StudioPackageModel> models;
         studio::MotionData dance, camera;
         std::filesystem::path audio;
@@ -533,6 +558,8 @@ private:
     char studioRenameBuf_[128] = {};
     char studioAddFilter_[64] = {};
     int studioAddPage_ = 0;                        // "+" popup page: 0 menu, 1 characters, 2 stages, 3 songs
+    bool studioHelpOpen_ = false;                  // shortcut overlay
+    bool studioRenderWhole_ = false;               // render dialog: whole project instead of the timeline range
     // viewport pose editing (cached from the last drawn frame: overlay, picking, scripts)
     studio::ViewProj studioVp_;
     bool studioGizmoShown_ = false;

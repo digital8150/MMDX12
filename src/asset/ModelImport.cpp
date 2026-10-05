@@ -605,14 +605,14 @@ void PlaceStage(PmxModel& out) {
     LOG_INFO("stage placed on its main floor: moved by (%.1f, %.1f, %.1f)", -o.x, -o.y, -o.z);
 }
 
-bool ConvertStage(const ImpScene& s, PmxModel& out) {
+bool ConvertStage(const ImpScene& s, PmxModel& out, bool place) {
     Builder b{s, out};
     out.bones.push_back(MakeBone("全ての親", {0, 0, 0}, -1, PmxBone_Movable));
     std::vector<int> boneOfNode(s.nodes.size(), 0);
     std::vector<uint32_t> base;
     BuildTextures(s, out);
     BuildMaterialsAndGeometry(s, b, false, boneOfNode, {}, {}, base);
-    PlaceStage(out);
+    if (place) PlaceStage(out);
     return !out.vertices.empty();
 }
 
@@ -803,13 +803,14 @@ bool LoadModelFile(const std::filesystem::path& path, ModelRole role, PmxModel& 
         out.sourcePath = path;
         out.name = !scene.name.empty() ? scene.name : PathToUtf8(path.stem());
         out.comment = std::string("imported from ") + ModelFormatName(ModelFormatFromPath(path));
-        const bool ok = role == ModelRole::Character ? ConvertCharacter(scene, out, error) : ConvertStage(scene, out);
+        const bool ok = role == ModelRole::Character ? ConvertCharacter(scene, out, error)
+                                                        : ConvertStage(scene, out, role == ModelRole::Stage);
         if (!ok) {
             if (error && error->empty()) *error = "no geometry";
             return false;
         }
         LOG_INFO("imported %s as %s: %zu vertices, %zu materials, %zu bones, %zu morphs", PathToUtf8(path.filename()).c_str(),
-                 role == ModelRole::Character ? "character" : "stage", out.vertices.size(), out.materials.size(),
+                 role == ModelRole::Character ? "character" : role == ModelRole::Stage ? "stage" : "prop", out.vertices.size(), out.materials.size(),
                  out.bones.size(), out.morphs.size());
         return true;
     } catch (const std::exception& e) {

@@ -19,7 +19,7 @@ public:
         uint32_t fps = 30;
         uint32_t videoBitrate = 40'000'000;    // bits per second (H.264 High profile)
         std::filesystem::path audioPath;       // song file; empty = no audio track
-        double audioStartSeconds = 0.0;        // song position of video frame 0
+        double audioStartSeconds = 0.0;        // song position of video frame 0 (negative: silence until the song starts)
     };
 
     VideoEncoder();

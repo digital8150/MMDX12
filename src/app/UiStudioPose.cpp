@@ -87,6 +87,8 @@ std::vector<PoseBone> App::StudioCurrentPose(const StudioModel& m) const {
 
 void App::StudioApplyPose(StudioModel& m) {
     if (m.pose.Empty() || m.pose.frame != studio_->Frame()) return;
+    // a video renders the registered motion only (MMD); a still shows the edits like the viewport
+    if (offline_.studio && offline_.mode != OfflineMode::Still) return;
     for (const auto& [b, v] : m.pose.bones) m.inst->SetBoneAnim(b, v.t, v.r);
     for (const auto& [i, w] : m.pose.morphs) m.inst->SetMorphWeight(i, w);
 }

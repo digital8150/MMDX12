@@ -156,7 +156,9 @@ void App::StartOfflineStill() {
 }
 
 void App::StartOfflineVideo(double startSeconds, double endSeconds, bool fromLobby, bool probe, bool background) {
-    if (!scene_ || offline_.mode != OfflineMode::None) return;
+    // a studio job renders the open project (studio_; scene_ is not loaded in the studio)
+    const bool studio = screen_ == Screen::Studio && studio_ && !probe && !background;
+    if ((!scene_ && !studio) || offline_.mode != OfflineMode::None) return;
     const VideoRenderConfig cfg = ActiveVideoConfig();
     const bool cli = !options_.offlineVideo.empty() || (probe && options_.offlineProbe);
     // Leaves a render that cannot start: back to the lobby (with the dialog open again after a probe).
@@ -184,8 +186,9 @@ void App::StartOfflineVideo(double startSeconds, double endSeconds, bool fromLob
         abort(Tr("영상 렌더를 시작할 수 없습니다"), Tr("이 그래픽 카드에서는 레이 트레이싱을 사용할 수 없습니다"));
         return;
     }
-    if (!background) SetPlaying(false);
-    const double duration = scene_->endFrame / kMmdFps;
+    if (studio) StudioSetPlaying(false);
+    else if (!background) SetPlaying(false);
+    const double duration = studio ? studio_->EndFrame() / (double)kMmdFps : scene_->endFrame / kMmdFps;
     startSeconds = std::clamp(startSeconds, 0.0, duration);
     endSeconds = std::clamp(endSeconds, startSeconds, duration);
     offline_ = OfflineJob{};
@@ -195,7 +198,13 @@ void App::StartOfflineVideo(double startSeconds, double endSeconds, bool fromLob
     offline_.fromLobby = fromLobby;
     offline_.video = cfg;
     offline_.realtime = !cfg.Gi();
-    const std::string song = selSong_ >= 0 ? library_.songs[selSong_].displayName : "render";
+    if (studio) {
+        offline_.studio = true;
+        offline_.studioTime = studio_->time;
+        offline_.studioMotionCamera = studio_->useMotionCamera;
+    }
+    const std::string song = studio ? (studio_->projectPath.empty() ? std::string("studio") : PathToUtf8(studio_->projectPath.stem()))
+                             : selSong_ >= 0 ? library_.songs[selSong_].displayName : "render";
     if (probe)
         offline_.output = std::filesystem::temp_directory_path() / L"mmdx12_probe.mp4";
     else
@@ -214,13 +223,27 @@ void App::StartOfflineVideo(double startSeconds, double endSeconds, bool fromLob
     d.height = jd.height;
     d.fps = (uint32_t)offline_.video.fps;
     d.videoBitrate = (uint32_t)offline_.video.bitrateMbps * 1000000u;
-    if (!probe && scene_->hasAudio && selSong_ >= 0) d.audioPath = library_.songs[selSong_].audioPath;
-    d.audioStartSeconds = startSeconds;
+    if (studio) {
+        // timeline time t plays audio position t - audioOffset (before the audio starts: silence)
+        if (studio_->hasAudio) d.audioPath = studio_->audioPath;
+        d.audioStartSeconds = startSeconds - studio_->audioOffset;
+    } else {
+        if (!probe && scene_->hasAudio && selSong_ >= 0) d.audioPath = library_.songs[selSong_].audioPath;
+        d.audioStartSeconds = startSeconds;
+    }
     offline_.encoder = std::make_unique<VideoEncoder>();
     std::string err;
     if (!offline_.encoder->Open(offline_.output, d, &err)) {
         abort(probe ? Tr("시간을 측정할 수 없습니다") : Tr("영상 렌더를 시작할 수 없습니다"), err);
         return;
+    }
+    if (studio) {
+        // the whole window shows the render (no studio panels): the image is not fitted into the viewport area
+        RenderSettings rs = renderer_.Settings();
+        rs.viewportX = rs.viewportY = rs.viewportW = rs.viewportH = 0;
+        renderer_.SetSettings(rs);
+        // the project's camera motion when there is one, else the view the editor shows
+        if (!studio_->camera.camera.empty()) studio_->useMotionCamera = true;   // StudioPoseForRender builds the evaluator
     }
     if (offline_.realtime) {
         // the real-time renderer produces the frames at the video's resolution; frame 0 is a warm-up frame
@@ -233,7 +256,9 @@ void App::StartOfflineVideo(double startSeconds, double endSeconds, bool fromLob
             cfg.Renderer() == VideoRenderer::PathTraced ? (int)kVideoRealtimeQualities[cfg.quality].ptPasses : 1;
         lastRenderedTime_ = -1.0;  // the first frame has no temporal history
     }
-    scene_->physicsFrame = -1.0f;  // physics restarts from the animated pose at frame 0 of the video
+    // physics restarts from the animated pose at frame 0 of the video
+    if (studio) studio_->physicsFrame = -1.0f;
+    else scene_->physicsFrame = -1.0f;
     offline_.startWall = timeSeconds_;
     offline_.beginPending = true;
     if (background) {
@@ -249,29 +274,51 @@ void App::StartOfflineVideo(double startSeconds, double endSeconds, bool fromLob
 // Pose ring for motion blur
 // ---------------------------------------------------------------------------
 
+void App::OfflinePose(float frame) {
+    if (offline_.studio) StudioPoseForRender(frame);
+    else UpdateScene(frame);
+}
+
+void App::OfflineView(float frame, FrameView& view) {
+    if (offline_.studio) BuildStudioFrameView(view);   // StudioPoseForRender set the studio's time to `frame`
+    else BuildFrameView(frame, view);
+}
+
 void App::SaveOfflinePose() {
     offline_.prevPose.clear();
-    if (!scene_) return;
     const auto save = [&](const ModelInstance& m) {
         offline_.prevPose.push_back({m.SkinMatrices(), m.VertexMorphDeltas(), m.MorphVersion()});
     };
+    if (offline_.studio) {
+        if (!studio_) return;
+        for (const auto& m : studio_->models) save(*m->inst);
+        offline_.prevCenter = StudioPerformerCenter();
+        return;
+    }
+    if (!scene_) return;
     save(*scene_->character);
     for (const auto& st : scene_->stages) save(*st);
     offline_.prevCenter = CharacterCenter();
 }
 
 DirectX::XMFLOAT3 App::CharacterCenter() const {
+    if (offline_.studio) return StudioPerformerCenter();
     if (!scene_ || !scene_->character) return {};
     const int center = scene_->character->Model().FindBone("ã»ã³ã¿ã¼");
     return center >= 0 ? scene_->character->BoneWorldPosition(center) : DirectX::XMFLOAT3{};
 }
 
 void App::UploadOfflinePrevPose(uint64_t slot) {
-    if (!scene_ || offline_.prevPose.size() != 1 + scene_->stages.size()) return;
     const auto upload = [&](GpuModel& g, const OfflineJob::Pose& p) {
         g.UpdateSkinning(slot, p.skin);
         g.UpdateMorphs(slot, p.morph, p.morphVersion);
     };
+    if (offline_.studio) {
+        if (!studio_ || offline_.prevPose.size() != studio_->models.size()) return;
+        for (size_t i = 0; i < studio_->models.size(); ++i) upload(*studio_->models[i]->gpu, offline_.prevPose[i]);
+        return;
+    }
+    if (!scene_ || offline_.prevPose.size() != 1 + scene_->stages.size()) return;
     upload(*scene_->characterGpu, offline_.prevPose[0]);
     for (size_t i = 0; i < scene_->stages.size(); ++i) upload(*scene_->stageGpu[i], offline_.prevPose[1 + i]);
 }
@@ -301,6 +348,18 @@ void App::UpdateOffline() {
         }
         return;
     }
+    // the studio: once the project is open and its models are loaded (--project / --screen studio)
+    if (screen_ == Screen::Studio && studio_ && !cliOfflineStarted_ && studioJobs_.empty() &&
+        (!options_.offlineStill.empty() || !options_.offlineVideo.empty())) {
+        cliOfflineStarted_ = true;
+        if (!options_.offlineStill.empty() && !renderer_.OfflineSupported()) {
+            LOG_ERROR("offline render unavailable (needs DXR)");
+            running_ = false;
+            return;
+        }
+        StartStudioRender(options_.offlineStill.empty());
+        return;
+    }
     if (screen_ == Screen::Offline && !ImGui::GetIO().WantCaptureKeyboard && ImGui::IsKeyPressed(ImGuiKey_Escape))
         offline_.cancelRequested = true;
 }
@@ -311,7 +370,7 @@ void App::RecordRealtimeVideoFrame(ID3D12GraphicsCommandList* cmd) {
         // a new video frame: pose it once; its further passes (path tracer history) re-upload the same pose
         playTime_ = offline_.startSeconds + (double)offline_.frame / offline_.video.fps;
         offline_.frameMmd = (float)(playTime_ * kMmdFps);
-        UpdateScene(offline_.frameMmd);
+        OfflinePose(offline_.frameMmd);
         offline_.iter = 0;
         offline_.beginPending = false;
         offline_.imageStartWall = timeSeconds_;
@@ -320,7 +379,7 @@ void App::RecordRealtimeVideoFrame(ID3D12GraphicsCommandList* cmd) {
         UploadOfflinePrevPose(ctx_.FrameNumber());
     }
     FrameView view;
-    BuildFrameView(offline_.frameMmd, view);   // a camera cut (first frame, seek) discards temporal history
+    OfflineView(offline_.frameMmd, view);   // a camera cut (first frame, seek) discards temporal history
     if (newFrame) {
         const VideoRenderConfig& cfg = offline_.video;
         if (cfg.Renderer() == VideoRenderer::PathTraced) {
@@ -378,9 +437,9 @@ void App::RecordOfflineFrame(ID3D12GraphicsCommandList* cmd) {
         ctx_.WaitForGpu();   // the ring entry may still be read by in-flight offline work
         UploadOfflinePrevPose(ctx_.FrameNumber() - 1);
     }
-    UpdateScene(frame);
+    OfflinePose(frame);
     FrameView view;
-    BuildFrameView(frame, view);
+    OfflineView(frame, view);
     view.motionBlur = blur;
     view.prevCamera = !blur ? view.camera : (video ? offline_.prevCamera : lastLiveCamera_);
     if (video && blur && !probe) {
@@ -536,9 +595,16 @@ void App::FinishOffline(bool cancelled) {
         }
     }
     LOG_INFO("offline render %s: %s", cancelled ? "cancelled" : "finished", PathToUtf8(offline_.output).c_str());
+    lastRenderedTime_ = -1.0;  // next real-time frame is a camera cut (no stale history)
+    if (offline_.studio) {
+        StudioRestoreAfterRender();   // reads offline_ (the editor's time and camera mode)
+        offline_ = OfflineJob{};
+        screen_ = studio_ ? Screen::Studio : Screen::Select;
+        if (cli) running_ = false;
+        return;
+    }
     playTime_ = offline_.startSeconds;
     if (scene_ && scene_->hasAudio) audio_.Seek(playTime_);
-    lastRenderedTime_ = -1.0;  // next real-time frame is a camera cut (no stale history)
     offline_ = OfflineJob{};
     if (lobby) {
         UnloadScene();   // a render started from the select screen goes back to it
@@ -557,7 +623,7 @@ void App::FinishOffline(bool cancelled) {
 void App::DrawOfflineOverlay() {
     using namespace ui;
     ImGuiIO& io = ImGui::GetIO();
-    if (!scene_) return;
+    if (!scene_ && !offline_.studio) return;
     OfflineProgress pr = renderer_.OfflineStatus();
     const Palette& p = P();
     const bool video = offline_.mode == OfflineMode::Video;
@@ -857,7 +923,7 @@ void App::UpdateVideoProbe() {
 
 App::VideoProbeStatus App::ProbeStatus() const {
     VideoProbeStatus st;
-    if (!videoDialogOpen_ || selCharacter_ < 0 || selSong_ < 0) return st;
+    if (!videoDialogOpen_ || screen_ != Screen::Select || selCharacter_ < 0 || selSong_ < 0) return st;
     if (offline_.background) {
         st.phase = VideoProbeStatus::Phase::Measuring;
         const double image = offline_.realtime
@@ -895,9 +961,16 @@ uint64_t App::CurrentVideoProbeKey() const {
 App::VideoEstimate App::EstimateVideoRender() const {
     VideoEstimate e;
     const VideoRenderConfig cfg = ActiveVideoConfig();
-    const double duration = selSong_ >= 0 ? library_.songs[(size_t)selSong_].durationSec : 0.0;
-    e.frames = std::max(1, (int)std::floor(duration * cfg.fps));
-    const VideoProbe* probe = settings_.FindVideoProbe(CurrentVideoProbeKey());
+    // the studio's project has no sample render (rough estimate only)
+    const bool studio = screen_ == Screen::Studio && studio_ != nullptr;
+    double duration = selSong_ >= 0 ? library_.songs[(size_t)selSong_].durationSec : 0.0;
+    if (studio) {
+        double a = 0, b = 0;
+        StudioRenderRange(a, b);
+        duration = b - a;
+    }
+    e.frames = std::max(1, (int)std::floor(duration * cfg.fps + 1e-6));
+    const VideoProbe* probe = studio ? nullptr : settings_.FindVideoProbe(CurrentVideoProbeKey());
     e.measured = probe != nullptr;
     e.secondsPerFrame = probe ? probe->secondsPerFrame : EstimatedSecondsPerFrame(cfg);
     e.totalSeconds = e.frames * e.secondsPerFrame;

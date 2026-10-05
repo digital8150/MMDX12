@@ -34,7 +34,9 @@ std::string DurationKo(double seconds) {
 void App::DrawVideoRenderDialog() {
     using namespace ui;
     if (!videoDialogOpen_) return;
-    if (selCharacter_ < 0 || selSong_ < 0 || (size_t)selSong_ >= library_.songs.size()) {
+    // opened from the studio's render menu: renders the project (range, motion camera, project audio)
+    const bool studio = screen_ == Screen::Studio && studio_ != nullptr;
+    if (!studio && (selCharacter_ < 0 || selSong_ < 0 || (size_t)selSong_ >= library_.songs.size())) {
         videoDialogOpen_ = false;
         return;
     }
@@ -46,7 +48,17 @@ void App::DrawVideoRenderDialog() {
     cfg.Clamp();
 
     ImGuiIO& io = ImGui::GetIO();
-    const SongAsset& song = library_.songs[(size_t)selSong_];
+    double studioA = 0, studioB = 0;
+    if (studio) StudioRenderRange(studioA, studioB);
+    const double durationSec = studio ? studioB - studioA : library_.songs[(size_t)selSong_].durationSec;
+    std::string subtitle;
+    if (studio) {
+        subtitle = studio_->projectPath.empty() ? std::string(Tr("제목 없음")) : PathToUtf8(studio_->projectPath.stem());
+        subtitle += std::string(" · ") + Tr("프레임") + " " + std::to_string((int)std::lround(studioA * kMmdFps)) + "–" +
+                    std::to_string(std::max(0, (int)std::lround(studioB * kMmdFps) - 1));
+    } else {
+        subtitle = library_.songs[(size_t)selSong_].displayName;
+    }
 
     ImGui::SetNextWindowPos(ImVec2(0, 0));
     ImGui::SetNextWindowSize(io.DisplaySize);
@@ -67,7 +79,7 @@ void App::DrawVideoRenderDialog() {
     const float pad = Dp(28.0f);
     const float x0 = a.x + pad, x1 = b.x - pad;
     Text(dl, Font::Bold, size::Heading, ImVec2(x0, a.y + Dp(22.0f)), p.ink, Tr("고품질 영상 렌더링"));
-    TextEllipsis(dl, Font::Regular, size::Small, ImVec2(x0, a.y + Dp(54.0f)), x1, p.ink2, song.displayName.c_str());
+    TextEllipsis(dl, Font::Regular, size::Small, ImVec2(x0, a.y + Dp(54.0f)), x1, p.ink2, subtitle.c_str());
 
     // Settings area (scrolls when the window is short)
     const float top = a.y + Dp(80.0f), bottomBlock = Dp(160.0f);
@@ -81,6 +93,15 @@ void App::DrawVideoRenderDialog() {
         win->DC.CursorPos.x = win->Pos.x;
         ImGui::BeginGroup();
         ImGui::PushClipRect(win->Pos, ImVec2(win->Pos.x + win->Size.x, win->Pos.y + win->Size.y), true);
+
+        // 0. 범위 (studio with a timeline range: the range or the whole project)
+        if (studio && studio_->HasRange()) {
+            SectionLabel(Tr("범위"));
+            const char* rangeLabels[2] = {Tr("타임라인 범위"), Tr("프로젝트 전체")};
+            int whole = studioRenderWhole_ ? 1 : 0;
+            if (Segmented("##vrange", rangeLabels, 2, &whole, colW / Dpi(), 36.0f)) studioRenderWhole_ = whole == 1;
+            Gap(10.0f);
+        }
 
         // 1. 렌더러
         SectionLabel(Tr("렌더러"));
@@ -306,7 +327,7 @@ void App::DrawVideoRenderDialog() {
     const float y2 = footerY + Dp(42.0f);
     char l2[160];
     std::snprintf(l2, sizeof(l2), Tr("총 %d프레임 · %s · %u×%u · %d fps · 파일 약 %.1f GB"), est.frames,
-                  MinSec(song.durationSec).c_str(), curRes.width, curRes.height, cfg.fps, est.fileGigabytes);
+                  MinSec(durationSec).c_str(), curRes.width, curRes.height, cfg.fps, est.fileGigabytes);
     Text(dl, Font::Regular, size::Body, ImVec2(x0, y2), p.ink2, l2);
 
     // Third line: 프레임당 약 X.X초로 측정한 값입니다 / 실제 시간은 PC 성능과 장면에 따라 달라집니다
@@ -353,7 +374,14 @@ void App::DrawVideoRenderDialog() {
         return;
     }
     if (start) {
-        StartVideoRenderLoad();
+        if (studio) {
+            settings_.video.Clamp();
+            settings_.Save(settingsPath_);
+            videoDialogOpen_ = false;
+            StartStudioRender(true);
+        } else {
+            StartVideoRenderLoad();
+        }
         return;
     }
 }

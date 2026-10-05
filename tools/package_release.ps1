@@ -1,5 +1,5 @@
 # Builds a Release configuration of MMDX12 in build_release\ and packages a portable zip in dist\.
-#   powershell -ExecutionPolicy Bypass -File tools\package_release.ps1 -Version 0.1.1
+#   powershell -ExecutionPolicy Bypass -File tools\package_release.ps1 -Version 1.0.0
 # The zip holds MMDX12.exe, the shaders and fonts, the runtime DLLs (DXC, upscalers, the VC++ runtime,
 # app-local), the licences and a library\ folder skeleton. Run tools\fetch_sdks.ps1 first for the upscalers.
 param([Parameter(Mandatory = $true)][string]$Version)

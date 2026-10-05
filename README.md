@@ -18,6 +18,7 @@
     <a href="#gallery">Gallery</a> ·
     <a href="#what-it-does">What it does</a> ·
     <a href="#getting-started">Getting started</a> ·
+    <a href="#studio">Studio</a> ·
     <a href="#benchmark">Benchmark</a>
   </p>
 </div>
@@ -89,6 +90,7 @@ Full songs rendered with MMDX12's video mode, uploaded as-is.
 - **DLSS, FSR and XeSS** if you want more frames.
 - **Photo mode**: press P for a 4K picture.
 - **Video mode**: render a whole song to MP4, with the music, up to 4K. The app tells you how long it will take before you start.
+- **Studio**: edit dances yourself with an MMD-style keyframe editor, saving standard VMD/VPD files that MMD opens.
 - **A benchmark** with an online leaderboard, just for fun.
 
 <img src="docs/media/ui-library.jpg" width="100%" alt="Library screen">
@@ -140,6 +142,34 @@ Other layouts work too: folder names like `models` or `motions` count, and witho
 | Esc | Back |
 
 Videos are made from the **영상 렌더** (Render video) button next to **플레이** (Play) and saved to `Videos\MMDX12`. The highest-quality mode takes a while: on a laptop RTX 3060 a 4K frame takes about 10 seconds, so a full song is an overnight-or-longer job. You can stop with Esc at any time and keep what's been rendered.
+
+## Studio
+
+On the library screen, click **New Studio project** with nothing selected to open an empty project, or click **Edit in Studio** with a character or song selected to start with the scene pre-filled. The `...` menu next to it opens existing or recent projects.
+
+The scene list on the left manages the camera, characters, accessories, stages, and audio; the `+` button adds models (PMX, VRM, glTF, FBX) from the library or files. In the middle is the 3D viewport, on the right is the inspector (keys, bone, and morph tabs, plus camera, light, and self-shadow settings when the camera is selected), and at the bottom is the timeline, grouping bones by the model's display frames, along with a Bezier interpolation curve editor.
+
+Click bones in the 3D viewport and pose them with rotation and translation gizmos (local or global axes). Moving IK bones drives the bone chain. Just like MMD, edits stay until you register them (`I`), and you can use morph sliders, mirror poses, or import and export VPD pose files. The timeline supports adding, moving, deleting, copying, and pasting keys, pasting curves only, curve presets, MMD-style frame insertion and deletion, frame range selection, loop playback with music, and toggling physics. You can also edit camera, light, and self-shadow tracks, use "Key the current view", and see the camera path while using the free camera.
+
+Projects are saved as `.mmdxproj` files, and motions are saved alongside them as standard VMD files that MMD can open. Autosave provides recovery after crashes, audio supports a start offset, and accessories (props) can be attached to any bone of another model. You can render directly from the studio using the same video dialog as the library (raster, real-time ray tracing, real-time path tracing, offline GI), exporting the timeline range or the whole project through the motion camera with music to a video or high-quality still. MMD compatibility relies on standard files (VMD, VPD); PMM project files are not supported.
+
+| Key | Action |
+|---|---|
+| Space | Play / pause |
+| ← / → | Previous / next frame |
+| Ctrl+← / → | Previous / next key |
+| Home / End | Start / end |
+| I | Register the pose (Ctrl+I: all bones) |
+| Delete | Delete selected keys |
+| Ctrl+C / X / V | Copy / cut / paste keys (Ctrl+Shift+V: interpolation curves only) |
+| Ctrl+A | Select all keys |
+| Ctrl+Z / Ctrl+Y | Undo / redo |
+| E / W / L | Rotate tool / move tool / local ↔ global axes |
+| Ctrl+S / Ctrl+Shift+S | Save / save as |
+| Ctrl+O / Ctrl+N | Open / new project |
+| ? / F1 | Shortcut list |
+| Mouse in the 3D view | Left drag: orbit (or gizmo / bone pick) · right or middle drag: pan · wheel: zoom |
+| Mouse in the timeline | Wheel: scroll · Ctrl+wheel: zoom · Shift+wheel: scroll sideways · Shift+drag on the ruler: frame range |
 
 ## Benchmark
 
@@ -202,5 +232,6 @@ MMDX12's own code is [MIT](LICENSE). Third-party code keeps its own license, and
 
 ## What's next
 
-- Material morphs, SDEF skinning, PMD models, and the VMD light track.
+- Material morphs, SDEF skinning, PMD models, and the player's VMD light track.
 - Faster library loading.
+- Studio follow-ups: accessories (.x), PMM import.

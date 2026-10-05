@@ -390,7 +390,12 @@ void App::StudioApplyLibrarySong(int index) {
     const StudioModel* m = studio_->Selected();
     job->targetUid = m && m->kind == ModelKind::Character ? m->uid : 0;
     StudioJob* j = job.get();
-    job->future = std::async(std::launch::async, [j, s] { return LoadStudioSong(s, j->dance, j->camera, &j->error); });
+    job->future = std::async(std::launch::async, [this, j, s] {
+        const bool ok = LoadStudioSong(s, j->dance, j->camera, &j->error);
+        // decode the audio here too: the main thread's Load then takes no time (no hitch when the song arrives)
+        if (ok && !j->audio.empty()) j->audioPreloaded = audio_.Preload(j->audio);
+        return ok;
+    });
     studioJobs_.push_back(std::move(job));
 }
 
@@ -423,8 +428,19 @@ bool App::StudioSetAudio(const std::filesystem::path& file) {
 void App::StudioAudioDialog() {
     const std::filesystem::path f =
         OpenFileDialog(hwnd_, {{L"Audio", L"*.wav;*.mp3;*.ogg;*.flac"}, {L"WAV", L"*.wav"}, {L"MP3", L"*.mp3"}});
-    if (!f.empty() && StudioSetAudio(f))
-        toast_ = {Tr("음원을 넣었어요"), PathToUtf8(f.filename()), {}, false, timeSeconds_ + 4.0};
+    if (f.empty()) return;
+    // decoded on a worker (a long song takes a while), applied by StudioPollJobs
+    auto job = std::make_unique<StudioJob>();
+    job->label = PathToUtf8(f.filename());
+    job->song = true;
+    job->audioOnly = true;
+    job->audio = f;
+    StudioJob* j = job.get();
+    job->future = std::async(std::launch::async, [this, j] {
+        j->audioPreloaded = audio_.Preload(j->audio);
+        return true;   // a file that cannot be decoded fails in StudioSetAudio (with its toast)
+    });
+    studioJobs_.push_back(std::move(job));
 }
 
 void App::StudioPollJobs() {
@@ -441,6 +457,8 @@ void App::StudioPollJobs() {
             toast_ = {Tr("불러오지 못했습니다"), job.label + (job.error.empty() ? "" : ": " + job.error), {}, true,
                       timeSeconds_ + 6.0};
             LOG_ERROR("studio: load failed: %s: %s", job.label.c_str(), job.error.c_str());
+        } else if (job.audioOnly) {
+            if (StudioSetAudio(job.audio)) toast_ = {Tr("음원을 넣었어요"), job.label, {}, false, timeSeconds_ + 4.0};
         } else if (job.song) {
             // a library song: dance onto the character it was started for, camera tracks, audio
             std::vector<std::unique_ptr<Command>> parts;
@@ -503,6 +521,7 @@ void App::StudioPollJobs() {
                 LOG_INFO("studio: added %s (%d models)", job.label.c_str(), (int)d.models.size());
             }
         }
+        if (job.audioPreloaded) audio_.ReleasePreload(job.audio);   // the loaded sound holds its own reference
         studioJobs_.erase(studioJobs_.begin() + (ptrdiff_t)ji);
     }
 }

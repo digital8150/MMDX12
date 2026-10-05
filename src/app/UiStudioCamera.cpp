@@ -166,6 +166,15 @@ void App::DrawStudioCameraPanel(float w) {
     // a full-width widget with a square icon button at the right end of the row
     const float btn = 34.0f, bw = Dp(btn);
     char buf[160];
+    // A camera key is being edited: its fields and curves follow, so the light / shadow sections shrink to their
+    // switches (their values and key buttons come back when no camera key is selected).
+    bool compact = false;
+    {
+        RowKind kind;
+        std::string name;
+        for (const KeyId& k : d.selection)
+            if (StudioTrackOfRow(k.first, kind, name)) { compact = kind == RowKind::Camera; break; }
+    }
 
     // --- view: motion / free camera, key from the view, path overlay
     separator(2.0f);
@@ -189,7 +198,13 @@ void App::DrawStudioCameraPanel(float w) {
     }
 
     // --- light track: switch, preview ball + values, key button
-    separator(8.0f);
+    separator(compact ? 4.0f : 8.0f);
+    if (compact) {
+        Switch("##lighttrack", Tr("조명 트랙"), &d.useLightTrack);
+        Switch("##shadowtrack", Tr("셀프 섀도 트랙"), &d.useShadowTrack);
+        separator(4.0f);
+        return;
+    }
     {
         Switch("##lighttrack", Tr("조명 트랙"), &d.useLightTrack);
         Tooltip(d.camera.light.empty() ? Tr("조명 키가 없으면 조명 프리셋을 써요.") : Tr("끄면 조명 프리셋을 써요."));
@@ -250,7 +265,11 @@ bool App::DrawStudioCameraKeyFields(float w, RowKind kind, int frame) {
         ImGui::SetCursorScreenPos(ImVec2(c.x + Dp(64.0f), c.y));
         ImGui::SetNextItemWidth(w - Dp(64.0f));
         PushFont(Font::Regular, size::Small);
+        // camera keys have four rows above their curves: slimmer fields keep the curve editor closer to view
+        if (kind == RowKind::Camera)
+            ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(ImGui::GetStyle().FramePadding.x, Dp(4.0f)));
         changed |= widget();
+        if (kind == RowKind::Camera) ImGui::PopStyleVar();
         PopFont();
         if (ImGui::IsItemActivated()) StudioBeginKeyEdit(kind);
         ended |= ImGui::IsItemDeactivated();

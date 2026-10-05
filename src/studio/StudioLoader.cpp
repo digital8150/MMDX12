@@ -93,7 +93,9 @@ bool LoadStudioModel(const std::filesystem::path& path, ModelKind kind, const st
             if (error) *error = Tr("모델 파일이 없습니다: ") + PathToUtf8(path);
             return false;
         }
-        ModelRole role = (kind == ModelKind::Character) ? ModelRole::Character : ModelRole::Stage;
+        const ModelRole role = kind == ModelKind::Character ? ModelRole::Character
+                               : kind == ModelKind::Prop    ? ModelRole::Prop
+                                                            : ModelRole::Stage;
         std::string err;
         if (!LoadModel(path, role, label, progress, 0.05f, 0.95f, out, &err)) {
             if (error) *error = Tr("모델을 불러오지 못했습니다: ") + err;
@@ -226,7 +228,9 @@ bool LoadStudioProjectPackage(const std::filesystem::path& file, bool recovery, 
             if (progress) progress->SetStatus(Tr("모델 로드: ") + pm.name);
             
             StudioPackageModel m;
-            ModelRole role = (pm.kind == ModelKind::Character) ? ModelRole::Character : ModelRole::Stage;
+            const ModelRole role = pm.kind == ModelKind::Character ? ModelRole::Character
+                                  : pm.kind == ModelKind::Prop    ? ModelRole::Prop
+                                                                  : ModelRole::Stage;
             std::string merr;
             if (!LoadModel(pm.path, role, pm.name, progress, f0, f1, m, &merr)) {
                 out.warnings.push_back(Tr("모델을 불러오지 못했습니다: ") + pm.name + " (" + PathToUtf8(pm.path) + ")");

@@ -18,6 +18,10 @@ public:
     bool Load(const std::filesystem::path& path);        // unloads previous; false on failure
     void Unload();
     bool IsLoaded() const;
+    // Decodes the file into the engine's resource cache from any thread (blocking), so a later Load of the same
+    // path on the main thread is instant. Each successful Preload needs one ReleasePreload (after the Load).
+    bool Preload(const std::filesystem::path& path);
+    void ReleasePreload(const std::filesystem::path& path);
 
     void Play();
     void Pause();

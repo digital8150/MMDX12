@@ -45,6 +45,19 @@ bool AudioPlayer::Load(const std::filesystem::path& path) {
     return true;
 }
 
+bool AudioPlayer::Preload(const std::filesystem::path& path) {
+    if (!impl_->engineOk) return false;
+    ma_resource_manager* rm = ma_engine_get_resource_manager(&impl_->engine);
+    return rm && ma_resource_manager_register_file_w(rm, path.c_str(), MA_RESOURCE_MANAGER_DATA_SOURCE_FLAG_DECODE) ==
+                     MA_SUCCESS;
+}
+
+void AudioPlayer::ReleasePreload(const std::filesystem::path& path) {
+    if (!impl_->engineOk) return;
+    if (ma_resource_manager* rm = ma_engine_get_resource_manager(&impl_->engine))
+        ma_resource_manager_unregister_file_w(rm, path.c_str());
+}
+
 void AudioPlayer::Unload() {
     if (impl_->soundOk) ma_sound_uninit(&impl_->sound);
     impl_->soundOk = false;

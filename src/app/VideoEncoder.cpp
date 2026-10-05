@@ -39,6 +39,7 @@ struct VideoEncoder::Impl {
     bool mfStarted = false, comInit = false;
     uint32_t frames = 0;              // video frames written
     uint64_t audioFrames = 0;         // PCM frames (48 kHz stereo) written
+    uint64_t leadSilence = 0;         // PCM frames of silence before the song (negative audioStartSeconds)
     ma_decoder decoder{};
     bool decoderOk = false;
     std::vector<int16_t> pcm;         // scratch
@@ -200,6 +201,7 @@ bool VideoEncoder::Open(const std::filesystem::path& mp4Path, const Desc& desc, 
     impl.open = true;
     impl.frames = 0;
     impl.audioFrames = 0;
+    impl.leadSilence = desc.audioStartSeconds < 0.0 ? (uint64_t)std::llround(-desc.audioStartSeconds * 48000.0) : 0;
     LOG_INFO("video: writing %s (%ux%u @ %u fps, audio %s)", PathToUtf8(mp4Path).c_str(),
              desc.width, desc.height, desc.fps, impl.hasAudio ? "yes" : "no");
     return true;
@@ -270,8 +272,12 @@ bool VideoEncoder::AddFrame(const ImageRGBA8& frame) {
         const uint64_t need = target - impl.audioFrames;
         if (need > 0) {
             impl.pcm.resize((size_t)need * 2);
+            // the song starts later than the video (negative start): silence first
+            const uint64_t quiet = impl.audioFrames < impl.leadSilence ? std::min(need, impl.leadSilence - impl.audioFrames) : 0;
+            std::memset(impl.pcm.data(), 0, (size_t)quiet * 2 * sizeof(int16_t));
             ma_uint64 read = 0;
-            ma_decoder_read_pcm_frames(&impl.decoder, impl.pcm.data(), need, &read);
+            if (need > quiet) ma_decoder_read_pcm_frames(&impl.decoder, impl.pcm.data() + quiet * 2, need - quiet, &read);
+            read += quiet;
             if (read < need)
                 std::memset(impl.pcm.data() + read * 2, 0, (size_t)(need - read) * 2 * sizeof(int16_t));
 
