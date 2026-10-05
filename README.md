@@ -145,6 +145,8 @@ Videos are made from the **영상 렌더** (Render video) button next to **플�
 
 ## Studio
 
+<img src="docs/media/studio.jpg" width="100%" alt="Studio">
+
 On the library screen, click **New Studio project** with nothing selected to open an empty project, or click **Edit in Studio** with a character or song selected to start with the scene pre-filled. The `...` menu next to it opens existing or recent projects.
 
 The scene list on the left manages the camera, characters, accessories, stages, and audio; the `+` button adds models (PMX, VRM, glTF, FBX) from the library or files. In the middle is the 3D viewport, on the right is the inspector (keys, bone, and morph tabs, plus camera, light, and self-shadow settings when the camera is selected), and at the bottom is the timeline, grouping bones by the model's display frames, along with a Bezier interpolation curve editor.
