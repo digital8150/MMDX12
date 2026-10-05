@@ -83,4 +83,8 @@ inline constexpr const char* CaretLineRight = "\xee\x84\xb0";
 inline constexpr const char* Bone = "\xee\x9f\xb2";
 inline constexpr const char* ArrowsOutCardinal = "\xee\x82\xa4";
 inline constexpr const char* Magnet = "\xee\x9a\x80";
+inline constexpr const char* Repeat = "\xee\x8f\xb6";
+inline constexpr const char* Atom = "\xee\x97\xa4";
+inline constexpr const char* ArrowsInLineHorizontal = "\xee\x94\xb0";
+inline constexpr const char* ArrowsOutLineHorizontal = "\xee\x94\xb4";
 } // namespace mmdx::icon

@@ -267,6 +267,11 @@ int App::Run(HINSTANCE instance, const AppOptions& options) {
 // ---------------------------------------------------------------------------
 
 LRESULT App::HandleMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
+    // A --ui-script owns mouse and keyboard: real input (the user's cursor over or off the window) would race it.
+    const bool scripted = !options_.uiScript.empty() &&
+                          ((msg >= WM_MOUSEFIRST && msg <= WM_MOUSELAST) || msg == WM_MOUSELEAVE || msg == WM_NCMOUSEMOVE ||
+                           msg == WM_NCMOUSELEAVE || (msg >= WM_KEYFIRST && msg <= WM_KEYLAST));
+    if (scripted) return msg == WM_MOUSELEAVE || msg == WM_NCMOUSELEAVE ? 0 : DefWindowProcW(hwnd, msg, wParam, lParam);
     if (ImGui::GetCurrentContext() && ImGui_ImplWin32_WndProcHandler(hwnd, msg, wParam, lParam))
         return 1;
 

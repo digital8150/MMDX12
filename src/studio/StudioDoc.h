@@ -10,6 +10,7 @@
 #include "studio/UiTimeline.h"
 #include <cmath>
 #include <filesystem>
+#include <map>
 #include <memory>
 #include <set>
 #include <string>
@@ -93,7 +94,17 @@ struct StudioDoc {
     bool curveEditing = false;        // a curve edit is in progress (one undo step per drag)
     std::vector<struct TrackState> curveBefore;  // tracks before the edit started
 
+    // rows, range, playback options
+    std::set<uint64_t> selectedRows;  // rows picked on the label column (bone/morph/camera/group rows)
+    uint64_t rowAnchor = 0;           // Shift+click range anchor (last plain/Ctrl-clicked row)
+    std::map<uint64_t, std::vector<uint64_t>> groupChildren;  // group row -> its bone/morph rows (also when collapsed)
+    bool loop = false;                // playback loops over the frame range (or the whole timeline without one)
+    bool physics = true;              // physics toggle (initialised from the app settings on load)
+    RowKind curveClipKind = RowKind::Group;  // copied interpolation block: Bone (64 bytes) or Camera (24); Group = empty
+    uint8_t curveClip[64] = {};
+
     int Frame() const { return (int)std::floor(time * kMmdFps + 1e-4); }
+    bool HasRange() const { return view.rangeStart >= 0 && view.rangeEnd >= view.rangeStart; }
     int EndFrame() const;             // last key over all motions, the audio length, at least 300
     StudioModel* Selected() { return selectedModel >= 0 && selectedModel < (int)models.size() ? models[selectedModel].get() : nullptr; }
     void TouchModel(int model);       // after editing a motion (model -1 = camera)
@@ -109,6 +120,11 @@ struct TrackState {
     std::vector<BoneKf> bones;
     std::vector<MorphKf> morphs;
     std::vector<CameraKf> cameras;
+
+    size_t Bytes() const {
+        return sizeof(TrackState) + name.size() + bones.capacity() * sizeof(BoneKf) + morphs.capacity() * sizeof(MorphKf) +
+               cameras.capacity() * sizeof(CameraKf);
+    }
 };
 TrackState CaptureTrack(StudioDoc& doc, int model, RowKind kind, const std::string& name);
 void RestoreTrack(StudioDoc& doc, const TrackState& s);
@@ -120,6 +136,12 @@ public:
     void Do() override { for (const auto& s : after_) RestoreTrack(doc_, s); }
     void Undo() override { for (const auto& s : before_) RestoreTrack(doc_, s); }
     std::string Name() const override { return name_; }
+    size_t Bytes() const override {
+        size_t bytes = sizeof(*this) + name_.size();
+        for (const TrackState& s : before_) bytes += s.Bytes();
+        for (const TrackState& s : after_) bytes += s.Bytes();
+        return bytes;
+    }
 
 private:
     StudioDoc& doc_;
@@ -135,6 +157,7 @@ public:
     void Do() override { Apply(after_); }
     void Undo() override { Apply(before_); }
     std::string Name() const override { return name_; }
+    size_t Bytes() const override { return sizeof(*this) + name_.size() + before_.ApproxBytes() + after_.ApproxBytes(); }
 
 private:
     void Apply(const MotionData& m) {

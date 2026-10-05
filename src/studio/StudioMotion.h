@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <map>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -46,12 +47,12 @@ void FillLinearCameraInterp(uint8_t interp[24]);
 
 // Sorted-by-frame key container operations (K needs a `frame` member).
 template <class K> K* FindKey(std::vector<K>& keys, int frame) {
-    for (K& k : keys) if (k.frame == frame) return &k;
-    return nullptr;
+    auto it = std::lower_bound(keys.begin(), keys.end(), frame, [](const K& k, int f) { return k.frame < f; });
+    return it != keys.end() && it->frame == frame ? &*it : nullptr;
 }
 template <class K> const K* FindKey(const std::vector<K>& keys, int frame) {
-    for (const K& k : keys) if (k.frame == frame) return &k;
-    return nullptr;
+    auto it = std::lower_bound(keys.begin(), keys.end(), frame, [](const K& k, int f) { return k.frame < f; });
+    return it != keys.end() && it->frame == frame ? &*it : nullptr;
 }
 // Inserts `key` at its frame, replacing an existing key of the same frame. Returns the replaced key if any.
 template <class K> bool UpsertKey(std::vector<K>& keys, const K& key, K* replaced = nullptr) {
@@ -65,13 +66,66 @@ template <class K> bool UpsertKey(std::vector<K>& keys, const K& key, K* replace
     return false;
 }
 template <class K> bool EraseKey(std::vector<K>& keys, int frame, K* erased = nullptr) {
-    for (size_t i = 0; i < keys.size(); ++i) {
-        if (keys[i].frame != frame) continue;
-        if (erased) *erased = keys[i];
-        keys.erase(keys.begin() + (ptrdiff_t)i);
-        return true;
+    auto it = std::lower_bound(keys.begin(), keys.end(), frame, [](const K& k, int f) { return k.frame < f; });
+    if (it == keys.end() || it->frame != frame) return false;
+    if (erased) *erased = *it;
+    keys.erase(it);
+    return true;
+}
+
+// Moves the keys whose frame is in `frames` by `delta` (results clamped to >= 0). A moved key replaces an unmoved key on
+// its target frame; if several moved keys land on one frame (only possible through the clamp), the one that came last
+// (highest original frame) wins. O(n log n): safe for tracks with many thousands of keys.
+template <class K> void MoveKeyFrames(std::vector<K>& keys, const std::set<int>& frames, int delta) {
+    if (frames.empty() || delta == 0) return;
+    std::vector<K> moved, kept;
+    moved.reserve(frames.size());
+    kept.reserve(keys.size());
+    for (const K& k : keys) (frames.count(k.frame) ? moved : kept).push_back(k);
+    if (moved.empty()) return;
+    for (K& k : moved) k.frame = std::max(0, k.frame + delta);
+    // `moved` is still in original-frame order; after the clamp equal frames are adjacent: keep the last of each run.
+    std::vector<K> uniq;
+    uniq.reserve(moved.size());
+    for (size_t i = 0; i < moved.size(); ++i)
+        if (i + 1 == moved.size() || moved[i + 1].frame != moved[i].frame) uniq.push_back(moved[i]);
+    // unmoved keys on a target frame are replaced
+    size_t j = 0;
+    std::vector<K> out;
+    out.reserve(kept.size() + uniq.size());
+    for (const K& k : kept) {
+        while (j < uniq.size() && uniq[j].frame < k.frame) out.push_back(uniq[j++]);
+        if (j < uniq.size() && uniq[j].frame == k.frame) continue;  // replaced by the moved key
+        out.push_back(k);
     }
-    return false;
+    while (j < uniq.size()) out.push_back(uniq[j++]);
+    keys.swap(out);
+}
+// Erases the keys whose frame is in `frames`.
+template <class K> void EraseKeyFrames(std::vector<K>& keys, const std::set<int>& frames) {
+    keys.erase(std::remove_if(keys.begin(), keys.end(), [&frames](const K& k) { return frames.count(k.frame) != 0; }),
+               keys.end());
+}
+// MMD "frame insert": every key at frame >= `at` moves `count` frames later. Returns true if any key moved.
+template <class K> bool InsertFrameSpan(std::vector<K>& keys, int at, int count) {
+    if (count <= 0 || at < 0) return false;
+    auto it = std::lower_bound(keys.begin(), keys.end(), at, [](const K& k, int f) { return k.frame < f; });
+    if (it == keys.end()) return false;
+    for (; it != keys.end(); ++it) it->frame += count;
+    return true;
+}
+// MMD "frame delete": keys in [at, at + count) are erased, keys at >= at + count move `count` frames earlier.
+// Returns true if anything changed.
+template <class K> bool DeleteFrameSpan(std::vector<K>& keys, int at, int count) {
+    if (count <= 0 || at < 0) return false;
+    auto first = std::lower_bound(keys.begin(), keys.end(), at, [](const K& k, int f) { return k.frame < f; });
+    auto last = std::lower_bound(keys.begin(), keys.end(), at + count, [](const K& k, int f) { return k.frame < f; });
+    bool erased = first != last;
+    bool shifted = last != keys.end();
+    if (!erased && !shifted) return false;
+    auto tail = keys.erase(first, last);  // keys after the span move `count` frames earlier
+    for (; tail != keys.end(); ++tail) tail->frame -= count;
+    return true;
 }
 
 struct MotionData {
@@ -85,6 +139,12 @@ struct MotionData {
 
     bool Empty() const { return bones.empty() && morphs.empty() && ik.empty() && camera.empty() && light.empty(); }
     int EndFrame() const;  // last key frame over everything (0 when empty)
+
+    // Frame insert/delete over every track (bones, morphs, IK, camera, light, shadow); see InsertFrameSpan/DeleteFrameSpan.
+    // Tracks that become empty are removed from the maps. Return true if anything changed.
+    bool InsertFrames(int at, int count);
+    bool DeleteFrames(int at, int count);
+    size_t ApproxBytes() const;  // heap memory estimate (undo budget)
 
     static MotionData FromVmd(const VmdMotion& vmd);
     // Adds `other`'s keys (same frame: other wins). Used to merge a dance with its facial VMDs.

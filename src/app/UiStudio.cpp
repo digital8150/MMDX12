@@ -3,7 +3,9 @@
 #include "app/App.h"
 
 #include <algorithm>
+#include <chrono>
 #include <climits>
+#include <cstring>
 #include <cmath>
 #include <map>
 
@@ -37,26 +39,15 @@ std::string FormatTime(double seconds) {
     return buf;
 }
 
-// Moves the keys at `frames` by `delta`; keys landing on an existing key replace it.
-template <class K> void MoveKeys(std::vector<K>& keys, const std::set<int>& frames, int delta) {
-    std::vector<K> moved;
-    for (auto it = keys.begin(); it != keys.end();) {
-        if (frames.count(it->frame)) {
-            moved.push_back(*it);
-            it = keys.erase(it);
-        } else {
-            ++it;
-        }
+// Logs editing operations that take long enough to be felt (large selections).
+struct OpTimer {
+    const char* name;
+    std::chrono::steady_clock::time_point t0 = std::chrono::steady_clock::now();
+    ~OpTimer() {
+        const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+        if (ms > 15.0) LOG_INFO("studio: %s took %.1f ms", name, ms);
     }
-    for (K& k : moved) {
-        k.frame = std::max(0, k.frame + delta);
-        UpsertKey(keys, k);
-    }
-}
-
-template <class K> void EraseKeys(std::vector<K>& keys, const std::set<int>& frames) {
-    keys.erase(std::remove_if(keys.begin(), keys.end(), [&](const K& k) { return frames.count(k.frame) != 0; }), keys.end());
-}
+};
 
 // Free orbit camera <-> MMD camera pose (rotation = (-pitch, yaw, 0), distance = -orbit distance).
 void PoseFromFree(const DirectX::XMFLOAT3& target, float yaw, float pitch, float distance, float fov, CameraKf& k) {
@@ -124,6 +115,7 @@ bool App::FinishStudioLoad() {
         audio_.SetMuted(false);
     }
     doc->useMotionCamera = !doc->camera.camera.empty() && !options_.freeCamera;
+    doc->physics = settings_.physics && !options_.noPhysics;
     doc->selectedModel = (int)doc->models.size() - 1;  // the character
     doc->time = std::max(0.0, options_.seekSeconds);
     options_.seekSeconds = 0;
@@ -167,7 +159,14 @@ void App::StudioSeek(double seconds) {
 
 void App::StudioSetPlaying(bool play) {
     StudioDoc& d = *studio_;
-    if (play && d.Frame() >= d.EndFrame()) d.time = 0;
+    if (play) {
+        // with a frame range, playback runs inside it; otherwise from the start once the end is reached
+        if (d.HasRange()) {
+            if (d.Frame() < d.view.rangeStart || d.Frame() >= d.view.rangeEnd) d.time = d.view.rangeStart / (double)kMmdFps;
+        } else if (d.Frame() >= d.EndFrame()) {
+            d.time = 0;
+        }
+    }
     d.playing = play;
     if (d.hasAudio) {
         if (play) {
@@ -185,19 +184,33 @@ void App::UpdateStudio(double dt) {
     ImGuiIO& io = ImGui::GetIO();
     // The studio is one big ImGui window, so WantCaptureKeyboard is always set: only text input blocks shortcuts.
     if (!io.WantTextInput && !studioLeaveConfirm_) {
-        if (ImGui::IsKeyPressed(ImGuiKey_Space, false)) StudioSetPlaying(!d.playing);
-        const bool redo = io.KeyCtrl && (ImGui::IsKeyPressed(ImGuiKey_Y) || (io.KeyShift && ImGui::IsKeyPressed(ImGuiKey_Z)));
+        const bool ctrl = io.KeyCtrl, shift = io.KeyShift;
+        const auto pressed = [](ImGuiKey k, bool repeat = true) { return ImGui::IsKeyPressed(k, repeat); };
+        if (pressed(ImGuiKey_Space, false)) StudioSetPlaying(!d.playing);
+        const bool redo = ctrl && (pressed(ImGuiKey_Y) || (shift && pressed(ImGuiKey_Z)));
         // the selection refers to key frames that an undo/redo may have moved: drop it
         if (redo && d.history.CanRedo()) { d.history.Redo(); d.selection.clear(); d.rowsKey = ~0ull; }
-        else if (!redo && io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_Z) && d.history.CanUndo()) {
+        else if (!redo && ctrl && pressed(ImGuiKey_Z) && d.history.CanUndo()) {
             d.history.Undo();
             d.selection.clear();
             d.rowsKey = ~0ull;
         }
-        if (ImGui::IsKeyPressed(ImGuiKey_LeftArrow)) { StudioSetPlaying(false); StudioSeek((d.Frame() - 1) / (double)kMmdFps); }
-        if (ImGui::IsKeyPressed(ImGuiKey_RightArrow)) { StudioSetPlaying(false); StudioSeek((d.Frame() + 1) / (double)kMmdFps); }
-        if (ImGui::IsKeyPressed(ImGuiKey_Home)) StudioSeek(0.0);
-        if (ImGui::IsKeyPressed(ImGuiKey_End)) StudioSeek(d.EndFrame() / (double)kMmdFps);
+        if (pressed(ImGuiKey_LeftArrow)) {
+            if (ctrl) StudioJumpKey(-1);
+            else { StudioSetPlaying(false); StudioSeek((d.Frame() - 1) / (double)kMmdFps); }
+        }
+        if (pressed(ImGuiKey_RightArrow)) {
+            if (ctrl) StudioJumpKey(1);
+            else { StudioSetPlaying(false); StudioSeek((d.Frame() + 1) / (double)kMmdFps); }
+        }
+        if (pressed(ImGuiKey_Home, false)) StudioSeek(0.0);
+        if (pressed(ImGuiKey_End, false)) StudioSeek(d.EndFrame() / (double)kMmdFps);
+        if (pressed(ImGuiKey_Delete, false) || pressed(ImGuiKey_Backspace, false)) StudioDeleteSelected(Tr("키 삭제"));
+        if (ctrl && pressed(ImGuiKey_C, false)) StudioCopySelected();
+        if (ctrl && pressed(ImGuiKey_X, false)) { StudioCopySelected(); StudioDeleteSelected(Tr("키 잘라내기")); }
+        if (ctrl && pressed(ImGuiKey_V, false)) StudioPaste(shift);
+        if (ctrl && pressed(ImGuiKey_A, false)) StudioSelectAll();
+        if (!ctrl && pressed(ImGuiKey_I, false)) StudioRegisterKeys();
     }
     if (d.playing) {
         if (d.hasAudio && audio_.IsPlaying()) {
@@ -207,9 +220,16 @@ void App::UpdateStudio(double dt) {
         } else {
             d.time += dt;
         }
-        if (d.time * kMmdFps >= d.EndFrame()) {
-            d.time = d.EndFrame() / (double)kMmdFps;
-            StudioSetPlaying(false);
+        // the range plays through its last frame; without a range the timeline ends at EndFrame
+        const int start = d.HasRange() ? d.view.rangeStart : 0;
+        const int end = d.HasRange() ? d.view.rangeEnd + 1 : d.EndFrame();
+        if (d.time * kMmdFps >= end) {
+            if (d.loop && end > start) {
+                StudioSeek(start / (double)kMmdFps);  // also moves the audio; the backwards jump resets physics
+            } else {
+                d.time = (d.HasRange() ? d.view.rangeEnd : d.EndFrame()) / (double)kMmdFps;
+                StudioSetPlaying(false);
+            }
         }
     }
 }
@@ -219,20 +239,23 @@ void App::UpdateStudioScene() {
     const uint64_t slot = ctx_.FrameNumber();
     const float frame = (float)(d.time * kMmdFps);
 
+    // Physics runs while playing and when stepping one frame forward; any other jump (seek, scrub, loop) resets it
+    // like play mode does. Paused on the same frame: no simulation (dt 0).
     float physicsDt = 0.0f;
     bool resetPhysics = d.physicsFrame < 0.0f;
     if (!resetPhysics) {
-        physicsDt = (frame - d.physicsFrame) / kMmdFps;
-        if (physicsDt < 0.0f || physicsDt > 0.25f) resetPhysics = true;
+        const float df = frame - d.physicsFrame;
+        if (d.playing) resetPhysics = df < 0.0f || df > 0.25f * kMmdFps;
+        else if (std::fabs(df) > 1e-3f) resetPhysics = df < 0.0f || df > 1.0f + 1e-3f;
+        if (!resetPhysics) physicsDt = std::max(0.0f, df) / kMmdFps;
     }
-    if (resetPhysics) physicsDt = 0.0f;
     d.physicsFrame = frame;
 
     for (auto& mp : d.models) {
         StudioModel& m = *mp;
         // Re-bind after edits (throttled while a curve is being dragged: binding a long dance takes a while).
         if (m.boundVersion != m.motionVersion && (!d.curveEditing || timeSeconds_ - studioLastBind_ > 0.15)) {
-            const double t0 = timeSeconds_;
+            OpTimer timer{"bind motion"};
             if (m.motion.bones.empty() && m.motion.morphs.empty() && m.motion.ik.empty()) {
                 m.bound.reset();
             } else {
@@ -241,14 +264,13 @@ void App::UpdateStudioScene() {
             }
             m.boundVersion = m.motionVersion;
             studioLastBind_ = timeSeconds_;
-            (void)t0;
         }
         ModelInstance& inst = *m.inst;
         if (m.bound) m.bound->Evaluate(frame, inst);
         else inst.ResetPose();
         if (!m.isStage) {
             inst.SetScale(m.libraryId.empty() ? 1.0f : settings_.CharacterScale(m.libraryId));
-            inst.EnablePhysics(settings_.physics && !options_.noPhysics);
+            inst.EnablePhysics(d.physics);
             if (resetPhysics) inst.ResetPhysics();
         }
         if (!m.isStage || m.bound) inst.UpdatePose(physicsDt);
@@ -350,20 +372,25 @@ void App::StudioPushTrackEdit(const char* name, const std::vector<TrackState>& b
 }
 
 void App::StudioInsertKeys(const std::vector<uint64_t>& rows, int frame) {
+    OpTimer timer{"StudioInsertKeys"};
     StudioDoc& d = *studio_;
     std::vector<TrackState> before;
     std::set<KeyId> inserted;
+    std::set<std::pair<int, std::string>> seen;  // a bone listed in two display frames has two rows
     for (uint64_t row : rows) {
         RowKind kind;
         std::string name;
         if (!StudioTrackOfRow(row, kind, name)) continue;
-        before.push_back(CaptureTrack(d, d.selectedModel, kind, name));
+        if (seen.insert({(int)kind, name}).second) before.push_back(CaptureTrack(d, d.selectedModel, kind, name));
     }
     if (before.empty()) return;
+    seen.clear();
     for (uint64_t row : rows) {
         RowKind kind;
         std::string name;
         if (!StudioTrackOfRow(row, kind, name)) continue;
+        inserted.insert({row, frame});
+        if (!seen.insert({(int)kind, name}).second) continue;
         if (kind == RowKind::Camera) {
             CameraKf k;
             if (!d.useMotionCamera || d.camera.camera.empty()) {
@@ -389,14 +416,304 @@ void App::StudioInsertKeys(const std::vector<uint64_t>& rows, int frame) {
             auto& track = d.models[d.selectedModel]->motion.morphs[name];
             UpsertKey(track, MorphKf{frame, track.empty() ? 0.0f : SampleMorph(track, frame)});
         }
-        inserted.insert({row, frame});
     }
     StudioPushTrackEdit(Tr("키 추가"), before);
     d.selection = std::move(inserted);
     d.rowsKey = ~0ull;
 }
 
+std::vector<int> App::StudioRowFrames(uint64_t row) const {
+    std::vector<int> out;
+    RowKind kind;
+    std::string name;
+    if (!StudioTrackOfRow(row, kind, name)) return out;
+    const StudioDoc& d = *studio_;
+    const auto add = [&](const auto& keys) {
+        out.reserve(keys.size());
+        for (const auto& k : keys) out.push_back(k.frame);
+    };
+    if (kind == RowKind::Camera) {
+        add(d.camera.camera);
+    } else {
+        const MotionData& m = d.models[d.selectedModel]->motion;
+        if (kind == RowKind::Bone) {
+            if (auto it = m.bones.find(name); it != m.bones.end()) add(it->second);
+        } else if (auto it = m.morphs.find(name); it != m.morphs.end()) {
+            add(it->second);
+        }
+    }
+    return out;
+}
+
+std::vector<uint64_t> App::StudioExpandRows(const std::set<uint64_t>& rows) const {
+    const StudioDoc& d = *studio_;
+    std::vector<uint64_t> out;
+    std::set<uint64_t> seen;
+    for (uint64_t r : rows) {
+        if (RowKindOf(r) == RowKind::Group) {
+            if (auto it = d.groupChildren.find(r); it != d.groupChildren.end())
+                for (uint64_t c : it->second)
+                    if (seen.insert(c).second) out.push_back(c);
+        } else if (seen.insert(r).second) {
+            out.push_back(r);
+        }
+    }
+    return out;
+}
+
+std::vector<uint64_t> App::StudioTargetRows() const {
+    const StudioDoc& d = *studio_;
+    std::set<uint64_t> rows = d.selectedRows;
+    for (const KeyId& k : d.selection) rows.insert(k.first);
+    return StudioExpandRows(rows);
+}
+
+void App::StudioSelectAll() {
+    OpTimer timer{"StudioSelectAll"};
+    StudioDoc& d = *studio_;
+    d.selection.clear();
+    d.selectedRows.clear();
+    std::set<uint64_t> all;
+    if (d.selectedModel < 0) all.insert(MakeRowId(RowKind::Camera, 0, 0));
+    for (const auto& [group, children] : d.groupChildren) all.insert(group);
+    for (uint64_t row : StudioExpandRows(all))
+        for (int f : StudioRowFrames(row)) d.selection.emplace_hint(d.selection.end(), row, f);
+    d.rowsKey = ~0ull;
+}
+
+void App::StudioDeleteSelected(const char* undoName) {
+    OpTimer timer{"StudioDeleteSelected"};
+    StudioDoc& d = *studio_;
+    if (d.selection.empty()) return;
+    const std::vector<TrackState> before = StudioCaptureSelectedTracks();
+    std::map<std::pair<int, std::string>, std::set<int>> frames;
+    for (const KeyId& k : d.selection) {
+        RowKind kind;
+        std::string name;
+        if (StudioTrackOfRow(k.first, kind, name)) frames[{(int)kind, name}].insert(k.second);
+    }
+    for (const auto& [track, fs] : frames) {
+        const RowKind kind = (RowKind)track.first;
+        if (kind == RowKind::Camera) EraseKeyFrames(d.camera.camera, fs);
+        else if (kind == RowKind::Bone) EraseKeyFrames(d.models[d.selectedModel]->motion.bones[track.second], fs);
+        else EraseKeyFrames(d.models[d.selectedModel]->motion.morphs[track.second], fs);
+    }
+    StudioPushTrackEdit(undoName, before);
+    d.selection.clear();
+    d.rowsKey = ~0ull;
+}
+
+void App::StudioCopySelected() {
+    OpTimer timer{"StudioCopySelected"};
+    StudioDoc& d = *studio_;
+    if (d.selection.empty()) return;
+    d.clipboard.clear();
+    const int base = std::min_element(d.selection.begin(), d.selection.end(),
+                                      [](const KeyId& a, const KeyId& b) { return a.second < b.second; })->second;
+    for (const KeyId& k : d.selection) {
+        RowKind kind;
+        std::string name;
+        if (!StudioTrackOfRow(k.first, kind, name)) continue;
+        ClipboardKey c;
+        c.row = k.first;
+        c.offset = k.second - base;
+        bool found = false;
+        if (kind == RowKind::Camera) {
+            if (const CameraKf* p = FindKey(d.camera.camera, k.second)) { c.camera = *p; found = true; }
+        } else if (kind == RowKind::Bone) {
+            const auto& t = d.models[d.selectedModel]->motion.bones;
+            if (auto it = t.find(name); it != t.end())
+                if (const BoneKf* p = FindKey(it->second, k.second)) { c.bone = *p; found = true; }
+        } else {
+            const auto& t = d.models[d.selectedModel]->motion.morphs;
+            if (auto it = t.find(name); it != t.end())
+                if (const MorphKf* p = FindKey(it->second, k.second)) { c.morph = *p; found = true; }
+        }
+        if (found) d.clipboard.push_back(c);
+    }
+    d.clipboardModel = d.clipboard.empty() ? -2 : d.selectedModel;
+}
+
+namespace {
+// Copies the interpolation curves of `src` onto `dst`, keeping dst's MMD physics flags (bytes 2/3).
+void CopyBoneCurves(const uint8_t src[64], uint8_t dst[64]) {
+    uint8_t c[4];
+    for (int ch = 0; ch < 4; ++ch) {
+        GetBoneCurve(src, ch, c);
+        SetBoneCurve(dst, ch, c);
+    }
+}
+} // namespace
+
+void App::StudioPaste(bool curvesOnly) {
+    OpTimer timer{"StudioPaste"};
+    StudioDoc& d = *studio_;
+    if (d.clipboard.empty() || d.clipboardModel != d.selectedModel) return;
+    const int at = d.Frame();
+    std::vector<TrackState> before;
+    std::set<std::pair<int, std::string>> seen;
+    for (const ClipboardKey& c : d.clipboard) {
+        RowKind kind;
+        std::string name;
+        if (StudioTrackOfRow(c.row, kind, name) && seen.insert({(int)kind, name}).second)
+            before.push_back(CaptureTrack(d, d.selectedModel, kind, name));
+    }
+    std::set<KeyId> pasted;
+    for (const ClipboardKey& c : d.clipboard) {
+        RowKind kind;
+        std::string name;
+        if (!StudioTrackOfRow(c.row, kind, name)) continue;
+        const int f = at + c.offset;
+        if (curvesOnly) {
+            // interpolation only, onto keys that already exist at the target frames (morph keys have none)
+            if (kind == RowKind::Camera) {
+                CameraKf* k = FindKey(d.camera.camera, f);
+                if (!k) continue;
+                std::memcpy(k->interp, c.camera.interp, sizeof(k->interp));
+            } else if (kind == RowKind::Bone) {
+                auto& t = d.models[d.selectedModel]->motion.bones;
+                auto it = t.find(name);
+                BoneKf* k = it != t.end() ? FindKey(it->second, f) : nullptr;
+                if (!k) continue;
+                CopyBoneCurves(c.bone.interp, k->interp);
+            } else {
+                continue;
+            }
+        } else if (kind == RowKind::Camera) { CameraKf k = c.camera; k.frame = f; UpsertKey(d.camera.camera, k); }
+        else if (kind == RowKind::Bone) { BoneKf k = c.bone; k.frame = f; UpsertKey(d.models[d.selectedModel]->motion.bones[name], k); }
+        else { MorphKf k = c.morph; k.frame = f; UpsertKey(d.models[d.selectedModel]->motion.morphs[name], k); }
+        pasted.insert({c.row, f});
+    }
+    if (pasted.empty()) return;  // curve paste with no key at any target frame: nothing changed
+    StudioPushTrackEdit(curvesOnly ? Tr("곡선만 붙여넣기") : Tr("키 붙여넣기"), before);
+    d.selection = std::move(pasted);
+    d.rowsKey = ~0ull;
+}
+
+void App::StudioRegisterKeys() {
+    StudioDoc& d = *studio_;
+    const std::vector<uint64_t> rows = StudioTargetRows();
+    if (rows.empty()) {
+        toast_ = {Tr("행이나 키를 먼저 선택하세요"), Tr("행 이름을 클릭하면 그 행이 선택돼요."), {}, false, timeSeconds_ + 3.0};
+        return;
+    }
+    StudioInsertKeys(rows, d.Frame());
+}
+
+void App::StudioShiftFrames(bool remove) {
+    OpTimer timer{"StudioShiftFrames"};
+    StudioDoc& d = *studio_;
+    const int at = d.HasRange() ? d.view.rangeStart : d.Frame();
+    const int count = d.HasRange() ? d.view.rangeEnd - d.view.rangeStart + 1 : 1;
+    const char* undoName = remove ? Tr("프레임 삭제") : Tr("프레임 삽입");
+    const std::vector<uint64_t> rows = StudioTargetRows();
+    if (rows.empty()) {
+        // every track of the shown target, IK/light/shadow included: swap the whole motion
+        if (d.selectedModel >= (int)d.models.size()) return;
+        MotionData& current = d.selectedModel < 0 ? d.camera : d.models[d.selectedModel]->motion;
+        MotionData after = current;
+        if (!(remove ? after.DeleteFrames(at, count) : after.InsertFrames(at, count))) return;
+        d.history.Push(std::make_unique<MotionSwapCommand>(d, d.selectedModel, undoName, current, std::move(after)));
+    } else {
+        std::vector<TrackState> before;
+        std::set<std::pair<int, std::string>> seen;
+        bool changed = false;
+        for (uint64_t row : rows) {
+            RowKind kind;
+            std::string name;
+            if (!StudioTrackOfRow(row, kind, name) || !seen.insert({(int)kind, name}).second) continue;
+            before.push_back(CaptureTrack(d, d.selectedModel, kind, name));
+            const auto apply = [&](auto& keys) {
+                changed |= remove ? DeleteFrameSpan(keys, at, count) : InsertFrameSpan(keys, at, count);
+            };
+            if (kind == RowKind::Camera) {
+                apply(d.camera.camera);
+            } else {
+                MotionData& m = d.models[d.selectedModel]->motion;
+                if (kind == RowKind::Bone) {
+                    if (auto it = m.bones.find(name); it != m.bones.end()) apply(it->second);
+                } else if (auto it = m.morphs.find(name); it != m.morphs.end()) {
+                    apply(it->second);
+                }
+            }
+        }
+        if (!changed) return;
+        StudioPushTrackEdit(undoName, before);  // Push re-applies the after state: emptied tracks are dropped
+    }
+    d.selection.clear();
+    d.rowsKey = ~0ull;
+}
+
+void App::StudioCopyCurve() {
+    StudioDoc& d = *studio_;
+    for (const KeyId& k : d.selection) {
+        RowKind kind;
+        std::string name;
+        if (!StudioTrackOfRow(k.first, kind, name)) continue;
+        if (kind == RowKind::Camera) {
+            if (const CameraKf* c = FindKey(d.camera.camera, k.second)) {
+                std::memcpy(d.curveClip, c->interp, sizeof(c->interp));
+                d.curveClipKind = kind;
+            }
+        } else if (kind == RowKind::Bone) {
+            const auto& t = d.models[d.selectedModel]->motion.bones;
+            if (auto it = t.find(name); it != t.end())
+                if (const BoneKf* b = FindKey(it->second, k.second)) {
+                    std::memcpy(d.curveClip, b->interp, sizeof(b->interp));
+                    d.curveClipKind = kind;
+                }
+        }
+        return;  // the first selected key decides (as in the inspector)
+    }
+}
+
+void App::StudioPasteCurve() {
+    StudioDoc& d = *studio_;
+    if (d.curveClipKind != RowKind::Bone && d.curveClipKind != RowKind::Camera) return;
+    std::vector<TrackState> before;
+    std::set<std::pair<int, std::string>> seen;
+    for (const KeyId& k : d.selection) {
+        RowKind kind;
+        std::string name;
+        if (StudioTrackOfRow(k.first, kind, name) && kind == d.curveClipKind && seen.insert({(int)kind, name}).second)
+            before.push_back(CaptureTrack(d, d.selectedModel, kind, name));
+    }
+    if (before.empty()) return;
+    for (const KeyId& k : d.selection) {
+        RowKind kind;
+        std::string name;
+        if (!StudioTrackOfRow(k.first, kind, name) || kind != d.curveClipKind) continue;
+        if (kind == RowKind::Camera) {
+            if (CameraKf* c = FindKey(d.camera.camera, k.second)) std::memcpy(c->interp, d.curveClip, sizeof(c->interp));
+        } else if (auto& t = d.models[d.selectedModel]->motion.bones; t.count(name)) {
+            if (BoneKf* b = FindKey(t[name], k.second)) CopyBoneCurves(d.curveClip, b->interp);
+        }
+    }
+    StudioPushTrackEdit(Tr("곡선 붙여넣기"), before);
+}
+
+void App::StudioJumpKey(int dir) {
+    StudioDoc& d = *studio_;
+    const int f = d.Frame();
+    int best = dir < 0 ? -1 : INT_MAX;
+    for (const TimelineRow& r : d.rows) {
+        // rows are sorted by frame: binary search for the neighbours of f
+        auto it = std::lower_bound(r.keys.begin(), r.keys.end(), f, [](const TimelineKey& k, int v) { return k.frame < v; });
+        if (dir < 0) {
+            if (it != r.keys.begin()) best = std::max(best, std::prev(it)->frame);
+        } else {
+            if (it != r.keys.end() && it->frame == f) ++it;
+            if (it != r.keys.end()) best = std::min(best, it->frame);
+        }
+    }
+    if (best >= 0 && best != INT_MAX) {
+        StudioSetPlaying(false);
+        StudioSeek(best / (double)kMmdFps);
+    }
+}
+
 void App::StudioHandleTimeline(const TimelineEvents& ev) {
+    OpTimer timer{"StudioHandleTimeline"};
     StudioDoc& d = *studio_;
     if (ev.seek) {
         StudioSetPlaying(false);
@@ -406,8 +723,45 @@ void App::StudioHandleTimeline(const TimelineEvents& ev) {
         if (!d.collapsed.erase(ev.toggledRow)) d.collapsed.insert(ev.toggledRow);
         d.rowsKey = ~0ull;
     }
+    if (ev.rowClick) {
+        // a row label selects the row and all of its keys (a group: every row in it, also when collapsed)
+        const auto selectRowKeys = [&](uint64_t row, bool add) {
+            for (uint64_t r : StudioExpandRows({row}))
+                for (int f : StudioRowFrames(r)) {
+                    if (add) d.selection.insert({r, f});
+                    else d.selection.erase({r, f});
+                }
+        };
+        const uint64_t id = ev.rowClickId;
+        int anchorIndex = -1, index = -1;
+        for (int i = 0; i < (int)d.rows.size(); ++i) {
+            if (d.rows[i].id == d.rowAnchor) anchorIndex = i;
+            if (d.rows[i].id == id) index = i;
+        }
+        if (ev.rowClickMode == RowClickMode::Range && anchorIndex >= 0 && index >= 0) {
+            d.selectedRows.clear();
+            d.selection.clear();
+            for (int i = std::min(anchorIndex, index); i <= std::max(anchorIndex, index); ++i) {
+                d.selectedRows.insert(d.rows[i].id);
+                selectRowKeys(d.rows[i].id, true);
+            }
+        } else if (ev.rowClickMode == RowClickMode::Toggle) {
+            if (d.selectedRows.erase(id)) selectRowKeys(id, false);
+            else { d.selectedRows.insert(id); selectRowKeys(id, true); }
+            d.rowAnchor = id;
+        } else {
+            d.selectedRows = {id};
+            d.selection.clear();
+            selectRowKeys(id, true);
+            d.rowAnchor = id;
+        }
+        d.rowsKey = ~0ull;
+    }
     if (ev.select) {
-        if (ev.selectMode == SelectMode::Replace) d.selection.clear();
+        if (ev.selectMode == SelectMode::Replace) {
+            d.selection.clear();
+            d.selectedRows.clear();
+        }
         for (const TimelineKeyRef& k : ev.selectKeys) {
             const KeyId id{k.row, k.frame};
             if (ev.selectMode == SelectMode::Toggle && d.selection.count(id)) d.selection.erase(id);
@@ -418,102 +772,35 @@ void App::StudioHandleTimeline(const TimelineEvents& ev) {
     if (ev.moveKeys && !d.selection.empty()) {
         const std::vector<TrackState> before = StudioCaptureSelectedTracks();
         std::map<std::pair<int, std::string>, std::set<int>> frames;  // (kind, name) -> selected frames
-        std::map<std::pair<int, std::string>, uint64_t> rowOf;
+        std::map<std::pair<int, std::string>, std::set<uint64_t>> rowsOf;  // a bone can be listed in two groups
         for (const KeyId& k : d.selection) {
             RowKind kind;
             std::string name;
             if (!StudioTrackOfRow(k.first, kind, name)) continue;
             frames[{(int)kind, name}].insert(k.second);
-            rowOf[{(int)kind, name}] = k.first;
+            rowsOf[{(int)kind, name}].insert(k.first);
         }
         std::set<KeyId> moved;
         for (const auto& [track, fs] : frames) {
             const RowKind kind = (RowKind)track.first;
-            if (kind == RowKind::Camera) MoveKeys(d.camera.camera, fs, ev.moveDelta);
-            else if (kind == RowKind::Bone) MoveKeys(d.models[d.selectedModel]->motion.bones[track.second], fs, ev.moveDelta);
-            else MoveKeys(d.models[d.selectedModel]->motion.morphs[track.second], fs, ev.moveDelta);
-            for (int f : fs) moved.insert({rowOf[track], std::max(0, f + ev.moveDelta)});
+            if (kind == RowKind::Camera) MoveKeyFrames(d.camera.camera, fs, ev.moveDelta);
+            else if (kind == RowKind::Bone) MoveKeyFrames(d.models[d.selectedModel]->motion.bones[track.second], fs, ev.moveDelta);
+            else MoveKeyFrames(d.models[d.selectedModel]->motion.morphs[track.second], fs, ev.moveDelta);
+            for (uint64_t row : rowsOf[track])
+                for (int f : fs) moved.insert({row, std::max(0, f + ev.moveDelta)});
         }
         StudioPushTrackEdit(Tr("키 이동"), before);
         d.selection = std::move(moved);
         d.rowsKey = ~0ull;
     }
-    if (ev.deleteKeys && !d.selection.empty()) {
-        const std::vector<TrackState> before = StudioCaptureSelectedTracks();
-        std::map<std::pair<int, std::string>, std::set<int>> frames;
-        for (const KeyId& k : d.selection) {
-            RowKind kind;
-            std::string name;
-            if (StudioTrackOfRow(k.first, kind, name)) frames[{(int)kind, name}].insert(k.second);
-        }
-        for (const auto& [track, fs] : frames) {
-            const RowKind kind = (RowKind)track.first;
-            if (kind == RowKind::Camera) EraseKeys(d.camera.camera, fs);
-            else if (kind == RowKind::Bone) EraseKeys(d.models[d.selectedModel]->motion.bones[track.second], fs);
-            else EraseKeys(d.models[d.selectedModel]->motion.morphs[track.second], fs);
-        }
-        StudioPushTrackEdit(Tr("키 삭제"), before);
-        d.selection.clear();
-        d.rowsKey = ~0ull;
-    }
     if (ev.addKeyAt) StudioInsertKeys({ev.addKeyRow}, ev.addKeyFrame);
-    if (ev.copyKeys && !d.selection.empty()) {
-        d.clipboard.clear();
-        const int base = std::min_element(d.selection.begin(), d.selection.end(),
-                                          [](const KeyId& a, const KeyId& b) { return a.second < b.second; })->second;
-        for (const KeyId& k : d.selection) {
-            RowKind kind;
-            std::string name;
-            if (!StudioTrackOfRow(k.first, kind, name)) continue;
-            ClipboardKey c;
-            c.row = k.first;
-            c.offset = k.second - base;
-            bool found = false;
-            if (kind == RowKind::Camera) {
-                if (const CameraKf* p = FindKey(d.camera.camera, k.second)) { c.camera = *p; found = true; }
-            } else if (kind == RowKind::Bone) {
-                const auto& t = d.models[d.selectedModel]->motion.bones;
-                if (auto it = t.find(name); it != t.end())
-                    if (const BoneKf* p = FindKey(it->second, k.second)) { c.bone = *p; found = true; }
-            } else {
-                const auto& t = d.models[d.selectedModel]->motion.morphs;
-                if (auto it = t.find(name); it != t.end())
-                    if (const MorphKf* p = FindKey(it->second, k.second)) { c.morph = *p; found = true; }
-            }
-            if (found) d.clipboard.push_back(c);
-        }
-        d.clipboardModel = d.clipboard.empty() ? -2 : d.selectedModel;
-    }
-    if (ev.pasteKeys && !d.clipboard.empty() && d.clipboardModel == d.selectedModel) {
-        const int at = d.Frame();
-        std::vector<TrackState> before;
-        std::set<std::pair<int, std::string>> seen;
-        for (const ClipboardKey& c : d.clipboard) {
-            RowKind kind;
-            std::string name;
-            if (StudioTrackOfRow(c.row, kind, name) && seen.insert({(int)kind, name}).second)
-                before.push_back(CaptureTrack(d, d.selectedModel, kind, name));
-        }
-        std::set<KeyId> pasted;
-        for (const ClipboardKey& c : d.clipboard) {
-            RowKind kind;
-            std::string name;
-            if (!StudioTrackOfRow(c.row, kind, name)) continue;
-            const int f = at + c.offset;
-            if (kind == RowKind::Camera) { CameraKf k = c.camera; k.frame = f; UpsertKey(d.camera.camera, k); }
-            else if (kind == RowKind::Bone) { BoneKf k = c.bone; k.frame = f; UpsertKey(d.models[d.selectedModel]->motion.bones[name], k); }
-            else { MorphKf k = c.morph; k.frame = f; UpsertKey(d.models[d.selectedModel]->motion.morphs[name], k); }
-            pasted.insert({c.row, f});
-        }
-        StudioPushTrackEdit(Tr("키 붙여넣기"), before);
-        d.selection = std::move(pasted);
-        d.rowsKey = ~0ull;
-    }
 }
 
 void App::StudioRebuildRows() {
+    OpTimer timer{"StudioRebuildRows"};
     StudioDoc& d = *studio_;
     d.rows.clear();
+    d.groupChildren.clear();
     auto keysOf = [&](uint64_t rowId, const auto& keys, std::vector<TimelineKey>& out) {
         out.reserve(keys.size());
         for (const auto& k : keys) out.push_back({k.frame, d.selection.count({rowId, k.frame}) != 0});
@@ -522,6 +809,7 @@ void App::StudioRebuildRows() {
         TimelineRow r;
         r.id = MakeRowId(RowKind::Camera, 0, 0);
         r.label = Tr("카메라");
+        r.selected = d.selectedRows.count(r.id) != 0;
         keysOf(r.id, d.camera.camera, r.keys);
         d.rows.push_back(std::move(r));
         return;
@@ -539,6 +827,8 @@ void App::StudioRebuildRows() {
         group.isGroup = true;
         group.keysEditable = false;
         group.expanded = !d.collapsed.count(group.id);
+        group.selected = d.selectedRows.count(group.id) != 0;
+        std::vector<uint64_t>& childIds = d.groupChildren[group.id];
         std::set<int> summary;
         std::vector<TimelineRow> children;
         std::set<std::pair<bool, int32_t>> listed;  // some models list a bone twice in one frame
@@ -561,6 +851,8 @@ void App::StudioRebuildRows() {
                     for (const auto& k : t->second) summary.insert(k.frame);
                 }
             }
+            r.selected = d.selectedRows.count(r.id) != 0;
+            childIds.push_back(r.id);
             if (group.expanded) children.push_back(std::move(r));
         }
         for (int f : summary) group.keys.push_back({f, false});
@@ -923,7 +1215,7 @@ void App::DrawStudioInspector(float x0, float y0, float x1, float y1) {
         ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + w);  // local coordinates
         ImGui::PushStyleColor(ImGuiCol_Text, ImGui::ColorConvertU32ToFloat4(p.ink3));
         PushFont(Font::Regular, size::Small);
-        ImGui::TextWrapped("%s", Tr("타임라인에서 키를 클릭하거나 드래그해서 선택하세요. 빈 칸을 더블클릭하면 그 프레임에 키를 추가합니다."));
+        ImGui::TextWrapped("%s", Tr("타임라인에서 키를 클릭하거나 드래그해서 선택하세요. 행 이름을 클릭하면 그 행의 키가 모두 선택되고, 빈 칸을 더블클릭하면 그 프레임에 키를 추가합니다."));
         PopFont();
         ImGui::PopStyleColor();
         ImGui::PopTextWrapPos();
@@ -994,6 +1286,14 @@ void App::DrawStudioInspector(float x0, float y0, float x1, float y1) {
     {
         const ImVec2 c = ImGui::GetCursorScreenPos();
         Text(cdl, Font::Semibold, size::Caption, c, p.ink3, Tr("보간 곡선"));
+        // copy the first selected key's curves / paste them onto every selected key of the same kind
+        ImGui::SetCursorScreenPos(ImVec2(c.x + w - Dp(2.0f * 28.0f + 4.0f), c.y - Dp(6.0f)));
+        if (IconButton("##curvecopy", icon::Copy, Tr("곡선 복사"), false, 28.0f)) StudioCopyCurve();
+        ImGui::SameLine(0, Dp(4.0f));
+        ImGui::BeginDisabled(d.curveClipKind != kind);
+        if (IconButton("##curvepaste", icon::ClipboardText, Tr("곡선 붙여넣기 (선택한 키 전체)"), false, 28.0f)) StudioPasteCurve();
+        ImGui::EndDisabled();
+        ImGui::SetCursorScreenPos(ImVec2(c.x, c.y));
         ImGui::Dummy(ImVec2(w, Dp(22.0f)));
     }
     if (kind == RowKind::Bone) {
@@ -1047,52 +1347,86 @@ void App::DrawStudioTimeline(float x0, float y0, float x1, float y1) {
 
     // transport
     const float th = Dp(kTransportH), cy = y0 + th * 0.5f;
+    const auto separator = [&](float x) { dl->AddLine(ImVec2(x, cy - Dp(11.0f)), ImVec2(x, cy + Dp(11.0f)), p.line); };
     ImGui::SetCursorScreenPos(ImVec2(x0 + Dp(12.0f), cy - Dp(17.0f)));
     if (IconButton("##start", icon::CaretLineLeft, Tr("처음으로  (Home)"), false, 34.0f)) StudioSeek(0.0);
     ImGui::SameLine(0, Dp(2.0f));
-    // previous / next key of the shown tracks
-    auto jumpKey = [&](int dir) {
-        const int f = d.Frame();
-        int best = dir < 0 ? -1 : INT_MAX;
-        for (const TimelineRow& r : d.rows)
-            for (const TimelineKey& k : r.keys)
-                if (dir < 0 ? (k.frame < f && k.frame > best) : (k.frame > f && k.frame < best)) best = k.frame;
-        if (best >= 0 && best != INT_MAX) {
-            StudioSetPlaying(false);
-            StudioSeek(best / (double)kMmdFps);
-        }
-    };
-    if (IconButton("##prevkey", icon::SkipBack, Tr("이전 키"), false, 34.0f)) jumpKey(-1);
+    if (IconButton("##prevkey", icon::SkipBack, Tr("이전 키  (Ctrl+←)"), false, 34.0f)) StudioJumpKey(-1);
     ImGui::SameLine(0, Dp(2.0f));
     if (IconButton("##play", d.playing ? icon::Pause : icon::Play, d.playing ? Tr("일시정지  (Space)") : Tr("재생  (Space)"),
                    d.playing, 34.0f))
         StudioSetPlaying(!d.playing);
     ImGui::SameLine(0, Dp(2.0f));
-    if (IconButton("##nextkey", icon::SkipForward, Tr("다음 키"), false, 34.0f)) jumpKey(1);
+    if (IconButton("##nextkey", icon::SkipForward, Tr("다음 키  (Ctrl+→)"), false, 34.0f)) StudioJumpKey(1);
+    ImGui::SameLine(0, Dp(2.0f));
+    if (IconButton("##end", icon::CaretLineRight, Tr("끝으로  (End)"), false, 34.0f)) StudioSeek(d.EndFrame() / (double)kMmdFps);
+    ImGui::SameLine(0, Dp(2.0f));
+    if (IconButton("##loop", icon::Repeat,
+                   d.HasRange() ? Tr("구간 반복") : Tr("반복 재생  (눈금자를 Shift+드래그하면 구간 지정)"), d.loop, 34.0f))
+        d.loop = !d.loop;
     ImGui::SameLine(0, Dp(12.0f));
 
+    // frame field: applied on Enter (typing must not seek on every digit)
     int frame = d.Frame();
     ImGui::SetNextItemWidth(Dp(84.0f));
     ImGui::SetCursorScreenPos(ImVec2(ImGui::GetCursorScreenPos().x, cy - ImGui::GetFrameHeight() * 0.5f));
-    if (ImGui::InputInt("##frame", &frame, 0, 0)) {
+    if (ImGui::InputInt("##frame", &frame, 0, 0, ImGuiInputTextFlags_EnterReturnsTrue)) {
         StudioSetPlaying(false);
         StudioSeek(std::max(0, frame) / (double)kMmdFps);
     }
-    Tooltip(Tr("현재 프레임"));
+    Tooltip(Tr("현재 프레임 (Enter로 이동)"));
     ImGui::SameLine(0, Dp(12.0f));
+    float tx = ImGui::GetCursorScreenPos().x;
     {
         const std::string t = FormatTime(d.time) + "  /  " + FormatTime(d.EndFrame() / (double)kMmdFps);
-        const ImVec2 c = ImGui::GetCursorScreenPos();
-        Text(dl, Font::Regular, size::Small, ImVec2(c.x, cy - Dp(9.0f)), p.ink2, t.c_str());
+        Text(dl, Font::Regular, size::Small, ImVec2(tx, cy - Dp(9.0f)), p.ink2, t.c_str());
+        tx += TextSize(Font::Regular, size::Small, t.c_str()).x + Dp(16.0f);
+    }
+    if (d.HasRange()) {
+        // range chip: "Range a–b" + clear
+        char buf[64];
+        std::snprintf(buf, sizeof(buf), Tr("구간 %d–%d"), d.view.rangeStart, d.view.rangeEnd);
+        ImVec2 bs;
+        Badge(dl, ImVec2(tx, cy - Dp(10.0f)), buf, p.accentSoft, p.accentInk, &bs);
+        ImGui::SetCursorScreenPos(ImVec2(tx + bs.x + Dp(2.0f), cy - Dp(14.0f)));
+        if (IconButton("##clearrange", icon::X, Tr("구간 해제  (눈금자 우클릭)"), false, 28.0f)) d.view.rangeStart = d.view.rangeEnd = -1;
     }
 
-    ImGui::SetCursorScreenPos(ImVec2(x1 - Dp(12.0f + 34.0f), cy - Dp(17.0f)));
+    // right side: frame insert/delete | physics | view
+    float rx = x1 - Dp(12.0f + 34.0f);
+    ImGui::SetCursorScreenPos(ImVec2(rx, cy - Dp(17.0f)));
     ImGui::BeginDisabled(!d.cameraEval);
     if (IconButton("##motioncam", icon::VideoCamera,
                    d.useMotionCamera ? Tr("카메라 모션으로 보는 중 (클릭: 자유 카메라)") : Tr("자유 카메라 (클릭: 카메라 모션)"),
                    d.useMotionCamera && d.cameraEval, 34.0f))
         d.useMotionCamera = !d.useMotionCamera;
     ImGui::EndDisabled();
+    separator(rx - Dp(8.0f));
+    rx -= Dp(16.0f + 34.0f);
+    ImGui::SetCursorScreenPos(ImVec2(rx, cy - Dp(17.0f)));
+    if (IconButton("##physreset", icon::ArrowCcw, Tr("물리 초기화"), false, 34.0f)) d.physicsFrame = -1.0f;
+    rx -= Dp(2.0f + 34.0f);
+    ImGui::SetCursorScreenPos(ImVec2(rx, cy - Dp(17.0f)));
+    if (IconButton("##physics", icon::Atom, d.physics ? Tr("물리 켜짐 (클릭: 끄기)") : Tr("물리 꺼짐 (클릭: 켜기)"), d.physics, 34.0f)) {
+        d.physics = !d.physics;
+        d.physicsFrame = -1.0f;  // start from the motion's pose
+    }
+    separator(rx - Dp(8.0f));
+    {
+        const bool range = d.HasRange();
+        const int n = range ? d.view.rangeEnd - d.view.rangeStart + 1 : 1;
+        const bool rows = !d.selectedRows.empty() || !d.selection.empty();
+        char tipDel[160], tipIns[160];
+        std::snprintf(tipIns, sizeof(tipIns), range ? Tr("구간 앞에 %d프레임 삽입") : Tr("현재 프레임에 %d프레임 삽입"), n);
+        std::snprintf(tipDel, sizeof(tipDel), range ? Tr("구간의 %d프레임 삭제") : Tr("현재 프레임에서 %d프레임 삭제"), n);
+        const std::string scope = std::string("  (") + (rows ? Tr("선택한 행") : Tr("모든 행")) + ")";
+        rx -= Dp(16.0f + 34.0f);
+        ImGui::SetCursorScreenPos(ImVec2(rx, cy - Dp(17.0f)));
+        if (IconButton("##delframes", icon::ArrowsInLineHorizontal, (tipDel + scope).c_str(), false, 34.0f)) StudioShiftFrames(true);
+        rx -= Dp(2.0f + 34.0f);
+        ImGui::SetCursorScreenPos(ImVec2(rx, cy - Dp(17.0f)));
+        if (IconButton("##insframes", icon::ArrowsOutLineHorizontal, (tipIns + scope).c_str(), false, 34.0f)) StudioShiftFrames(false);
+    }
 
     // timeline
     const uint64_t key = (uint64_t)(d.selectedModel + 2) * 1000003ull;

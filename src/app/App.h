@@ -39,8 +39,10 @@ namespace mmdx {
 //   --capture <file.png>   capture the final frame (with --frames) to a PNG
 //   --ui-script <file>     scripted ImGui input for UI tests (UiScript.cpp): lines "<frame> <command> [args]",
 //                          frame = frames counted like --frames; commands: move x y | down [l|r|m] | up [l|r|m] |
-//                          click x y | dblclick x y | wheel dy | key <ImGuiKey name> [ctrl] [shift] | capture <file.png> |
-//                          log <text> | studiostate (logs the Studio's frame, selection, key counts, undo) |
+//                          click x y | dblclick x y | wheel dy | key <ImGuiKey name> [ctrl] [shift] | text <chars> |
+//                          mod <ctrl|shift> <down|up> (held across mouse steps) |
+//                          capture <file.png> | log <text> |
+//                          studiostate (logs the Studio's frame, selection, rows, range, key counts, undo) |
 //                          studioexport <file.vmd> | studioimport <file.vmd> (the Studio's VMD export/import
 //                          without the dialogs).
 //                          Coordinates in window pixels.
@@ -217,6 +219,18 @@ private:
     std::vector<studio::TrackState> StudioCaptureSelectedTracks();
     bool StudioTrackOfRow(uint64_t row, studio::RowKind& kind, std::string& name) const;
     void StudioInsertKeys(const std::vector<uint64_t>& rows, int frame);  // key the current value of each row
+    std::vector<int> StudioRowFrames(uint64_t row) const;                 // key frames of a bone/morph/camera row
+    std::vector<uint64_t> StudioExpandRows(const std::set<uint64_t>& rows) const;  // groups -> their key rows
+    std::vector<uint64_t> StudioTargetRows() const;  // picked rows + rows of selected keys (expanded)
+    void StudioSelectAll();
+    void StudioDeleteSelected(const char* undoName);
+    void StudioCopySelected();
+    void StudioPaste(bool curvesOnly);               // at the current frame; curvesOnly: interpolation onto existing keys
+    void StudioRegisterKeys();                       // I: key the target rows at the current frame
+    void StudioShiftFrames(bool remove);             // MMD frame insert/delete (range length or 1 frame)
+    void StudioCopyCurve();                          // inspector: interpolation of the first selected key
+    void StudioPasteCurve();                         // onto every selected key of the same kind
+    void StudioJumpKey(int dir);                     // previous/next key of the shown rows
     void StudioImportVmd();                                   // open dialog, then StudioImportVmdFrom
     void StudioImportVmdFrom(const std::filesystem::path& path);  // merge into the selected model (camera VMDs: camera)
     void StudioExportVmd();                                   // save dialog, then StudioExportVmdTo
@@ -406,6 +420,7 @@ private:
     std::vector<UiScriptStep> uiScript_;
     size_t uiScriptNext_ = 0;
     bool uiScriptLoaded_ = false;
+    float uiScriptMouse_[2] = {-1e30f, -1e30f};  // last scripted mouse position (re-sent every frame)
 
     // studio
     std::unique_ptr<studio::StudioDoc> studio_;

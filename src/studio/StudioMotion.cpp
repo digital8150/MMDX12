@@ -69,6 +69,62 @@ int MotionData::EndFrame() const {
     return end;
 }
 
+bool MotionData::InsertFrames(int at, int count) {
+    if (count <= 0 || at < 0) return false;
+    bool changed = false;
+    for (auto& [name, keys] : bones) changed |= InsertFrameSpan(keys, at, count);
+    for (auto& [name, keys] : morphs) changed |= InsertFrameSpan(keys, at, count);
+    for (auto& [name, keys] : ik) changed |= InsertFrameSpan(keys, at, count);
+    changed |= InsertFrameSpan(camera, at, count);
+    changed |= InsertFrameSpan(light, at, count);
+    for (VmdShadowKey& k : shadow) {
+        if ((int64_t)k.frame >= (int64_t)at) { k.frame = (uint32_t)((int64_t)k.frame + count); changed = true; }
+    }
+    return changed;
+}
+
+bool MotionData::DeleteFrames(int at, int count) {
+    if (count <= 0 || at < 0) return false;
+    bool changed = false;
+    for (auto& [name, keys] : bones) changed |= DeleteFrameSpan(keys, at, count);
+    for (auto& [name, keys] : morphs) changed |= DeleteFrameSpan(keys, at, count);
+    for (auto& [name, keys] : ik) changed |= DeleteFrameSpan(keys, at, count);
+    changed |= DeleteFrameSpan(camera, at, count);
+    changed |= DeleteFrameSpan(light, at, count);
+    // Tracks that lost their last key are removed from the maps.
+    for (auto it = bones.begin(); it != bones.end();) it = it->second.empty() ? bones.erase(it) : std::next(it);
+    for (auto it = morphs.begin(); it != morphs.end();) it = it->second.empty() ? morphs.erase(it) : std::next(it);
+    for (auto it = ik.begin(); it != ik.end();) it = it->second.empty() ? ik.erase(it) : std::next(it);
+    const int64_t lo = at, hi = (int64_t)at + count;
+    std::vector<VmdShadowKey> out;
+    out.reserve(shadow.size());
+    for (const VmdShadowKey& k : shadow) {
+        const int64_t f = (int64_t)k.frame;
+        if (f >= lo && f < hi) { changed = true; continue; }  // erased
+        VmdShadowKey copy = k;
+        if (f >= hi) { copy.frame = (uint32_t)(f - count); changed = true; }
+        out.push_back(copy);
+    }
+    shadow.swap(out);
+    return changed;
+}
+
+size_t MotionData::ApproxBytes() const {
+    size_t bytes = sizeof(MotionData) + modelName.size();
+    const auto mapBytes = [](const auto& tracks) {
+        size_t n = 0;
+        for (const auto& [name, keys] : tracks) n += 64 + name.size() + keys.capacity() * sizeof(typename std::decay_t<decltype(keys)>::value_type);
+        return n;
+    };
+    bytes += mapBytes(bones);
+    bytes += mapBytes(morphs);
+    bytes += mapBytes(ik);
+    bytes += camera.capacity() * sizeof(CameraKf);
+    bytes += light.capacity() * sizeof(LightKf);
+    bytes += shadow.capacity() * sizeof(VmdShadowKey);
+    return bytes;
+}
+
 MotionData MotionData::FromVmd(const VmdMotion& vmd) {
     MotionData d;
     d.modelName = vmd.modelName;

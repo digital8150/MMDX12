@@ -28,7 +28,8 @@ progress.md is the session log. Read its latest entry first.
     stills use the effects chosen at scene entry (`AppSettings`). Check `build_dev` builds when `build/` is locked by a running render.
   - Studio: `--character <s> [--stage <s>] [--song <s>] --screen studio --seek <sec> --frames N --capture out.png`.
   - Scripted UI input: `--ui-script file.txt` (lines `<frame> <command> [args]`: move/down/up/click/dblclick/wheel/key,
-    `capture <png>`, `studiostate` logs a `STUDIOSTATE` line, `studioexport`/`studioimport <vmd>` skip the file dialogs).
+    `capture <png>`, `text <chars>`, `mod ctrl|shift down|up`, `studiostate` logs a `STUDIOSTATE` line,
+    `studioexport`/`studioimport <vmd>` skip the file dialogs). While a script runs, real mouse/keyboard input is ignored.
     Frames count like `--frames`. Use it to click through editor features headlessly (examples: `captures/studio/t*.txt`).
   - Benchmark: `--benchmark dx12-raster-fhd --bench-frames 600 --frames 100000` (result goes to `build/bin/mmdx12.log` as a `BENCHMARK` line)
   - GI render benchmark: `--benchmark dx12-gi-render` (quits by itself; ~41 s). Quick check: add `--bench-spp 64 --offline-size 960 540`.
@@ -39,6 +40,7 @@ progress.md is the session log. Read its latest entry first.
   - `anim_probe <pmx> <vmd> [cam.vmd]`: IK convergence, CPU skinning bounds, NaN scan, physics scan (explosions, cost)
   - `render_smoke`: renders a cube with no assets
   - `vmd_roundtrip <file|dir> [--vpd-selftest]`: VMD load -> save -> load comparison (SaveVmd), VPD self test
+  - `studio_edit_test`: Studio key-edit core (move/insert/delete frames, undo byte budget, 100k-key timings)
 - The play bar auto-hides while playing with no mouse movement, so captures usually don't show it.
 
 ## Architecture (src/)
