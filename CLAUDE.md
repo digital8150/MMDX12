@@ -27,11 +27,16 @@ progress.md is the session log. Read its latest entry first.
     The dialog's effects are `VideoRenderConfig` (bloom, convolution bloom, volumetric, DoF only for the real-time renderers);
     stills use the effects chosen at scene entry (`AppSettings`). Check `build_dev` builds when `build/` is locked by a running render.
   - Studio: `--character <s> [--stage <s>] [--song <s>] --screen studio --seek <sec> --frames N --capture out.png`.
+    `--screen studio` without `--character` opens a new empty project; `--project <file.mmdxproj>` opens a project.
   - Scripted UI input: `--ui-script file.txt` (lines `<frame> <command> [args]`: move/down/up/click/dblclick/wheel/key,
     `capture <png>`, `text <chars>`, `mod ctrl|shift down|up`, `studiostate` logs a `STUDIOSTATE` line,
     `studioexport`/`studioimport <vmd>` and `studiovpdexport`/`studiovpdimport <vpd>` skip the file dialogs; pose editing:
     `studiobone <name>` clicks that bone's joint, `studiogizmo <x|y|z|yz|zx|xy|rx|ry|rz> <dx> <dy> [steps]` drags a gizmo
-    part; `studiostate` also logs `STUDIOPOSE`). While a script runs, real mouse/keyboard input is ignored.
+    part; `studiostate` also logs `STUDIOPOSE`, `STUDIOPROJ` and one `STUDIOMODEL` line per model). Projects/models
+    without dialogs: `studionew`, `studiosave`/`studioopen <file>`, `studioautosave`, `studioadd <character|stage|prop> <file>`,
+    `studioaddlib <character|stage> <substr>`, `studiosong <substr>`, `studioaudio <file|none> [offset]`,
+    `studioselect`/`studioremove <index>`, `studiorename <text>`, `studioattach <parent|-1> <bone|-> tx ty tz rx ry rz s`.
+    While a script runs, real mouse/keyboard input is ignored.
     Frames count like `--frames`. Use it to click through editor features headlessly (examples: `captures/studio/t*.txt`).
   - Benchmark: `--benchmark dx12-raster-fhd --bench-frames 600 --frames 100000` (result goes to `build/bin/mmdx12.log` as a `BENCHMARK` line)
   - GI render benchmark: `--benchmark dx12-gi-render` (quits by itself; ~41 s). Quick check: add `--bench-spp 64 --offline-size 960 540`.
@@ -44,6 +49,7 @@ progress.md is the session log. Read its latest entry first.
   - `vmd_roundtrip <file|dir> [--vpd-selftest]`: VMD load -> save -> load comparison (SaveVmd), VPD self test
   - `studio_edit_test`: Studio key-edit core (move/insert/delete frames, undo byte budget, 100k-key timings)
   - `studio_gizmo_test` / `studio_pose_test`: gizmo projection/hit/drag math and bone overlay; mirror names/poses, VPD pose ops
+  - `studio_project_test`: .mmdxproj save/load round trip, VMD naming/cleanup, atomic writes, prop offset matrix
 - The play bar auto-hides while playing with no mouse movement, so captures usually don't show it.
 
 ## Architecture (src/)
@@ -86,6 +92,16 @@ progress.md is the session log. Read its latest entry first.
     self-shadow (`ShadowKf`, stepped, VMD distance = 0.1 - UI*1e-5) tracks as timeline rows `RowKind::Camera/Light/Shadow`.
     In the studio the light track overrides the preset's key light and the shadow track sets `FrameView::shadowsOff`/
     `shadowDistance` (play mode ignores VMD light/shadow). Perspective-off keys render as a 3 degree lens from far away.
+  - Projects (`studio/StudioProject.*`, `app/UiStudioProject.cpp`): `.mmdxproj` is UTF-8 JSON (format version, relative
+    paths) next to standard VMDs (`<stem> - <model>.vmd`, `<stem> - camera.vmd`); every file is written tmp + rename.
+    Dirty = `history.Version()` or `projectVersion` (add/remove/rename/visibility/audio) changed since the save. Autosave
+    every 60 s on a worker thread to `<exe>/recovery/` (also on window close with unsaved work, not in `--frames`/script
+    runs); the select screen offers it at the next start; saving or leaving the studio deletes it.
+  - Models are added inside the studio on worker threads (`StudioJob`, `LoadStudioModel/Stage/Song`), uploaded in
+    `StudioPollJobs`. `StudioModel::uid` is stable; removal waits for the GPU and clears the undo history (commands hold
+    model indices). Kinds: character, stage (static BLAS), prop (GPU role Character so its BLAS follows it): the prop's
+    root = `PropOffsetMatrix(attach) * parent bone world * parent scale`, set with `ModelInstance::SetRootTransform`
+    after the other models are posed (props parent to characters/stages only).
 - `OfflineRenderer` (render/OfflineRenderer.h) is independent of `RenderSettings`: `Renderer::BeginOffline` builds the TLAS,
   then `Renderer::RenderOffline` replaces `Render` each frame (GPU-time-budgeted iterations, preview present) until Done.
   Motion blur: each iteration re-skins the character at its shutter time (`RtScene::Build(..., time)`) from the models'

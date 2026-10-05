@@ -72,6 +72,7 @@ void App::StartStudioLoad(const CharacterAsset* ch, const StageAsset* st, const 
     loadError_.clear();
     loadProgress_.fraction.store(0.0f, std::memory_order_relaxed);
     loadProgress_.SetStatus("");
+    studioLoadTitle_.clear();
     studioPackage_ = std::make_unique<StudioPackage>();
     const CharacterAsset c = *ch;
     const bool hasStage = st != nullptr, hasSong = song != nullptr;
@@ -83,20 +84,28 @@ void App::StartStudioLoad(const CharacterAsset* ch, const StageAsset* st, const 
 }
 
 bool App::FinishStudioLoad() {
+    StudioPackage& pkg = *studioPackage_;
     auto doc = std::make_unique<StudioDoc>();
     UploadBatch batch(ctx_);
-    for (StudioPackageModel& m : studioPackage_->models) {
+    std::vector<int> remap(pkg.models.size(), -1);  // package index -> doc index (prop parents)
+    for (size_t i = 0; i < pkg.models.size(); ++i) {
+        StudioPackageModel& m = pkg.models[i];
         auto sm = std::make_unique<StudioModel>();
         sm->name = m.name;
         sm->libraryId = m.libraryId;
-        sm->isStage = m.isStage;
+        sm->kind = m.kind;
+        sm->visible = m.visible;
+        sm->attach = m.attach;
+        sm->uid = doc->nextUid++;
         sm->path = m.pmx->sourcePath;
         sm->pmx = m.pmx;
         sm->inst = std::make_unique<ModelInstance>(m.pmx);
-        sm->gpu = renderer_.CreateModel(batch, *m.pmx, m.textures, m.isStage ? ModelRole::Stage : ModelRole::Character);
+        // props follow bones every frame: they need the per-frame (character) RT path, not the static stage BLAS
+        sm->gpu = renderer_.CreateModel(batch, *m.pmx, m.textures,
+                                        m.kind == ModelKind::Stage ? ModelRole::Stage : ModelRole::Character);
         if (!sm->gpu) {
-            if (m.isStage) {
-                LOG_WARN("studio: stage part GPU upload failed: %s", m.name.c_str());
+            if (m.kind != ModelKind::Character || pkg.fromProject) {
+                LOG_WARN("studio: GPU upload failed: %s", m.name.c_str());
                 continue;
             }
             return false;
@@ -104,23 +113,64 @@ bool App::FinishStudioLoad() {
         sm->motion = std::move(m.motion);
         sm->BuildRowGroups();
         sm->inst->UpdatePose();
+        remap[i] = (int)doc->models.size();
         doc->models.push_back(std::move(sm));
     }
     batch.Submit();
+    // prop parents: package index -> uid
+    for (auto& m : doc->models) {
+        if (!m->IsProp()) { m->attach = PropAttach{}; continue; }
+        const int p = m->attach.parent;
+        const int di = p >= 0 && p < (int)remap.size() ? remap[(size_t)p] : -1;
+        m->attach.parent = di >= 0 ? (int)doc->models[(size_t)di]->uid : -1;
+    }
 
-    doc->camera = std::move(studioPackage_->camera);
-    doc->audioPath = studioPackage_->audioPath;
+    doc->camera = std::move(pkg.camera);
+    doc->audioOffset = pkg.audioOffset;
+    doc->audioPath = pkg.audioPath;
     doc->hasAudio = !doc->audioPath.empty() && audio_.Load(doc->audioPath);
     if (doc->hasAudio) {
-        doc->audioEndFrame = (float)(audio_.DurationSeconds() * kMmdFps);
+        doc->audioEndFrame = (float)((audio_.DurationSeconds() + doc->audioOffset) * kMmdFps);
         audio_.SetMuted(false);
+    } else if (!doc->audioPath.empty()) {
+        pkg.warnings.push_back(Tr("음원을 열 수 없습니다: ") + PathToUtf8(doc->audioPath));
+        doc->audioPath.clear();
     }
-    doc->useMotionCamera = !doc->camera.camera.empty() && !options_.freeCamera;
     doc->physics = settings_.physics && !options_.noPhysics;
-    doc->selectedModel = (int)doc->models.size() - 1;  // the character
-    doc->time = std::max(0.0, options_.seekSeconds);
-    options_.seekSeconds = 0;
     freeCam_ = FreeCamera{};
+    if (pkg.fromProject) {
+        const ProjectEditor& e = pkg.editor;
+        const int sel = e.selectedModel >= 0 && e.selectedModel < (int)remap.size() ? remap[(size_t)e.selectedModel] : -1;
+        doc->selectedModel = sel;
+        doc->time = std::max(0, e.frame) / (double)kMmdFps;
+        doc->useMotionCamera = e.useMotionCamera && !doc->camera.camera.empty();
+        doc->useLightTrack = e.useLightTrack;
+        doc->useShadowTrack = e.useShadowTrack;
+        doc->showCameraPath = e.showCameraPath;
+        doc->loop = e.loop;
+        doc->physics = e.physics && !options_.noPhysics;
+        doc->view.rangeStart = e.rangeStart;
+        doc->view.rangeEnd = e.rangeEnd;
+        doc->view.pxPerFrame = std::clamp(e.pxPerFrame, 0.2f, 40.0f);
+        freeCam_.target = e.camTarget;
+        freeCam_.yaw = e.camYaw;
+        freeCam_.pitch = std::clamp(e.camPitch, -1.45f, 1.45f);
+        freeCam_.distance = std::clamp(e.camDistance, 2.0f, 600.0f);
+        freeCam_.fovDeg = std::clamp(e.camFovDeg, 5.0f, 120.0f);
+        doc->projectPath = pkg.projectPath;  // recovery: the project the autosave belongs to (may be empty)
+        if (!pkg.recovered && !pkg.projectPath.empty()) {
+            settings_.AddRecentProject(PathToUtf8(pkg.projectPath));
+            settings_.Save(settingsPath_);
+        }
+    } else {
+        doc->useMotionCamera = !doc->camera.camera.empty() && !options_.freeCamera;
+        // the character (the last model of a library scene); the camera in an empty project
+        doc->selectedModel = -1;
+        for (int i = (int)doc->models.size() - 1; i >= 0; --i)
+            if (doc->models[(size_t)i]->kind == ModelKind::Character) { doc->selectedModel = i; break; }
+        doc->time = std::max(0.0, options_.seekSeconds);
+    }
+    options_.seekSeconds = 0;
     if (options_.hasCamera) {
         const float* c = options_.camera;
         freeCam_.target = {c[0], c[1], c[2]};
@@ -129,18 +179,40 @@ bool App::FinishStudioLoad() {
         freeCam_.distance = c[5];
         doc->useMotionCamera = false;
     }
+    // a recovered autosave is unsaved work; a project opened from disk or a fresh scene is clean
+    doc->MarkSaved();
+    if (pkg.recovered) ++doc->projectVersion;
+    doc->autosavedStamp = doc->ChangeStamp();
+    if (!pkg.warnings.empty()) {
+        std::string detail;
+        for (size_t i = 0; i < pkg.warnings.size() && i < 3; ++i) detail += (i ? "\n" : "") + pkg.warnings[i];
+        if (pkg.warnings.size() > 3) detail += "\n...";
+        toast_ = {Tr("일부 파일을 불러오지 못했어요"), detail, {}, true, timeSeconds_ + 8.0};
+        for (const std::string& w : pkg.warnings) LOG_WARN("studio: %s", w.c_str());
+    }
+    StudioEnter(std::move(doc));
+    return true;
+}
+
+void App::StudioEnter(std::unique_ptr<StudioDoc> doc) {
     studio_ = std::move(doc);
     studioCamPath_.clear();  // cached per camera evaluator version, which restarts with the document
     studioCamKeys_.clear();
     studioKeyEdit_ = false;
     studioLastBind_ = 0;
+    studioLeaveConfirm_ = false;
+    studioPending_ = StudioAction::None;
+    studioViewDrag_ = 0;
+    studioAutosaveAt_ = timeSeconds_;
     lastRenderedTime_ = -1;
-    framesInScene_ = 0;
+    if (uiScriptNext_ == 0) framesInScene_ = 0;  // a running ui script keeps its frame clock across project switches
+    if (studio_->hasAudio) StudioSeekAudio();
     screen_ = Screen::Studio;
-    return true;
 }
 
 void App::LeaveStudio() {
+    studioJobs_.clear();  // waits for running loads
+    StudioDiscardRecovery();
     ctx_.WaitForGpu();
     studio_.reset();
     audio_.Unload();
@@ -148,6 +220,7 @@ void App::LeaveStudio() {
     rs.viewportX = rs.viewportY = rs.viewportW = rs.viewportH = 0;
     renderer_.SetSettings(rs);
     studioLeaveConfirm_ = false;
+    studioPending_ = StudioAction::None;
     screen_ = Screen::Select;
 }
 
@@ -158,7 +231,18 @@ void App::LeaveStudio() {
 void App::StudioSeek(double seconds) {
     StudioDoc& d = *studio_;
     d.time = std::clamp(seconds, 0.0, d.EndFrame() / (double)kMmdFps);
-    if (d.hasAudio) audio_.Seek(d.time);
+    if (d.hasAudio) StudioSeekAudio();
+}
+
+void App::StudioSeekAudio() {
+    // timeline time t plays audio position t - audioOffset; before the audio starts (negative position) it waits
+    const StudioDoc& d = *studio_;
+    if (!d.hasAudio) return;
+    const double a = d.time - d.audioOffset;
+    const bool inside = a >= 0.0 && a < audio_.DurationSeconds() - 0.02;
+    audio_.Seek(std::max(0.0, a));
+    if (d.playing && inside) audio_.Play();
+    else audio_.Pause();
 }
 
 void App::StudioSetPlaying(bool play) {
@@ -172,14 +256,7 @@ void App::StudioSetPlaying(bool play) {
         }
     }
     d.playing = play;
-    if (d.hasAudio) {
-        if (play) {
-            audio_.Seek(d.time);
-            audio_.Play();
-        } else {
-            audio_.Pause();
-        }
-    }
+    if (d.hasAudio) StudioSeekAudio();
 }
 
 void App::UpdateStudio(double dt) {
@@ -219,14 +296,23 @@ void App::UpdateStudio(double dt) {
         if (!ctrl && pressed(ImGuiKey_W, false)) d.gizmoTool = 1;
         if (!ctrl && pressed(ImGuiKey_L, false)) d.gizmoLocal = !d.gizmoLocal;
         if (pressed(ImGuiKey_Escape, false) && studioViewDrag_ != 2 && d.activeBone >= 0) StudioSelectBone(-1, false);
+        if (ctrl && pressed(ImGuiKey_S, false)) StudioSave(shift);
+        if (ctrl && pressed(ImGuiKey_O, false)) StudioRequest(StudioAction::Open);
+        if (ctrl && pressed(ImGuiKey_N, false)) StudioRequest(StudioAction::New);
+        if (studio_.get() != &d) return;  // the project was closed or replaced (New / Open)
     }
+    StudioPollJobs();
+    StudioAutosave(false, false);
     if (d.playing) {
         if (d.hasAudio && audio_.IsPlaying()) {
-            const double a = audio_.PositionSeconds();
+            const double a = audio_.PositionSeconds() + d.audioOffset;
             const double predicted = d.time + dt;
             d.time = std::fabs(predicted - a) > 0.05 ? a : predicted;
         } else {
             d.time += dt;
+            // the audio starts later on the timeline (positive offset): start it when the playhead reaches it
+            const double a = d.time - d.audioOffset;
+            if (d.hasAudio && a >= 0.0 && a < audio_.DurationSeconds() - 0.05) StudioSeekAudio();
         }
         // the range plays through its last frame; without a range the timeline ends at EndFrame
         const int start = d.HasRange() ? d.view.rangeStart : 0;
@@ -280,39 +366,45 @@ void App::UpdateStudioScene() {
     }
     d.physicsFrame = frame;
 
-    for (auto& mp : d.models) {
-        StudioModel& m = *mp;
-        // Re-bind after edits (throttled while a curve is being dragged: binding a long dance takes a while).
-        if (m.boundVersion != m.motionVersion && (!d.curveEditing || timeSeconds_ - studioLastBind_ > 0.15)) {
-            OpTimer timer{"bind motion"};
-            if (m.motion.bones.empty() && m.motion.morphs.empty() && m.motion.ik.empty()) {
-                m.bound.reset();
-            } else {
-                const VmdMotion vmd = m.motion.ToVmd();
-                m.bound = BoundMotion::Bind(*m.pmx, {&vmd});
-            }
-            m.boundVersion = m.motionVersion;
-            studioLastBind_ = timeSeconds_;
-        }
-        ModelInstance& inst = *m.inst;
-        if (m.bound) m.bound->Evaluate(frame, inst);
-        else inst.ResetPose();
-        if (!m.isStage) StudioApplyPose(m);
-        if (!m.isStage) {
-            inst.SetScale(m.libraryId.empty() ? 1.0f : settings_.CharacterScale(m.libraryId));
-            inst.EnablePhysics(d.physics);
-            if (resetPhysics) inst.ResetPhysics();
-        }
-        if (!m.isStage || m.bound) inst.UpdatePose(physicsDt);
-        m.gpu->UpdateSkinning(slot, inst.SkinMatrices());
-        m.gpu->UpdateMorphs(slot, inst.VertexMorphDeltas(), inst.MorphVersion());
-    }
+    // props last: their root follows a bone of a model posed in the first pass
+    for (int pass = 0; pass < 2; ++pass)
+        for (auto& mp : d.models)
+            if (mp->IsProp() == (pass == 1)) StudioUpdateModel(*mp, slot, frame, physicsDt, resetPhysics);
 
     if (d.cameraEvalVersion != d.cameraVersion) {
         d.cameraEval = d.camera.camera.empty() ? nullptr : CameraMotion::Create(d.camera.ToVmd());
         d.cameraEvalVersion = d.cameraVersion;
         if (!d.cameraEval) d.useMotionCamera = false;
     }
+}
+
+void App::StudioUpdateModel(StudioModel& m, uint64_t slot, float frame, float physicsDt, bool resetPhysics) {
+    StudioDoc& d = *studio_;
+    // Re-bind after edits (throttled while a curve is being dragged: binding a long dance takes a while).
+    if (m.boundVersion != m.motionVersion && (!d.curveEditing || timeSeconds_ - studioLastBind_ > 0.15)) {
+        OpTimer timer{"bind motion"};
+        if (m.motion.bones.empty() && m.motion.morphs.empty() && m.motion.ik.empty()) {
+            m.bound.reset();
+        } else {
+            const VmdMotion vmd = m.motion.ToVmd();
+            m.bound = BoundMotion::Bind(*m.pmx, {&vmd});
+        }
+        m.boundVersion = m.motionVersion;
+        studioLastBind_ = timeSeconds_;
+    }
+    ModelInstance& inst = *m.inst;
+    if (m.bound) m.bound->Evaluate(frame, inst);
+    else inst.ResetPose();
+    if (!m.IsStage()) StudioApplyPose(m);
+    if (m.kind == ModelKind::Character) {
+        inst.SetScale(m.libraryId.empty() ? 1.0f : settings_.CharacterScale(m.libraryId));
+        inst.EnablePhysics(d.physics);
+        if (resetPhysics) inst.ResetPhysics();
+    }
+    if (m.IsProp()) inst.SetRootTransform(StudioPropRoot(m));
+    if (!m.IsStage() || m.bound) inst.UpdatePose(physicsDt);
+    m.gpu->UpdateSkinning(slot, inst.SkinMatrices());
+    m.gpu->UpdateMorphs(slot, inst.VertexMorphDeltas(), inst.MorphVersion());
 }
 
 void App::StudioCamera(CameraParams& camera) const {
@@ -342,13 +434,16 @@ void App::BuildStudioFrameView(FrameView& view) {
     StudioDoc& d = *studio_;
     StudioCamera(view.camera);
 
+    // stage parts first (the renderer's draw order), then characters and props
     bool anyStage = false;
     const StudioModel* performer = nullptr;
-    for (const auto& m : d.models) {
-        if (!m->visible) continue;
-        view.models.push_back(m->gpu.get());
-        if (m->isStage) anyStage = true;
-        else if (!performer) performer = m.get();
+    for (int pass = 0; pass < 2; ++pass) {
+        for (const auto& m : d.models) {
+            if (!m->visible || m->IsStage() != (pass == 0)) continue;
+            view.models.push_back(m->gpu.get());
+            if (m->IsStage()) anyStage = true;
+            else if (!performer && m->kind == ModelKind::Character) performer = m.get();
+        }
     }
     view.studioFloor = !anyStage;
 
@@ -1082,7 +1177,6 @@ bool App::StudioExportVmdTo(const std::filesystem::path& path) {
         toast_ = {Tr("VMD를 저장하지 못했습니다"), err, {}, true, timeSeconds_ + 5.0};
         return false;
     }
-    d.savedVersion = d.history.Version();
     toast_ = {Tr("VMD로 내보냈어요"), PathToUtf8(path.filename()), path, false, timeSeconds_ + 5.0};
     return true;
 }
@@ -1110,7 +1204,7 @@ void App::DrawStudio() {
     const float top = Dp(kTopBarH), left = Dp(kOutlinerW), right = ds.x - Dp(kInspectorW), bottom = ds.y - Dp(kBottomH);
     DrawStudioViewport(left, top, right, bottom);
     DrawStudioTopBar(0, 0, ds.x, top);
-    if (!studio_) {  // left the studio from the back button
+    if (studio_.get() != &d) {  // left the studio (back button) or replaced the project (project menu)
         ImGui::End();
         return;
     }
@@ -1118,41 +1212,10 @@ void App::DrawStudio() {
     DrawStudioInspector(right, top, ds.x, bottom);
     DrawStudioTimeline(0, bottom, ds.x, ds.y);
 
-    // Unsaved changes prompt
-    if (studioLeaveConfirm_) {
-        ImGui::OpenPopup("##leavestudio");
-        ImGui::SetNextWindowPos(ImVec2(ds.x * 0.5f, ds.y * 0.5f), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
-        ImGui::SetNextWindowSize(ImVec2(Dp(400.0f), 0.0f));
-        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(Dp(24.0f), Dp(22.0f)));
-        ImGui::PushStyleColor(ImGuiCol_PopupBg, ImGui::ColorConvertU32ToFloat4(P().surface));
-        if (ImGui::BeginPopupModal("##leavestudio", nullptr, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize)) {
-            ImDrawList* dl = ImGui::GetWindowDrawList();
-            const ImVec2 c = ImGui::GetCursorScreenPos();
-            Text(dl, Font::Semibold, size::Title, c, P().ink, Tr("내보내지 않은 편집이 있어요"));
-            Text(dl, Font::Regular, size::Small, ImVec2(c.x, c.y + Dp(30.0f)), P().ink2,
-                 Tr("나가면 VMD로 내보내지 않은 변경 사항이 사라집니다."));
-            ImGui::Dummy(ImVec2(0, Dp(64.0f)));
-            if (Button("##stay", Tr("계속 편집"), nullptr, ButtonKind::Secondary, ImVec2(170.0f, 40.0f))) {
-                studioLeaveConfirm_ = false;
-                ImGui::CloseCurrentPopup();
-            }
-            ImGui::SameLine(0, Dp(12.0f));
-            bool leave = false;
-            if (Button("##leave", Tr("나가기"), nullptr, ButtonKind::Danger, ImVec2(170.0f, 40.0f))) {
-                leave = true;
-                ImGui::CloseCurrentPopup();
-            }
-            ImGui::EndPopup();
-            if (leave) {
-                ImGui::PopStyleColor();
-                ImGui::PopStyleVar();
-                ImGui::End();
-                LeaveStudio();
-                return;
-            }
-        }
-        ImGui::PopStyleColor();
-        ImGui::PopStyleVar();
+    DrawStudioUnsavedPrompt();
+    if (studio_.get() != &d) {  // left (or replaced) from the prompt
+        ImGui::End();
+        return;
     }
     ImGui::End();
     DrawToast();
@@ -1178,18 +1241,26 @@ void App::DrawStudioTopBar(float x0, float y0, float x1, float y1) {
     const float cy = (y0 + y1) * 0.5f;
     ImGui::SetCursorScreenPos(ImVec2(x0 + Dp(10.0f), cy - Dp(18.0f)));
     if (IconButton("##back", icon::ArrowLeft, Tr("라이브러리로 돌아가기"))) {
-        if (d.history.Version() != d.savedVersion) studioLeaveConfirm_ = true;
-        else {
-            LeaveStudio();
-            return;
-        }
+        StudioRequest(StudioAction::Leave);
+        if (!studio_) return;
     }
     float x = x0 + Dp(58.0f);
     Text(dl, Font::Bold, size::Title, ImVec2(x, cy - Dp(11.0f)), p.ink, Tr("스튜디오"));
-    x += TextSize(Font::Bold, size::Title, Tr("스튜디오")).x + Dp(14.0f);
-    if (d.history.Version() != d.savedVersion) {
+    x += TextSize(Font::Bold, size::Title, Tr("스튜디오")).x + Dp(12.0f);
+    // project name (the file's stem; untitled until the first save)
+    {
+        const std::string title = d.projectPath.empty() ? std::string(Tr("제목 없음")) : PathToUtf8(d.projectPath.stem());
+        const float maxX = std::min(x + Dp(260.0f), x1 - Dp(700.0f));
+        dl->AddLine(ImVec2(x - Dp(4.0f), cy - Dp(9.0f)), ImVec2(x - Dp(4.0f), cy + Dp(9.0f)), p.line);
+        x += Dp(8.0f);
+        TextEllipsis(dl, Font::Semibold, size::Body, ImVec2(x, cy - Dp(10.0f)), maxX, p.ink2, title.c_str());
+        x = std::min(maxX, x + TextSize(Font::Semibold, size::Body, title.c_str()).x) + Dp(12.0f);
+        if (!d.projectPath.empty() && ImGui::IsMouseHoveringRect(ImVec2(x0 + Dp(58.0f), y0), ImVec2(x, y1)))
+            Tooltip(PathToUtf8(d.projectPath).c_str());
+    }
+    if (d.Dirty()) {
         ImVec2 bs;
-        Badge(dl, ImVec2(x, cy - Dp(10.0f)), Tr("내보내지 않음"), p.warnSoft, p.warn, &bs);
+        Badge(dl, ImVec2(x, cy - Dp(10.0f)), Tr("저장 안 됨"), p.warnSoft, p.warn, &bs);
         x += bs.x + Dp(14.0f);
     }
 
@@ -1207,17 +1278,28 @@ void App::DrawStudioTopBar(float x0, float y0, float x1, float y1) {
     if (IconButton("##redo", icon::ArrowCw, redoTip.c_str())) { d.history.Redo(); d.selection.clear(); d.rowsKey = ~0ull; }
     ImGui::EndDisabled();
 
-    // import / export (right)
+    // right: project menu | VMD import / export | save
     const char* target = d.selectedModel < 0 ? Tr("카메라") : (d.Selected() ? d.Selected()->name.c_str() : "");
-    const float exportW = 150.0f, importW = 150.0f;
-    ImGui::SetCursorScreenPos(ImVec2(x1 - Dp(14.0f + exportW + 10.0f + importW), cy - Dp(19.0f)));
-    if (Button("##import", Tr("VMD 불러오기"), icon::FolderOpen, ButtonKind::Secondary, ImVec2(importW, 38.0f)))
+    const float vmdW = 140.0f, saveW = 104.0f;
+    float rx = x1 - Dp(14.0f + saveW);
+    ImGui::SetCursorScreenPos(ImVec2(rx, cy - Dp(19.0f)));
+    if (Button("##save", Tr("저장"), icon::FloppyDisk, ButtonKind::Primary, ImVec2(saveW, 38.0f))) StudioSave(false);
+    Tooltip(Tr("프로젝트 저장  (Ctrl+S)"));
+    rx -= Dp(10.0f + vmdW);
+    ImGui::SetCursorScreenPos(ImVec2(rx, cy - Dp(19.0f)));
+    if (Button("##export", Tr("VMD 내보내기"), icon::Export, ButtonKind::Secondary, ImVec2(vmdW, 38.0f))) StudioExportVmd();
+    Tooltip((std::string(Tr("내보낼 대상: ")) + target).c_str());
+    rx -= Dp(8.0f + vmdW);
+    ImGui::SetCursorScreenPos(ImVec2(rx, cy - Dp(19.0f)));
+    if (Button("##import", Tr("VMD 불러오기"), icon::FolderOpen, ButtonKind::Secondary, ImVec2(vmdW, 38.0f)))
         StudioImportVmd();
     Tooltip((std::string(Tr("불러올 대상: ")) + target).c_str());
-    ImGui::SameLine(0, Dp(10.0f));
-    if (Button("##export", Tr("VMD 내보내기"), icon::Export, ButtonKind::Primary, ImVec2(exportW, 38.0f)))
-        StudioExportVmd();
-    Tooltip((std::string(Tr("내보낼 대상: ")) + target).c_str());
+    rx -= Dp(14.0f + 36.0f);
+    dl->AddLine(ImVec2(rx + Dp(36.0f + 7.0f), cy - Dp(11.0f)), ImVec2(rx + Dp(36.0f + 7.0f), cy + Dp(11.0f)), p.line);
+    ImGui::SetCursorScreenPos(ImVec2(rx, cy - Dp(18.0f)));
+    if (IconButton("##projmenu", icon::List, Tr("프로젝트: 새로 만들기, 열기, 다른 이름으로 저장"))) ImGui::OpenPopup("##studioproj");
+    ImGui::SetNextWindowPos(ImVec2(rx + Dp(36.0f), y1 + Dp(6.0f)), ImGuiCond_Always, ImVec2(1.0f, 0.0f));
+    DrawStudioProjectMenu();
 }
 
 void App::DrawStudioOutliner(float x0, float y0, float x1, float y1) {
@@ -1228,11 +1310,20 @@ void App::DrawStudioOutliner(float x0, float y0, float x1, float y1) {
     dl->AddRectFilled(ImVec2(x0, y0), ImVec2(x1, y1), p.surface);
     dl->AddLine(ImVec2(x1 - 0.5f, y0), ImVec2(x1 - 0.5f, y1), p.line);
     Text(dl, Font::Semibold, size::Caption, ImVec2(x0 + Dp(16.0f), y0 + Dp(14.0f)), p.ink3, Tr("장면"));
+    // "+": add a character / stage / prop / audio / song (library or file)
+    ImGui::SetCursorScreenPos(ImVec2(x1 - Dp(12.0f + 28.0f), y0 + Dp(6.0f)));
+    if (IconButton("##addmodel", icon::Plus, Tr("추가: 캐릭터, 스테이지, 소품, 음원, 곡"), false, 28.0f)) {
+        studioAddPage_ = 0;
+        studioAddFilter_[0] = 0;
+        ImGui::OpenPopup("##studioadd");
+    }
+    bool openAdd = false;
 
     ImGui::SetCursorScreenPos(ImVec2(x0, y0 + Dp(38.0f)));
     ImGui::BeginChild("##outliner", ImVec2(x1 - x0 - 1.0f, y1 - y0 - Dp(38.0f)), ImGuiChildFlags_None,
                       ImGuiWindowFlags_NoBackground);
     const float rowH = Dp(40.0f);
+    int menuFor = -100;  // row whose context menu opens this frame
     auto row = [&](int index, const char* glyph, const char* label, const char* sub, bool* visible) {
         ImGui::PushID(index);
         ImDrawList* cdl = ImGui::GetWindowDrawList();
@@ -1240,58 +1331,129 @@ void App::DrawStudioOutliner(float x0, float y0, float x1, float y1) {
         const float w = ImGui::GetContentRegionAvail().x;
         const ImVec2 b(a.x + w, a.y + rowH);
         const bool selected = d.selectedModel == index;
-        ImGui::InvisibleButton("##row", ImVec2(w - Dp(40.0f), rowH));
+        ImGui::InvisibleButton("##row", ImVec2(w - Dp(index >= 0 ? 72.0f : 40.0f), rowH));
         const bool hovered = ImGui::IsItemHovered();
         if (index >= 0 && hovered) Tooltip(PathToUtf8(d.models[index]->path).c_str());
-        if (ImGui::IsItemClicked() && d.selectedModel != index) {
-            d.selectedModel = index;
-            d.selection.clear();
-            d.selectedRows.clear();
-            d.selectedBones.clear();
-            d.activeBone = -1;
-            d.collapsed.clear();
-            d.rowsKey = ~0ull;
+        if (ImGui::IsItemClicked() && index > -2) StudioSelectModel(index);
+        if (index >= 0 && hovered && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
+            studioRenameModel_ = index;
+            std::snprintf(studioRenameBuf_, sizeof(studioRenameBuf_), "%s", d.models[index]->name.c_str());
         }
+        if (index != -1 && ImGui::IsItemClicked(ImGuiMouseButton_Right)) menuFor = index;
+        if (index == -2 && ImGui::IsItemClicked()) menuFor = index;
+        const bool rowHot = hovered || ImGui::IsMouseHoveringRect(a, b);
         const ImVec2 ra(a.x + Dp(8.0f), a.y + Dp(2.0f)), rb(b.x - Dp(8.0f), b.y - Dp(2.0f));
         if (selected) cdl->AddRectFilled(ra, rb, p.accentSoft, Dp(8.0f));
-        else if (hovered) cdl->AddRectFilled(ra, rb, WithAlpha(p.ink, 0.05f), Dp(8.0f));
+        else if (rowHot) cdl->AddRectFilled(ra, rb, WithAlpha(p.ink, 0.05f), Dp(8.0f));
         const ImU32 fg = selected ? p.accentInk : p.ink;
         Icon(cdl, glyph, 16.0f, ImVec2(a.x + Dp(26.0f), a.y + rowH * 0.5f), selected ? p.accentInk : p.ink2);
-        const float tx = a.x + Dp(44.0f), maxX = b.x - Dp(46.0f);
+        const float tx = a.x + Dp(44.0f), maxX = b.x - Dp(index >= 0 ? 78.0f : 46.0f);
         if (sub && *sub) {
             TextEllipsis(cdl, Font::Semibold, size::Small, ImVec2(tx, a.y + Dp(4.0f)), maxX, fg, label);
             TextEllipsis(cdl, Font::Regular, size::Caption, ImVec2(tx, a.y + Dp(21.0f)), maxX, p.ink3, sub);
         } else {
             TextEllipsis(cdl, Font::Semibold, size::Small, ImVec2(tx, a.y + Dp(11.0f)), maxX, fg, label);
         }
-        if (visible) {
-            ImGui::SameLine(0, 0);
-            ImGui::SetCursorScreenPos(ImVec2(b.x - Dp(44.0f), a.y + Dp(6.0f)));
-            if (IconButton("##vis", *visible ? icon::Eye : icon::EyeSlash, *visible ? Tr("숨기기") : Tr("보이기"), false, 28.0f))
-                *visible = !*visible;
+        if (index >= 0 && (rowHot || selected)) {
+            ImGui::SetCursorScreenPos(ImVec2(b.x - Dp(76.0f), a.y + Dp(6.0f)));
+            if (IconButton("##more", icon::DotsThree, Tr("모델 메뉴"), false, 28.0f)) menuFor = index;
         }
+        if (visible) {
+            ImGui::SetCursorScreenPos(ImVec2(b.x - Dp(44.0f), a.y + Dp(6.0f)));
+            if (IconButton("##vis", *visible ? icon::Eye : icon::EyeSlash, *visible ? Tr("숨기기") : Tr("보이기"), false, 28.0f)) {
+                *visible = !*visible;
+                ++d.projectVersion;
+            }
+        }
+        ImGui::SetCursorScreenPos(ImVec2(a.x, b.y));
+        ImGui::Dummy(ImVec2(w, 0.0f));
         ImGui::SetCursorScreenPos(ImVec2(a.x, b.y));
         ImGui::PopID();
     };
 
-    char sub[64];
+    char sub[160];
     std::snprintf(sub, sizeof(sub), Tr("키 %d개"),
                   (int)(d.camera.camera.size() + d.camera.light.size() + d.camera.shadow.size()));
-    row(-1, icon::VideoCamera, Tr("카메라"), sub, nullptr);
-    // characters first (they are what gets animated), stage parts after
-    for (int pass = 0; pass < 2; ++pass) {
+    row(-1, icon::VideoCamera, Tr("카메라 · 조명"), sub, nullptr);
+    // characters first (they are what gets animated), then props, then stage parts
+    for (int pass = 0; pass < 3; ++pass) {
+        const ModelKind kind = pass == 0 ? ModelKind::Character : pass == 1 ? ModelKind::Prop : ModelKind::Stage;
         for (int i = 0; i < (int)d.models.size(); ++i) {
             StudioModel& m = *d.models[i];
-            if (m.isStage != (pass == 1)) continue;
+            if (m.kind != kind) continue;
             size_t keys = 0;
             for (const auto& [n, k] : m.motion.bones) keys += k.size();
             for (const auto& [n, k] : m.motion.morphs) keys += k.size();
-            if (m.isStage) std::snprintf(sub, sizeof(sub), "%s", Tr("스테이지"));
-            else std::snprintf(sub, sizeof(sub), Tr("키 %d개"), (int)keys);
-            row(i, m.isStage ? icon::Mountains : icon::PersonSimple, m.name.c_str(), sub, &m.visible);
+            if (m.IsStage()) {
+                std::snprintf(sub, sizeof(sub), "%s", Tr("스테이지"));
+            } else if (m.IsProp()) {
+                const int pi = m.attach.parent >= 0 ? d.IndexOfUid((uint32_t)m.attach.parent) : -1;
+                if (pi >= 0)
+                    std::snprintf(sub, sizeof(sub), "%s · %s%s%s", Tr("소품"), d.models[pi]->name.c_str(),
+                                  m.attach.bone.empty() ? "" : " / ", m.attach.bone.c_str());
+                else
+                    std::snprintf(sub, sizeof(sub), "%s", Tr("소품 · 월드"));
+            } else {
+                std::snprintf(sub, sizeof(sub), Tr("키 %d개"), (int)keys);
+            }
+            const char* glyph = m.IsStage() ? icon::Mountains : m.IsProp() ? icon::Cube : icon::PersonSimple;
+            row(i, glyph, m.name.c_str(), sub, &m.visible);
         }
     }
+    // the audio track last (offset / replace / remove from its menu)
+    if (d.hasAudio) {
+        const std::string name = PathToUtf8(d.audioPath.filename());
+        if (std::fabs(d.audioOffset) > 1e-4) std::snprintf(sub, sizeof(sub), Tr("음원 · 오프셋 %+.2f초"), d.audioOffset);
+        else std::snprintf(sub, sizeof(sub), "%s", Tr("음원"));
+        row(-2, icon::MusicNotes, name.c_str(), sub, nullptr);
+    }
+    // loads in progress
+    for (const auto& job : studioJobs_) {
+        ImDrawList* cdl = ImGui::GetWindowDrawList();
+        const ImVec2 a = ImGui::GetCursorScreenPos();
+        const float w = ImGui::GetContentRegionAvail().x;
+        const float t = (float)ImGui::GetTime();
+        // spinning notch
+        const ImVec2 c(a.x + Dp(26.0f), a.y + rowH * 0.5f);
+        cdl->PathArcTo(c, Dp(6.5f), t * 6.0f, t * 6.0f + 4.2f, 16);
+        cdl->PathStroke(p.accent, 0, Dp(2.0f));
+        TextEllipsis(cdl, Font::Semibold, size::Small, ImVec2(a.x + Dp(44.0f), a.y + Dp(4.0f)), a.x + w - Dp(14.0f), p.ink2,
+                     job->label.c_str());
+        ProgressBar(cdl, ImVec2(a.x + Dp(44.0f), a.y + Dp(26.0f)), ImVec2(a.x + w - Dp(16.0f), a.y + Dp(30.0f)),
+                    job->progress.fraction.load(std::memory_order_relaxed));
+        ImGui::Dummy(ImVec2(w, rowH));
+    }
+    // empty project: say what to do next
+    if (d.models.empty() && studioJobs_.empty()) {
+        const float w = ImGui::GetContentRegionAvail().x;
+        const ImVec2 a(ImGui::GetCursorScreenPos().x + Dp(16.0f), ImGui::GetCursorScreenPos().y + Dp(14.0f));
+        ImDrawList* cdl = ImGui::GetWindowDrawList();
+        Text(cdl, Font::Semibold, size::Small, a, p.ink2, Tr("모델이 없어요"));
+        ImGui::SetCursorScreenPos(ImVec2(a.x, a.y + Dp(24.0f)));
+        ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + w - Dp(32.0f));
+        ImGui::PushStyleColor(ImGuiCol_Text, ImGui::ColorConvertU32ToFloat4(p.ink3));
+        PushFont(Font::Regular, size::Caption);
+        ImGui::TextWrapped("%s", Tr("캐릭터, 스테이지, 소품, 음원은 ＋ 버튼으로 라이브러리나 파일에서 추가해요."));
+        PopFont();
+        ImGui::PopStyleColor();
+        ImGui::PopTextWrapPos();
+        ImGui::SetCursorScreenPos(ImVec2(a.x, ImGui::GetCursorScreenPos().y + Dp(10.0f)));
+        if (Button("##emptyadd", Tr("캐릭터 추가"), icon::Plus, ButtonKind::Secondary, ImVec2((w - Dp(32.0f)) / Dpi(), 36.0f))) {
+            openAdd = true;
+            studioAddPage_ = 1;
+        }
+    }
+    if (menuFor != -100) ImGui::OpenPopup("##modelmenu");
+    static int menuModel = -1;  // the row whose menu is open (one popup at a time)
+    if (menuFor != -100) menuModel = menuFor;
+    DrawStudioModelMenu(menuModel);
     ImGui::EndChild();
+    if (openAdd) {
+        studioAddFilter_[0] = 0;
+        ImGui::OpenPopup("##studioadd");
+    }
+    ImGui::SetNextWindowPos(ImVec2(x1 - Dp(12.0f + 28.0f), y0 + Dp(38.0f)), ImGuiCond_Appearing);
+    DrawStudioAddMenu();
 }
 
 void App::DrawStudioInspector(float x0, float y0, float x1, float y1) {
@@ -1325,6 +1487,7 @@ void App::DrawStudioInspector(float x0, float y0, float x1, float y1) {
         ImGui::Dummy(ImVec2(w, Dp(28.0f)));
         if (m) {
             line(Tr("본 / 모프"), std::to_string(m->pmx->bones.size()) + " / " + std::to_string(m->pmx->morphs.size()));
+            if (m->IsProp()) DrawStudioPropPanel(w);
         } else {
             char counts[96];
             std::snprintf(counts, sizeof(counts), Tr("카메라 %d · 조명 %d · 섀도 %d"), (int)d.camera.camera.size(),
@@ -1718,6 +1881,17 @@ void App::DrawStudioViewport(float x0, float y0, float x1, float y1) {
     ImVec2 bs;
     Badge(dl, ImVec2(x0 + Dp(12.0f), y0 + Dp(12.0f)), label, WithAlpha(p.surface, 0.85f), p.ink2, &bs);
     StudioViewportToolbar(x0 + Dp(12.0f) + bs.x + Dp(10.0f), y0 + Dp(12.0f) + bs.y * 0.5f);
+    if (d.models.empty() && studioJobs_.empty()) {
+        const char* t1 = Tr("빈 프로젝트");
+        const char* t2 = Tr("왼쪽 위의 ＋ 버튼으로 캐릭터와 스테이지를 추가하세요");
+        const ImVec2 s1 = TextSize(Font::Semibold, size::Title, t1), s2 = TextSize(Font::Regular, size::Small, t2);
+        const float cx = (x0 + x1) * 0.5f, cy = (y0 + y1) * 0.5f;
+        const float bw = std::max(s1.x, s2.x) + Dp(48.0f), bh = s1.y + s2.y + Dp(40.0f);
+        dl->AddRectFilled(ImVec2(cx - bw * 0.5f, cy - bh * 0.5f), ImVec2(cx + bw * 0.5f, cy + bh * 0.5f),
+                          WithAlpha(p.surface, 0.82f), Dp(14.0f));
+        Text(dl, Font::Semibold, size::Title, ImVec2(cx - s1.x * 0.5f, cy - bh * 0.5f + Dp(16.0f)), p.ink, t1);
+        Text(dl, Font::Regular, size::Small, ImVec2(cx - s2.x * 0.5f, cy - bh * 0.5f + Dp(24.0f) + s1.y), p.ink2, t2);
+    }
 }
 
 } // namespace mmdx

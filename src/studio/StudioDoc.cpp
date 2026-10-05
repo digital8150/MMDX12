@@ -40,6 +40,12 @@ int StudioDoc::EndFrame() const {
     return std::max(end, 300);
 }
 
+int StudioDoc::IndexOfUid(uint32_t uid) const {
+    for (size_t i = 0; i < models.size(); ++i)
+        if (models[i]->uid == uid) return (int)i;
+    return -1;
+}
+
 void StudioDoc::TouchModel(int model) {
     if (model < 0) ++cameraVersion;
     else if (model < (int)models.size()) ++models[model]->motionVersion;

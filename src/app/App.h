@@ -48,14 +48,22 @@ namespace mmdx {
 //                          without the dialogs) | studiovpdexport/studiovpdimport <file.vpd> (pose files, current
 //                          scope) | studiobone <name> (clicks that bone's joint in the viewport) |
 //                          studiogizmo <x|y|z|yz|zx|xy|rx|ry|rz> <dx> <dy> [steps] (drags that gizmo part by dx,dy px).
-//                          studiostate also logs a STUDIOPOSE line (active bone + value, pose layer, tool).
+//                          studiostate also logs a STUDIOPOSE line (active bone + value, pose layer, tool) and a
+//                          STUDIOPROJ line + one STUDIOMODEL line per model (kind, keys, attach, root position).
+//                          Projects / models without dialogs (UiStudioProject.cpp): studionew | studiosave <file> |
+//                          studioopen <file> | studioautosave (writes the recovery file now) | studioadd
+//                          <character|stage|prop> <file> | studioaddlib <character|stage> <substr> | studiosong <substr>
+//                          (library song onto the selected model + camera + audio) | studioaudio <file|none> [offset s] |
+//                          studioselect <model index|-1> | studioremove <model index> | studiorename <text> |
+//                          studioattach <parent index|-1> <bone|-> <tx ty tz rx ry rz s> (selected prop).
 //                          Coordinates in window pixels.
 //   --width <w> --height <h>  initial window client size
 //   --debug                enable the D3D12 debug layer
 //   --free-camera          start with the free orbit camera
 //   --screen <select|stages|songs|settings|video|bench|bench-gi|studio> open that screen after the scan (UI testing;
 //                          --frames counts all frames; studio: opens --character/--stage/--song in the Studio at
-//                          --seek and counts frames from the Studio on)
+//                          --seek and counts frames from the Studio on; without --character: a new empty project)
+//   --project <file.mmdxproj>  open that Studio project after the scan (implies --screen studio)
 //   --lighting <0..3>      lighting preset for this run (Studio, Sunset, Concert, Night)
 //   --quality <0..3>       graphics preset for this run (low, medium, high, ultra)
 //   --render <raster|rt|pt>            render path for this run (override settings)
@@ -112,6 +120,7 @@ struct AppOptions {
     int offlineRenderer = -1;                          // --offline-renderer <raster|rt|pt|gi> (-1 = settings)
     bool offlineProbe = false;                         // --offline-probe: sample render for the time estimate, then quit
     int language = -1;  // --lang auto|ko|en|ja|zh for this run only (-1: keep the saved setting)
+    std::filesystem::path project;  // --project
     std::string startScreen;  // --screen select|bench: open that screen after the scan; --frames then counts every frame  // --free-camera: start in the orbit camera instead of the VMD camera
 };
 AppOptions ParseCommandLine(int argc, wchar_t** argv);  // unknown args are logged and ignored
@@ -245,6 +254,8 @@ private:
     void DrawStudioTimeline(float x0, float y0, float x1, float y1);
     void DrawStudioViewport(float x0, float y0, float x1, float y1);
     void StudioCamera(CameraParams& cam) const;      // the view the viewport shows (motion or free camera)
+    void StudioEnter(std::unique_ptr<studio::StudioDoc> doc);  // common tail of every way into the studio
+    void StudioUpdateModel(studio::StudioModel& m, uint64_t slot, float frame, float physicsDt, bool resetPhysics);
     studio::LightKf StudioPresetLightKey(int frame) const;  // the lighting preset's key light as a light key (empty track)
     // --- camera / light / self-shadow (UiStudioCamera.cpp): inspector panel, key fields, camera path, render tracks
     bool StudioCameraPerspective(float frame) const;  // the camera key's perspective switch in effect at `frame`
@@ -279,6 +290,37 @@ private:
     void DrawStudioBoneTab(float w);
     void DrawStudioMorphTab(float w);
     bool StudioScriptGizmoPoint(int part, ImVec2& out) const;  // ui-script: a screen point on a gizmo part
+
+    // --- projects, adding/removing models, props, audio, autosave (UiStudioProject.cpp)
+    enum class StudioAction { None, Leave, New, Open, OpenFile };  // what the unsaved-changes prompt guards
+    void StartStudioEmpty();                          // new empty project: camera/light tracks only (no loading)
+    void StartStudioProjectLoad(const std::filesystem::path& file, bool recovery);  // -> Loading -> Studio
+    void StudioRequest(StudioAction a, const std::filesystem::path& file = {});  // prompts first when dirty
+    void StudioRunAction(StudioAction a, const std::filesystem::path& file);
+    bool StudioSave(bool saveAs);                     // dialog when untitled or saveAs; false: cancelled / failed
+    bool StudioSaveTo(const std::filesystem::path& file);
+    studio::ProjectData StudioProjectData() const;    // snapshot of the document (copies the motions)
+    std::filesystem::path StudioRecoveryFile() const; // <exe>/recovery/autosave.mmdxproj
+    void StudioAutosave(bool force, bool wait);       // timer: writes the recovery file on a worker thread
+    void StudioDiscardRecovery();                     // waits for a running autosave, deletes the recovery files
+    void StudioAddModelFile(studio::ModelKind kind, const std::filesystem::path& file);  // async
+    void StudioAddModelDialog(studio::ModelKind kind);
+    void StudioAddLibraryCharacter(int index);
+    void StudioAddLibraryStage(int index);
+    void StudioApplyLibrarySong(int index);           // dance -> selected character, camera, audio when none
+    bool StudioSetAudio(const std::filesystem::path& file);  // empty: remove
+    void StudioAudioDialog();
+    void StudioPollJobs();                            // finished loads: GPU upload + append (main thread)
+    void StudioRemoveModel(int index);                // waits for the GPU; clears the undo history
+    void StudioSelectModel(int index);                // -1 camera
+    DirectX::XMFLOAT4X4 StudioPropRoot(const studio::StudioModel& m) const;  // world matrix of a prop's origin
+    void StudioSeekAudio();                           // audio cursor <- timeline time (audio offset)
+    void DrawStudioAddMenu();                         // the outliner's "+" popup (library / file)
+    void DrawStudioModelMenu(int index);              // outliner row context menu
+    void DrawStudioPropPanel(float w);                // inspector: prop parent / bone / offset
+    void DrawStudioUnsavedPrompt();
+    void DrawStudioProjectMenu();                     // top bar file menu (new / open / recent / save as)
+    void DrawRecoveryPrompt();                        // select screen: offer the autosave of a crashed session
 
     // --- scripted UI input for tests (UiScript.cpp)
     void PumpUiScript();  // before ImGui::NewFrame: feeds the events due at framesInScene_
@@ -465,7 +507,32 @@ private:
     std::unique_ptr<studio::StudioDoc> studio_;
     std::unique_ptr<studio::StudioPackage> studioPackage_;
     double studioLastBind_ = 0;       // timeSeconds_ of the last motion re-bind (throttled while dragging)
-    bool studioLeaveConfirm_ = false; // unsaved-changes prompt is open
+    bool studioLeaveConfirm_ = false; // unsaved-changes prompt is open (guards studioPending_)
+    StudioAction studioPending_ = StudioAction::None;
+    std::filesystem::path studioPendingFile_;
+    // async model / song loads started inside the studio
+    struct StudioJob {
+        std::string label;
+        bool song = false;                         // library song: dance/camera/audio; else models
+        std::vector<studio::StudioPackageModel> models;
+        studio::MotionData dance, camera;
+        std::filesystem::path audio;
+        uint32_t targetUid = 0;                    // song: the character it was started for (0: none)
+        LoadProgress progress;
+        std::string error;
+        std::future<bool> future;                  // last member: destroyed first, waits for the worker
+    };
+    std::vector<std::unique_ptr<StudioJob>> studioJobs_;
+    std::future<bool> studioAutosave_;             // recovery file writer
+    double studioAutosaveAt_ = 0;                  // timeSeconds_ of the last autosave check
+    bool recoveryChecked_ = false;                 // the select screen asked about a recovery file this session
+    bool recoveryPrompt_ = false;
+    int studioRenameModel_ = -1;                   // outliner rename popup target
+    int studioRemoveModel_ = -1;                   // outliner remove confirmation target
+    std::string studioLoadTitle_;                  // Loading screen title while a project opens (empty: library scene)
+    char studioRenameBuf_[128] = {};
+    char studioAddFilter_[64] = {};
+    int studioAddPage_ = 0;                        // "+" popup page: 0 menu, 1 characters, 2 stages, 3 songs
     // viewport pose editing (cached from the last drawn frame: overlay, picking, scripts)
     studio::ViewProj studioVp_;
     bool studioGizmoShown_ = false;

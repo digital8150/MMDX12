@@ -67,6 +67,9 @@ AppOptions ParseCommandLine(int argc, wchar_t** argv) {
             opt.debugLayer = true;
         } else if (arg == L"--screen") {
             opt.startScreen = WideToUtf8(next());
+        } else if (arg == L"--project") {
+            opt.project = next();
+            opt.startScreen = "studio";
         } else if (arg == L"--lang") {
             const std::string v = ToLowerAscii(WideToUtf8(next()));
             opt.language = v == "ko" ? 1 : v == "en" ? 2 : v == "ja" ? 3 : v == "zh" ? 4 : 0;
@@ -223,6 +226,11 @@ int App::Run(HINSTANCE instance, const AppOptions& options) {
     StartScan();
     MainLoop();
 
+    // Studio work is never lost by closing the window: unsaved edits go to the recovery file, offered at the next
+    // start (automated runs skip this, they would leave prompts behind for the next test).
+    studioJobs_.clear();
+    if (studio_ && studio_->Dirty() && options_.quitAfterFrames == 0 && options_.uiScript.empty()) StudioAutosave(true, true);
+    if (studioAutosave_.valid()) studioAutosave_.get();
     ctx_.WaitForGpu();
     ReleaseRenderBenchImage();
     UnloadScene();
@@ -439,6 +447,7 @@ void App::RenderFrame() {
         UpdateVideoProbe();
         DrawSelect();
         DrawVideoRenderDialog();
+        DrawRecoveryPrompt();
         DrawToast();
         break;
     case Screen::Loading: DrawLoading(); break;
@@ -658,6 +667,14 @@ void App::PollScan() {
     } else if (options_.startScreen == "settings") {
         advancedOpen_ = true;
     } else if (options_.startScreen == "studio") {
+        if (!options_.project.empty()) {
+            StartStudioProjectLoad(std::filesystem::absolute(options_.project), false);
+            return;
+        }
+        if (options_.character.empty()) {  // no preselection asked for: a new empty project
+            StartStudioEmpty();
+            return;
+        }
         if (selCharacter_ >= 0) {
             StartStudioLoad(&library_.characters[(size_t)selCharacter_],
                             selStage_ >= 0 ? &library_.stages[(size_t)selStage_] : nullptr,

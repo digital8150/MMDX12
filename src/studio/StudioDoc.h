@@ -8,6 +8,7 @@
 #include "studio/CommandStack.h"
 #include "studio/StudioMotion.h"
 #include "studio/StudioPose.h"
+#include "studio/StudioProject.h"
 #include "studio/UiTimeline.h"
 #include <cmath>
 #include <filesystem>
@@ -35,7 +36,9 @@ struct StudioModel {
     std::string name;              // outliner label
     std::string libraryId;         // character id in the library (saved display scale), empty for others
     std::filesystem::path path;
-    bool isStage = false;          // stage part: no physics, drawn before the characters
+    uint32_t uid = 0;              // stable id (prop parents, async loads); indices shift when a model is removed
+    ModelKind kind = ModelKind::Character;  // stage: no physics, drawn first; prop: follows `attach`, no physics
+    PropAttach attach;             // props: parent = uid of the parent model (-1 world)
     bool visible = true;
     std::shared_ptr<const PmxModel> pmx;
     std::unique_ptr<ModelInstance> inst;
@@ -48,6 +51,8 @@ struct StudioModel {
     // Display-frame group of each bone/morph's first timeline row (CanonicalRow); filled on load.
     std::vector<uint32_t> boneRowGroup, morphRowGroup;
     void BuildRowGroups();
+    bool IsStage() const { return kind == ModelKind::Stage; }
+    bool IsProp() const { return kind == ModelKind::Prop; }
 };
 
 // Timeline row ids: kind in the top byte, then a 24-bit group and a 32-bit index.
@@ -82,9 +87,20 @@ struct StudioDoc {
     std::shared_ptr<CameraMotion> cameraEval;
     std::filesystem::path audioPath;
     bool hasAudio = false;
-    float audioEndFrame = 0;
+    float audioEndFrame = 0;          // timeline frame where the audio ends (includes audioOffset)
+    double audioOffset = 0;           // seconds: the audio starts at this timeline time (may be negative)
     CommandStack history;
-    uint64_t savedVersion = 0;  // history.Version() at the last export (dirty marker)
+    // Project state: dirty = an undoable edit (history) or a project edit outside the history (models added/removed,
+    // audio, visibility, rename) since the last save.
+    std::filesystem::path projectPath;  // .mmdxproj, empty = never saved ("untitled")
+    uint64_t savedVersion = 0;          // history.Version() at the last save
+    uint64_t projectVersion = 1;        // bumped by project edits outside the history
+    uint64_t savedProjectVersion = 1;   // projectVersion at the last save
+    uint64_t autosavedStamp = 0;        // ChangeStamp() of the last autosave
+    uint32_t nextUid = 1;
+    bool Dirty() const { return history.Version() != savedVersion || projectVersion != savedProjectVersion; }
+    uint64_t ChangeStamp() const { return history.Version() + (projectVersion << 32); }
+    void MarkSaved() { savedVersion = history.Version(); savedProjectVersion = projectVersion; }
 
     // playback
     double time = 0;            // seconds
@@ -138,6 +154,7 @@ struct StudioDoc {
     StudioModel* Selected() { return selectedModel >= 0 && selectedModel < (int)models.size() ? models[selectedModel].get() : nullptr; }
     const StudioModel* Selected() const { return const_cast<StudioDoc*>(this)->Selected(); }
     void TouchModel(int model);       // after editing a motion (model -1 = camera)
+    int IndexOfUid(uint32_t uid) const;  // -1 when no model has it
 };
 
 // Track snapshots: the generic undoable edit. Holds whole tracks before and after an edit, which keeps
@@ -235,17 +252,41 @@ struct StudioPackageModel {
     std::shared_ptr<PmxModel> pmx;
     std::vector<ImageRGBA8> textures;
     std::string name, libraryId;
-    bool isStage = false;
-    MotionData motion;
+    ModelKind kind = ModelKind::Character;
+    bool visible = true;
+    PropAttach attach;                       // props: parent = index into StudioPackage::models (-1 world)
+    MotionData motion;                       // names canonicalised to pmx
 };
 struct StudioPackage {
     std::vector<StudioPackageModel> models;  // stage parts first
     MotionData camera;
     std::filesystem::path audioPath;
+    double audioOffset = 0;
+    // project loads only
+    bool fromProject = false;
+    ProjectEditor editor;
+    std::filesystem::path projectPath;       // the file loaded (recovery: the project it belongs to, may be empty)
+    bool recovered = false;                  // loaded from the autosave: opens dirty
+    std::vector<std::string> warnings;       // missing models / motions (shown as a toast)
 };
 // `character` is required, `stage` and `song` may be null. The song's dance + facial VMDs become the
 // character's motion (names canonicalised to the model), its camera VMD the camera track.
 bool LoadStudioPackage(const CharacterAsset& character, const StageAsset* stage, const SongAsset* song,
                        StudioPackage& out, LoadProgress* progress, std::string* error);
+// One model file (PMX, glTF/GLB/VRM, FBX/OBJ) as a character, stage or prop. Characters import with
+// asset ModelRole::Character, stages and props with ModelRole::Stage. `out.motion` stays empty.
+bool LoadStudioModel(const std::filesystem::path& path, ModelKind kind, const std::string& label,
+                     StudioPackageModel& out, LoadProgress* progress, std::string* error);
+// Every part of a library stage (failed parts are skipped with a warning; false only when none loads).
+bool LoadStudioStage(const StageAsset& stage, std::vector<StudioPackageModel>& out, LoadProgress* progress,
+                     std::string* error);
+// A library song as studio motions: dance + facial VMDs merged into `dance` (camera/light/shadow cleared, names NOT
+// canonicalised), the camera VMD's camera/light/shadow keys into `camera`. False when no VMD could be read.
+bool LoadStudioSong(const SongAsset& song, MotionData& dance, MotionData& camera, std::string* error);
+// A whole .mmdxproj (LoadProject) with its models and motions. `recovery`: the file is the autosave; projectPath
+// becomes its recoveryOf and `recovered` is set. Models whose file fails to load are skipped with a warning (prop
+// parents pointing at them become -1, later indices are remapped).
+bool LoadStudioProjectPackage(const std::filesystem::path& file, bool recovery, StudioPackage& out,
+                              LoadProgress* progress, std::string* error);
 
 } // namespace mmdx::studio

@@ -47,6 +47,9 @@ struct AppSettings {
     float CharacterScale(const std::string& id) const;
     void SetCharacterScale(const std::string& id, float scale);  // ~1 removes the entry
     int windowWidth = 1600, windowHeight = 900;
+    std::vector<std::string> recentProjects;         // studio projects (UTF-8 absolute paths), newest first, max 8
+    void AddRecentProject(const std::string& path);  // moves it to the front (case-insensitive match)
+    void RemoveRecentProject(const std::string& path);
 
     const VideoProbe* FindVideoProbe(uint64_t key) const;
     void SetVideoProbe(uint64_t key, double secondsPerFrame);  // replaces an entry with the same key

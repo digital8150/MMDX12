@@ -69,6 +69,8 @@ bool SearchField(const char* id, char* buf, size_t bufSize, const char* hint, fl
 bool TextField(const char* id, const char* label, char* buf, size_t bufSize, float widthPx, const char* hint = nullptr);
 // Choice chip with an icon (lighting presets etc.).
 bool Chip(const char* id, const char* label, const char* icon, bool selected, float widthPx = 0.0f);
+// Full-width popup menu row: icon, label, optional right-aligned hint (shortcut / caret). Returns true when clicked.
+bool MenuItem(const char* id, const char* label, const char* icon = nullptr, const char* hint = nullptr);
 void ProgressBar(ImDrawList* dl, ImVec2 a, ImVec2 b, float fraction);
 void Badge(ImDrawList* dl, ImVec2 pos, const char* text, ImU32 bg, ImU32 fg, ImVec2* outSize = nullptr);
 void Tooltip(const char* text);  // after an item, when hovered

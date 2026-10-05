@@ -87,4 +87,13 @@ inline constexpr const char* Repeat = "\xee\x8f\xb6";
 inline constexpr const char* Atom = "\xee\x97\xa4";
 inline constexpr const char* ArrowsInLineHorizontal = "\xee\x94\xb0";
 inline constexpr const char* ArrowsOutLineHorizontal = "\xee\x94\xb4";
+inline constexpr const char* ClockCounterClockwise = "\xee\x86\xa0";
+inline constexpr const char* DotsThree = "\xee\x87\xbe";
+inline constexpr const char* FilePlus = "\xee\x88\xb6";
+inline constexpr const char* FolderSimple = "\xee\x89\x9a";
+inline constexpr const char* LinkBreak = "\xee\x8b\xa4";
+inline constexpr const char* LinkSimple = "\xee\x8b\xa6";
+inline constexpr const char* MusicNotes = "\xee\x8d\x80";
+inline constexpr const char* Paperclip = "\xee\x8e\x9a";
+inline constexpr const char* PencilSimple = "\xee\x8e\xb4";
 } // namespace mmdx::icon

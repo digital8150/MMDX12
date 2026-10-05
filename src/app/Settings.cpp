@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <charconv>
+#include <cctype>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -143,6 +144,7 @@ bool AppSettings::Load(const std::filesystem::path& file) {
         else if (key == "lastCharacter") lastCharacter = value;
         else if (key == "lastStage") lastStage = value;
         else if (key == "lastSong") lastSong = value;
+        else if (key == "recentProject" && !value.empty() && recentProjects.size() < 8) recentProjects.push_back(value);
         else if (key == "windowWidth" && ParseInt(value, i)) windowWidth = i;
         else if (key == "windowHeight" && ParseInt(value, i)) windowHeight = i;
     }
@@ -177,6 +179,31 @@ float AppSettings::CharacterScale(const std::string& id) const {
 void AppSettings::SetCharacterScale(const std::string& id, float scale) {
     if (std::fabs(scale - 1.0f) < 0.005f) characterScales.erase(id);
     else characterScales[id] = std::clamp(scale, 0.25f, 4.0f);
+}
+
+namespace {
+bool SamePathText(const std::string& a, const std::string& b) {
+    if (a.size() != b.size()) return false;
+    for (size_t i = 0; i < a.size(); ++i) {
+        char x = a[i], y = b[i];
+        if (x == '\\') x = '/';
+        if (y == '\\') y = '/';
+        if (std::tolower((unsigned char)x) != std::tolower((unsigned char)y)) return false;
+    }
+    return true;
+}
+} // namespace
+
+void AppSettings::RemoveRecentProject(const std::string& path) {
+    recentProjects.erase(std::remove_if(recentProjects.begin(), recentProjects.end(),
+                                        [&](const std::string& r) { return SamePathText(r, path); }),
+                         recentProjects.end());
+}
+
+void AppSettings::AddRecentProject(const std::string& path) {
+    RemoveRecentProject(path);
+    recentProjects.insert(recentProjects.begin(), path);
+    if (recentProjects.size() > 8) recentProjects.resize(8);
 }
 
 bool AppSettings::Save(const std::filesystem::path& file) const {
@@ -219,6 +246,7 @@ bool AppSettings::Save(const std::filesystem::path& file) const {
     std::fprintf(f, "lastCharacter=%s\n", lastCharacter.c_str());
     std::fprintf(f, "lastStage=%s\n", lastStage.c_str());
     std::fprintf(f, "lastSong=%s\n", lastSong.c_str());
+    for (const std::string& r : recentProjects) std::fprintf(f, "recentProject=%s\n", r.c_str());
     std::fprintf(f, "windowWidth=%d\n", windowWidth);
     std::fprintf(f, "windowHeight=%d\n", windowHeight);
     std::fclose(f);

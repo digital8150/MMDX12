@@ -16,6 +16,7 @@
 #include "core/TextUtil.h"
 #include "imgui.h"
 #include "imgui_internal.h"
+#include "studio/FileDialog.h"
 
 namespace mmdx {
 
@@ -774,14 +775,62 @@ void App::DrawSelect() {
             videoDialogOpen_ = true;
         }
         ImGui::EndDisabled();
-        // The studio only needs a character (a song brings its motion, camera and audio along).
+        // Studio: the selected scene as a starting point, or an empty project when no character is picked; the
+        // menu next to it starts empty, opens a project file or a recent one.
         ImGui::SetCursorScreenPos(ImVec2(pa.x + ip, by + playH + Dp(10.0f)));
-        ImGui::BeginDisabled(!ch);
-        if (Button("##studio", Tr("스튜디오에서 편집"), icon::Sliders, ButtonKind::Ghost, ImVec2(innerW / Dpi(), 40.0f))) {
+        const float menuW = 40.0f;  // dp
+        const bool studioClicked = Button("##studio", ch ? Tr("스튜디오에서 편집") : Tr("새 스튜디오 프로젝트"),
+                                          ch ? icon::Sliders : icon::FilePlus, ButtonKind::Ghost,
+                                          ImVec2(innerW / Dpi() - menuW - 8.0f, 40.0f));
+        Tooltip(ch ? Tr("고른 캐릭터·스테이지·곡으로 스튜디오를 엽니다") : Tr("아무것도 고르지 않은 빈 프로젝트로 시작합니다"));
+        ImGui::SameLine(0.0f, Dp(8.0f));
+        const ImVec2 menuAt = ImGui::GetCursorScreenPos();
+        if (IconButton("##studiomenu", icon::DotsThree, Tr("스튜디오: 새 프로젝트, 열기, 최근 프로젝트"), false, menuW))
+            ImGui::OpenPopup("##studioentry");
+        if (studioClicked) {
             settings_.Save(settingsPath_);
-            StartStudioLoad(ch, st, song);
+            if (ch) StartStudioLoad(ch, st, song);
+            else StartStudioEmpty();
         }
-        ImGui::EndDisabled();
+        ImGui::SetNextWindowPos(ImVec2(menuAt.x + Dp(menuW), menuAt.y - Dp(6.0f)), ImGuiCond_Always, ImVec2(1.0f, 1.0f));
+        ImGui::SetNextWindowSize(ImVec2(Dp(300.0f), 0));
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(Dp(12.0f), Dp(12.0f)));
+        if (ImGui::BeginPopup("##studioentry")) {
+            std::filesystem::path open;
+            bool empty = false;
+            if (MenuItem("##entrynew", Tr("빈 프로젝트로 시작"), icon::FilePlus)) empty = true;
+            if (MenuItem("##entryopen", Tr("프로젝트 열기…"), icon::FolderOpen)) {
+                ImGui::CloseCurrentPopup();
+                open = studio::OpenFileDialog(hwnd_, {{L"MMDX12 Studio", L"*.mmdxproj"}});
+            }
+            if (!settings_.recentProjects.empty()) {
+                Gap(8.0f);
+                SectionLabel(Tr("최근 프로젝트"));
+                for (size_t i = 0; i < settings_.recentProjects.size(); ++i) {
+                    const std::filesystem::path rp = Utf8ToPath(settings_.recentProjects[i]);
+                    ImGui::PushID((int)i);
+                    if (MenuItem("##recent", PathToUtf8(rp.stem()).c_str(), icon::FolderSimple)) open = rp;
+                    Tooltip(settings_.recentProjects[i].c_str());
+                    ImGui::PopID();
+                }
+            }
+            if (empty || !open.empty()) ImGui::CloseCurrentPopup();
+            ImGui::EndPopup();
+            if (empty) {
+                settings_.Save(settingsPath_);
+                StartStudioEmpty();
+            } else if (!open.empty()) {
+                std::error_code ec;
+                if (std::filesystem::exists(open, ec)) {
+                    StartStudioProjectLoad(open, false);
+                } else {
+                    settings_.RemoveRecentProject(PathToUtf8(open));
+                    settings_.Save(settingsPath_);
+                    toast_ = {Tr("프로젝트 파일이 없습니다"), PathToUtf8(open), {}, true, timeSeconds_ + 5.0};
+                }
+            }
+        }
+        ImGui::PopStyleVar();
     }
 
     // keyboard: Enter starts playback
@@ -808,9 +857,11 @@ void App::DrawLoading() {
 
     const bool sceneLoad = loadTarget_ == LoadTarget::Play || loadTarget_ == LoadTarget::OfflineVideo ||
                            loadTarget_ == LoadTarget::Studio;
-    const CharacterAsset* ch = selCharacter_ >= 0 && sceneLoad ? &library_.characters[(size_t)selCharacter_] : nullptr;
-    const StageAsset* st = selStage_ >= 0 && sceneLoad ? &library_.stages[(size_t)selStage_] : nullptr;
-    const SongAsset* song = selSong_ >= 0 && sceneLoad ? &library_.songs[(size_t)selSong_] : nullptr;
+    // a studio project shows its own name over the plain studio backdrop, not the library selection
+    const bool project = loadTarget_ == LoadTarget::Studio && !studioLoadTitle_.empty();
+    const CharacterAsset* ch = selCharacter_ >= 0 && sceneLoad && !project ? &library_.characters[(size_t)selCharacter_] : nullptr;
+    const StageAsset* st = selStage_ >= 0 && sceneLoad && !project ? &library_.stages[(size_t)selStage_] : nullptr;
+    const SongAsset* song = selSong_ >= 0 && sceneLoad && !project ? &library_.songs[(size_t)selSong_] : nullptr;
     const float ip = Dp(14.0f);
     if (loadTarget_ == LoadTarget::RenderBench)
         DrawRenderBenchPreview(a.x + ip, a.y + ip, b.x - ip, a.y + ip + prevH - ip, Dp(12.0f));
@@ -820,6 +871,7 @@ void App::DrawLoading() {
     float y = a.y + prevH + Dp(16.0f);
     const char* title = loadTarget_ == LoadTarget::Benchmark     ? Tr("벤치마크 준비 중")
                         : loadTarget_ == LoadTarget::RenderBench ? Tr("GI 렌더 벤치마크 준비 중")
+                        : project                                ? studioLoadTitle_.c_str()
                                                                  : (song ? song->displayName.c_str() : Tr("불러오는 중"));
     TextEllipsis(dl, Font::Bold, size::Title + 2.0f, ImVec2(a.x + Dp(24.0f), y), b.x - Dp(24.0f), p.ink, title);
     y += Dp(34.0f);

@@ -148,7 +148,7 @@ void App::PumpUiScript() {
                 std::string bone = "-", value;
                 size_t poseBones = 0, poseMorphs = 0;
                 int poseFrame = -1;
-                if (m && !m->isStage) {
+                if (m && !m->IsStage()) {
                     poseBones = m->pose.bones.size();
                     poseMorphs = m->pose.morphs.size();
                     poseFrame = m->pose.frame;
@@ -164,6 +164,35 @@ void App::PumpUiScript() {
                 LOG_INFO("STUDIOPOSE bone=%s %s selBones=%zu pose=%zu/%zu@%d tool=%d local=%d tab=%d gizmo=%d viewDrag=%d",
                          bone.c_str(), value.c_str(), d.selectedBones.size(), poseBones, poseMorphs, poseFrame, d.gizmoTool,
                          (int)d.gizmoLocal, d.inspectorTab, (int)studioGizmoShown_, studioViewDrag_);
+                // project + every model (save / reopen comparisons, prop following)
+                LOG_INFO("STUDIOPROJ path=%s dirty=%d models=%zu jobs=%zu audio=%s offset=%.3f end=%d camKeys=%zu "
+                         "lightKeys=%zu shadowKeys=%zu",
+                         PathToUtf8(d.projectPath.filename()).c_str(), (int)d.Dirty(), d.models.size(), studioJobs_.size(),
+                         d.hasAudio ? PathToUtf8(d.audioPath.filename()).c_str() : "-", d.audioOffset, d.EndFrame(),
+                         d.camera.camera.size(), d.camera.light.size(), d.camera.shadow.size());
+                for (size_t i = 0; i < d.models.size(); ++i) {
+                    const studio::StudioModel& mm = *d.models[i];
+                    size_t keys = 0;
+                    for (const auto& [n, k] : mm.motion.bones) keys += k.size();
+                    for (const auto& [n, k] : mm.motion.morphs) keys += k.size();
+                    // a probe point: the prop's origin, else the center bone (or bone 0)
+                    DirectX::XMFLOAT3 pos{};
+                    if (mm.IsProp()) {
+                        const DirectX::XMFLOAT4X4 r = StudioPropRoot(mm);
+                        pos = {r._41, r._42, r._43};
+                    } else if (!mm.pmx->bones.empty()) {
+                        const int c = mm.pmx->FindBone("ã»ã³ã¿ã¼");
+                        pos = mm.inst->BoneWorldPosition(c >= 0 ? c : 0);
+                    }
+                    const int parent = mm.attach.parent >= 0 ? d.IndexOfUid((uint32_t)mm.attach.parent) : -1;
+                    LOG_INFO("STUDIOMODEL %zu kind=%s name=%s visible=%d keys=%zu parent=%d bone=%s t=(%.3f,%.3f,%.3f) "
+                             "r=(%.2f,%.2f,%.2f) s=%.3f pos=(%.3f,%.3f,%.3f) file=%s",
+                             i, studio::ModelKindName(mm.kind), mm.name.c_str(), (int)mm.visible, keys, parent,
+                             mm.attach.bone.empty() ? "-" : mm.attach.bone.c_str(), mm.attach.translation.x,
+                             mm.attach.translation.y, mm.attach.translation.z, mm.attach.rotationDeg.x,
+                             mm.attach.rotationDeg.y, mm.attach.rotationDeg.z, mm.attach.scale, pos.x, pos.y, pos.z,
+                             PathToUtf8(mm.path.filename()).c_str());
+                }
             }
         } else if (s.cmd == "studiobone") {  // studiobone <name>: click the bone's joint in the viewport
             const studio::StudioModel* m = studio_ ? studio_->Selected() : nullptr;
@@ -207,6 +236,59 @@ void App::PumpUiScript() {
             if (studio_ && !s.args.empty()) StudioImportVmdFrom(Utf8ToPath(s.args[0]));
         } else if (s.cmd == "studioexport") {
             if (studio_ && !s.args.empty()) StudioExportVmdTo(Utf8ToPath(s.args[0]));
+        } else if (s.cmd == "studionew") {
+            StudioRunAction(StudioAction::New, {});
+        } else if (s.cmd == "studiosave") {
+            if (studio_ && !s.args.empty()) StudioSaveTo(Utf8ToPath(s.args[0]));
+        } else if (s.cmd == "studioopen") {
+            if (!s.args.empty()) StudioRunAction(StudioAction::OpenFile, std::filesystem::absolute(Utf8ToPath(s.args[0])));
+        } else if (s.cmd == "studioautosave") {
+            if (studio_) StudioAutosave(true, true);
+        } else if (s.cmd == "studioadd") {  // studioadd <character|stage|prop> <file>
+            studio::ModelKind kind;
+            if (studio_ && s.args.size() >= 2 && studio::ParseModelKind(s.args[0], kind))
+                StudioAddModelFile(kind, std::filesystem::absolute(Utf8ToPath(s.args[1])));
+        } else if (s.cmd == "studioaddlib" || s.cmd == "studiosong") {  // studioaddlib <character|stage> <substr>
+            const bool song = s.cmd == "studiosong";
+            const std::string kind = song ? "song" : (s.args.empty() ? "" : s.args[0]);
+            const std::string needle = ToLowerAscii(s.args.size() > (song ? 0u : 1u) ? s.args[song ? 0 : 1] : "");
+            const auto find = [&](const auto& list) {
+                for (size_t i = 0; i < list.size(); ++i)
+                    if (ToLowerAscii(list[i].id).find(needle) != std::string::npos ||
+                        ToLowerAscii(list[i].displayName).find(needle) != std::string::npos)
+                        return (int)i;
+                return -1;
+            };
+            if (studio_ && !needle.empty()) {
+                if (kind == "character") StudioAddLibraryCharacter(find(library_.characters));
+                else if (kind == "stage") StudioAddLibraryStage(find(library_.stages));
+                else if (kind == "song") StudioApplyLibrarySong(find(library_.songs));
+            }
+        } else if (s.cmd == "studioaudio") {  // studioaudio <file|none> [offset seconds]
+            if (studio_ && !s.args.empty()) {
+                if (s.args.size() > 1) studio_->audioOffset = num(1);
+                StudioSetAudio(s.args[0] == "none" ? std::filesystem::path() : std::filesystem::absolute(Utf8ToPath(s.args[0])));
+            }
+        } else if (s.cmd == "studioselect") {
+            if (studio_ && !s.args.empty()) StudioSelectModel(std::atoi(s.args[0].c_str()));
+        } else if (s.cmd == "studioremove") {
+            if (studio_ && !s.args.empty()) StudioRemoveModel(std::atoi(s.args[0].c_str()));
+        } else if (s.cmd == "studiorename") {
+            if (studio_ && studio_->Selected() && !s.args.empty()) {
+                studio_->Selected()->name = s.args[0];
+                ++studio_->projectVersion;
+            }
+        } else if (s.cmd == "studioattach") {  // studioattach <parent index|-1> <bone|-> tx ty tz rx ry rz s
+            studio::StudioModel* m = studio_ ? studio_->Selected() : nullptr;
+            if (m && m->IsProp() && s.args.size() >= 9) {
+                const int pi = std::atoi(s.args[0].c_str());
+                m->attach.parent = pi >= 0 && pi < (int)studio_->models.size() ? (int)studio_->models[(size_t)pi]->uid : -1;
+                m->attach.bone = s.args[1] == "-" ? std::string() : s.args[1];
+                m->attach.translation = {num(2), num(3), num(4)};
+                m->attach.rotationDeg = {num(5), num(6), num(7)};
+                m->attach.scale = num(8);
+                ++studio_->projectVersion;
+            }
         } else if (s.cmd == "log") {
             LOG_INFO("UISCRIPT %s", s.args.empty() ? "" : s.args[0].c_str());
         } else {

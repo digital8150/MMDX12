@@ -655,6 +655,40 @@ bool Chip(const char* id, const char* label, const char* icon, bool selected, fl
     return pressed;
 }
 
+bool MenuItem(const char* id, const char* label, const char* icon, const char* hint) {
+    ImGuiWindow* w = ImGui::GetCurrentWindow();
+    if (w->SkipItems) return false;
+    const ImGuiID gid = w->GetID(id);
+    const Palette& p = P();
+    const float h = Dp(34.0f);
+    const float width = std::max(Dp(40.0f), ImGui::GetContentRegionAvail().x);
+    const ImRect bb(w->DC.CursorPos, ImVec2(w->DC.CursorPos.x + width, w->DC.CursorPos.y + h));
+    ImGui::ItemSize(bb);
+    if (!ImGui::ItemAdd(bb, gid)) return false;
+    bool hovered = false, held = false;
+    const bool pressed = ImGui::ButtonBehavior(bb, gid, &hovered, &held);
+    if (hovered) ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+    const float hv = Anim(gid, hovered);
+    ImDrawList* dl = w->DrawList;
+    if (hv > 0.01f) dl->AddRectFilled(bb.Min, bb.Max, WithAlpha(p.ink, 0.06f * hv), Dp(8.0f));
+    const float cy = bb.Min.y + h * 0.5f;
+    float x = bb.Min.x + Dp(10.0f);
+    if (icon) {
+        Icon(dl, icon, 16.0f, ImVec2(x + Dp(8.0f), cy), p.ink2);
+        x += Dp(26.0f);
+    }
+    float maxX = bb.Max.x - Dp(10.0f);
+    if (hint && *hint) {
+        const ImVec2 hs = TextSize(Font::Regular, size::Caption, hint);
+        Text(dl, Font::Regular, size::Caption, ImVec2(maxX - hs.x, cy - hs.y * 0.5f), p.ink3, hint);
+        maxX -= hs.x + Dp(12.0f);
+    }
+    const ImVec2 ls = TextSize(Font::Semibold, size::Small, label);
+    TextEllipsis(dl, Font::Semibold, size::Small, ImVec2(x, cy - ls.y * 0.5f), maxX, p.ink, label);
+    ImGui::RenderNavCursor(bb, gid);
+    return pressed;
+}
+
 void Tooltip(const char* text) {
     if (!ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort | ImGuiHoveredFlags_AllowWhenDisabled)) return;
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(Dp(10.0f), Dp(6.0f)));

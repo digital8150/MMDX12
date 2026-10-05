@@ -71,7 +71,7 @@ int MorphPanelSlot(uint8_t panel) { return panel == 2 ? 0 : panel == 1 ? 1 : pan
 StudioModel* App::StudioPoseModel() {
     if (!studio_) return nullptr;
     StudioModel* m = studio_->Selected();
-    return m && !m->isStage ? m : nullptr;
+    return m && !m->IsStage() ? m : nullptr;
 }
 
 std::vector<PoseBone> App::StudioCurrentPose(const StudioModel& m) const {
