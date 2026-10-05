@@ -28,6 +28,10 @@ public:
     void SetBoneAnim(int bone, const XMFLOAT3& translation, const XMFLOAT4& rotation);
     void SetMorphWeight(int morph, float weight);
     void SetIkEnabled(int ikBone, bool enabled);
+    // Current animation input (what SetBoneAnim / SetMorphWeight last wrote; identity / 0 after ResetPose).
+    const XMFLOAT3& BoneAnimTranslation(int bone) const { return bones_[bone].animT; }
+    const XMFLOAT4& BoneAnimRotation(int bone) const { return bones_[bone].animR; }
+    float MorphWeight(int morph) const { return morphWeight_[morph]; }
     // Placement of the whole model in the world (parent of the root bones; identity by default).
     // Not touched by ResetPose. Physics follows it (call ResetPhysics after changing it).
     void SetRootTransform(const XMFLOAT4X4& m);

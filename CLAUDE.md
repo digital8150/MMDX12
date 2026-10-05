@@ -29,7 +29,9 @@ progress.md is the session log. Read its latest entry first.
   - Studio: `--character <s> [--stage <s>] [--song <s>] --screen studio --seek <sec> --frames N --capture out.png`.
   - Scripted UI input: `--ui-script file.txt` (lines `<frame> <command> [args]`: move/down/up/click/dblclick/wheel/key,
     `capture <png>`, `text <chars>`, `mod ctrl|shift down|up`, `studiostate` logs a `STUDIOSTATE` line,
-    `studioexport`/`studioimport <vmd>` skip the file dialogs). While a script runs, real mouse/keyboard input is ignored.
+    `studioexport`/`studioimport <vmd>` and `studiovpdexport`/`studiovpdimport <vpd>` skip the file dialogs; pose editing:
+    `studiobone <name>` clicks that bone's joint, `studiogizmo <x|y|z|yz|zx|xy|rx|ry|rz> <dx> <dy> [steps]` drags a gizmo
+    part; `studiostate` also logs `STUDIOPOSE`). While a script runs, real mouse/keyboard input is ignored.
     Frames count like `--frames`. Use it to click through editor features headlessly (examples: `captures/studio/t*.txt`).
   - Benchmark: `--benchmark dx12-raster-fhd --bench-frames 600 --frames 100000` (result goes to `build/bin/mmdx12.log` as a `BENCHMARK` line)
   - GI render benchmark: `--benchmark dx12-gi-render` (quits by itself; ~41 s). Quick check: add `--bench-spp 64 --offline-size 960 540`.
@@ -41,6 +43,7 @@ progress.md is the session log. Read its latest entry first.
   - `render_smoke`: renders a cube with no assets
   - `vmd_roundtrip <file|dir> [--vpd-selftest]`: VMD load -> save -> load comparison (SaveVmd), VPD self test
   - `studio_edit_test`: Studio key-edit core (move/insert/delete frames, undo byte budget, 100k-key timings)
+  - `studio_gizmo_test` / `studio_pose_test`: gizmo projection/hit/drag math and bone overlay; mirror names/poses, VPD pose ops
 - The play bar auto-hides while playing with no mouse movement, so captures usually don't show it.
 
 ## Architecture (src/)
@@ -67,12 +70,17 @@ progress.md is the session log. Read its latest entry first.
   - Render resolution (`targets.width/height`) vs output resolution (`outWidth/outHeight`): the upscaler (DLSS/FSR/XeSS behind `IUpscaler`) runs after TAA/composite; bloom, post, backdrop and present work at output size. Jitter uses the FSR convention (`jitterPx`), motion vectors are uv(cur) − uv(prev) so SDK MV scale is −renderSize.
 - `app`: the `App` state machine, ImGui screens (`Ui*.cpp`) built on `UiKit` (tokens, fonts, widgets; see DESIGN.md), `ThumbnailCache`, `Lighting` presets, `SceneLoader` (worker thread), benchmark, WinHTTP leaderboard.
 - `audio`: miniaudio. The audio cursor is the master clock.
-- `studio` (+ `app/UiStudio.cpp`): the Studio editor (Screen::Studio). `StudioDoc` holds the models with name-keyed editable
+- `studio` (+ `app/UiStudio*.cpp`): the Studio editor (Screen::Studio). `StudioDoc` holds the models with name-keyed editable
   motions (`MotionData`, StudioMotion.h, converted to VmdMotion and re-bound with `BoundMotion::Bind` after edits), the camera
   track, `CommandStack` undo (edits are `TrackEditCommand` track snapshots / `MotionSwapCommand`) and the editor state.
   `UiTimeline`/`UiBezier` are data-agnostic widgets. The viewport is the renderer drawing into `RenderSettings::viewport*`.
   Compatibility with MMD goes through standard files: VMD (`SaveVmd`) and VPD (`asset/VpdFile.h`); PMM is not supported.
   - VMD bone interpolation: bytes 2/3 are MMD physics flags; Z/rotation x1 are bytes 17/18 (`GetBoneCurve`/`SetBoneCurve`).
+  - Pose editing (`app/UiStudioPose.cpp`, `studio/Gizmo.*`, `studio/StudioPose.*`): viewport edits go to the model's
+    `PoseLayer` (bone/morph overrides valid at one frame, applied after `BoundMotion::Evaluate`, so drags never re-bind).
+    Leaving the frame discards it as an undoable `PoseEditCommand`; Register (I, Ctrl+I all bones) writes keys +
+    clears the layer in one `CompositeCommand`. Bone values are VMD-local (parent frame); the gizmo converts world deltas
+    with the parent's world rotation. Bones listed in two display frames select keys through `CanonicalRow`.
   - `asset/ModelImport.h` and `render/GpuModel.h` both declare `mmdx::ModelRole`: never include both in one .cpp.
 - `OfflineRenderer` (render/OfflineRenderer.h) is independent of `RenderSettings`: `Renderer::BeginOffline` builds the TLAS,
   then `Renderer::RenderOffline` replaces `Render` each frame (GPU-time-budgeted iterations, preview present) until Done.

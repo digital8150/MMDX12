@@ -8,6 +8,32 @@ namespace mmdx::studio {
 StudioModel::StudioModel() = default;
 StudioModel::~StudioModel() = default;
 
+void StudioModel::BuildRowGroups() {
+    // Mirrors StudioRebuildRows: display frame g lists items; unlisted bones go to group frames.size(), morphs to + 1.
+    const uint32_t frames = (uint32_t)pmx->displayFrames.size();
+    boneRowGroup.assign(pmx->bones.size(), frames);
+    morphRowGroup.assign(pmx->morphs.size(), frames + 1);
+    std::vector<char> boneSet(pmx->bones.size(), 0), morphSet(pmx->morphs.size(), 0);
+    for (uint32_t g = 0; g < frames; ++g) {
+        for (const PmxDisplayFrame::Item& it : pmx->displayFrames[g].items) {
+            if (it.index < 0) continue;
+            const size_t i = (size_t)it.index;
+            if (it.morph) {
+                if (i < morphSet.size() && !morphSet[i]) { morphSet[i] = 1; morphRowGroup[i] = g; }
+            } else if (i < boneSet.size() && !boneSet[i]) {
+                boneSet[i] = 1;
+                boneRowGroup[i] = g;
+            }
+        }
+    }
+}
+
+uint64_t CanonicalRow(const StudioModel& m, RowKind kind, uint32_t index) {
+    if (kind == RowKind::Bone && index < m.boneRowGroup.size()) return MakeRowId(kind, m.boneRowGroup[index], index);
+    if (kind == RowKind::Morph && index < m.morphRowGroup.size()) return MakeRowId(kind, m.morphRowGroup[index], index);
+    return 0;
+}
+
 int StudioDoc::EndFrame() const {
     int end = std::max(camera.EndFrame(), (int)std::ceil(audioEndFrame));
     for (const auto& m : models) end = std::max(end, m->motion.EndFrame());

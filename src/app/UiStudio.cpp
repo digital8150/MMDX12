@@ -102,6 +102,7 @@ bool App::FinishStudioLoad() {
             return false;
         }
         sm->motion = std::move(m.motion);
+        sm->BuildRowGroups();
         sm->inst->UpdatePose();
         doc->models.push_back(std::move(sm));
     }
@@ -210,7 +211,11 @@ void App::UpdateStudio(double dt) {
         if (ctrl && pressed(ImGuiKey_X, false)) { StudioCopySelected(); StudioDeleteSelected(Tr("키 잘라내기")); }
         if (ctrl && pressed(ImGuiKey_V, false)) StudioPaste(shift);
         if (ctrl && pressed(ImGuiKey_A, false)) StudioSelectAll();
-        if (!ctrl && pressed(ImGuiKey_I, false)) StudioRegisterKeys();
+        if (pressed(ImGuiKey_I, false)) StudioRegisterPose(ctrl);  // pose edits, or the picked rows (Ctrl: all bones)
+        if (!ctrl && pressed(ImGuiKey_E, false)) d.gizmoTool = 0;
+        if (!ctrl && pressed(ImGuiKey_W, false)) d.gizmoTool = 1;
+        if (!ctrl && pressed(ImGuiKey_L, false)) d.gizmoLocal = !d.gizmoLocal;
+        if (pressed(ImGuiKey_Escape, false) && studioViewDrag_ != 2 && d.activeBone >= 0) StudioSelectBone(-1, false);
     }
     if (d.playing) {
         if (d.hasAudio && audio_.IsPlaying()) {
@@ -236,6 +241,25 @@ void App::UpdateStudio(double dt) {
 
 void App::UpdateStudioScene() {
     StudioDoc& d = *studio_;
+    // a pose undo/redo restored the edits of another frame: go there (the pose only applies at its frame)
+    if (d.pendingSeekFrame >= 0) {
+        StudioSetPlaying(false);
+        StudioSeek(d.pendingSeekFrame / (double)kMmdFps);
+        d.pendingSeekFrame = -1;
+    }
+    // Unregistered pose edits belong to their frame (MMD): leaving it discards them, as an undoable step.
+    bool posing = false;
+    for (int i = 0; i < (int)d.models.size(); ++i) {
+        StudioModel& m = *d.models[i];
+        if (m.pose.Empty()) continue;
+        if (m.pose.frame == d.Frame() || studioViewDrag_ == 2) {
+            posing = true;
+            continue;
+        }
+        d.history.Push(std::make_unique<PoseEditCommand>(d, i, Tr("포즈 버리기"), m.pose, PoseLayer{}));
+        d.pendingSeekFrame = -1;  // Push re-applies the empty layer: nothing to seek to
+        toast_ = {Tr("등록하지 않은 포즈를 버렸어요"), Tr("Ctrl+Z로 되돌릴 수 있어요."), {}, false, timeSeconds_ + 3.0};
+    }
     const uint64_t slot = ctx_.FrameNumber();
     const float frame = (float)(d.time * kMmdFps);
 
@@ -248,6 +272,8 @@ void App::UpdateStudioScene() {
         if (d.playing) resetPhysics = df < 0.0f || df > 0.25f * kMmdFps;
         else if (std::fabs(df) > 1e-3f) resetPhysics = df < 0.0f || df > 1.0f + 1e-3f;
         if (!resetPhysics) physicsDt = std::max(0.0f, df) / kMmdFps;
+        // paused with pose edits: keep simulating so hair and skirts follow the edited pose
+        if (!resetPhysics && !d.playing && posing) physicsDt = 1.0f / 60.0f;
     }
     d.physicsFrame = frame;
 
@@ -268,6 +294,7 @@ void App::UpdateStudioScene() {
         ModelInstance& inst = *m.inst;
         if (m.bound) m.bound->Evaluate(frame, inst);
         else inst.ResetPose();
+        if (!m.isStage) StudioApplyPose(m);
         if (!m.isStage) {
             inst.SetScale(m.libraryId.empty() ? 1.0f : settings_.CharacterScale(m.libraryId));
             inst.EnablePhysics(d.physics);
@@ -285,23 +312,28 @@ void App::UpdateStudioScene() {
     }
 }
 
-void App::BuildStudioFrameView(FrameView& view) {
-    StudioDoc& d = *studio_;
+void App::StudioCamera(CameraParams& camera) const {
+    const StudioDoc& d = *studio_;
     const float frame = (float)(d.time * kMmdFps);
     if (d.useMotionCamera && d.cameraEval) {
         const CameraPose pose = d.cameraEval->Evaluate(frame);
-        CameraMotion::ToView(pose, &view.camera.view, &view.camera.eye);
-        view.camera.fovYRadians = DirectX::XMConvertToRadians(pose.fovDeg);
+        CameraMotion::ToView(pose, &camera.view, &camera.eye);
+        camera.fovYRadians = DirectX::XMConvertToRadians(pose.fovDeg);
     } else {
         const FreeCamera& cam = freeCam_;
         const float sy = std::sin(cam.yaw), cy = std::cos(cam.yaw), sp = std::sin(cam.pitch), cp = std::cos(cam.pitch);
         const DirectX::XMVECTOR target = DirectX::XMLoadFloat3(&cam.target);
         const DirectX::XMVECTOR eye =
             DirectX::XMVectorAdd(target, DirectX::XMVectorScale(DirectX::XMVectorSet(sy * cp, sp, -cy * cp, 0), cam.distance));
-        DirectX::XMStoreFloat4x4(&view.camera.view, DirectX::XMMatrixLookAtLH(eye, target, DirectX::XMVectorSet(0, 1, 0, 0)));
-        DirectX::XMStoreFloat3(&view.camera.eye, eye);
-        view.camera.fovYRadians = DirectX::XMConvertToRadians(cam.fovDeg);
+        DirectX::XMStoreFloat4x4(&camera.view, DirectX::XMMatrixLookAtLH(eye, target, DirectX::XMVectorSet(0, 1, 0, 0)));
+        DirectX::XMStoreFloat3(&camera.eye, eye);
+        camera.fovYRadians = DirectX::XMConvertToRadians(cam.fovDeg);
     }
+}
+
+void App::BuildStudioFrameView(FrameView& view) {
+    StudioDoc& d = *studio_;
+    StudioCamera(view.camera);
 
     bool anyStage = false;
     const StudioModel* performer = nullptr;
@@ -755,6 +787,12 @@ void App::StudioHandleTimeline(const TimelineEvents& ev) {
             selectRowKeys(id, true);
             d.rowAnchor = id;
         }
+        // bone rows also pick the bones for the viewport (the clicked one gets the gizmo)
+        d.selectedBones.clear();
+        for (uint64_t r : d.selectedRows)
+            if (RowKindOf(r) == RowKind::Bone) d.selectedBones.insert((int)RowIndexOf(r));
+        d.activeBone = RowKindOf(id) == RowKind::Bone && d.selectedBones.count((int)RowIndexOf(id)) ? (int)RowIndexOf(id)
+                       : d.selectedBones.empty() ? -1 : *d.selectedBones.begin();
         d.rowsKey = ~0ull;
     }
     if (ev.select) {
@@ -762,11 +800,25 @@ void App::StudioHandleTimeline(const TimelineEvents& ev) {
             d.selection.clear();
             d.selectedRows.clear();
         }
+        if (ev.selectMode == SelectMode::Replace) {
+            d.selectedBones.clear();
+            d.activeBone = -1;
+        }
+        const StudioModel* sm = d.Selected();
         for (const TimelineKeyRef& k : ev.selectKeys) {
-            const KeyId id{k.row, k.frame};
+            uint64_t row = k.row;
+            if (sm && (RowKindOf(row) == RowKind::Bone || RowKindOf(row) == RowKind::Morph))
+                if (const uint64_t c = CanonicalRow(*sm, RowKindOf(row), RowIndexOf(row))) row = c;
+            const KeyId id{row, k.frame};
             if (ev.selectMode == SelectMode::Toggle && d.selection.count(id)) d.selection.erase(id);
             else d.selection.insert(id);
+            // keys of a bone row pick that bone for the viewport (the first key's bone gets the gizmo)
+            if (RowKindOf(row) == RowKind::Bone && ev.selectKeys.size() <= 64) {
+                d.selectedBones.insert((int)RowIndexOf(row));
+                if (d.activeBone < 0) d.activeBone = (int)RowIndexOf(row);
+            }
         }
+        if (!ev.selectKeys.empty()) d.inspectorTab = 0;
         d.rowsKey = ~0ull;
     }
     if (ev.moveKeys && !d.selection.empty()) {
@@ -818,6 +870,20 @@ void App::StudioRebuildRows() {
     if (!m) return;
     const PmxModel& pmx = *m->pmx;
     const MotionData& mo = m->motion;
+    // A bone listed in two display frames has two rows: keys are selected through its canonical row only, so each key
+    // counts once and both rows show the same selection.
+    const auto canon = [&](uint64_t row) {
+        const RowKind k = RowKindOf(row);
+        if (k != RowKind::Bone && k != RowKind::Morph) return row;
+        const uint64_t c = CanonicalRow(*m, k, RowIndexOf(row));
+        return c ? c : row;
+    };
+    if (std::any_of(d.selection.begin(), d.selection.end(), [&](const KeyId& k) { return canon(k.first) != k.first; })) {
+        std::set<KeyId> canonical;
+        for (const KeyId& k : d.selection) canonical.emplace_hint(canonical.end(), canon(k.first), k.second);
+        d.selection.swap(canonical);
+    }
+    auto keysOfModel = [&](uint64_t rowId, const auto& keys, std::vector<TimelineKey>& out) { keysOf(canon(rowId), keys, out); };
 
     auto addGroup = [&](uint32_t g, const std::string& label, const std::vector<PmxDisplayFrame::Item>& items) {
         if (items.empty()) return;
@@ -840,18 +906,18 @@ void App::StudioRebuildRows() {
                 r.id = MakeRowId(RowKind::Morph, g, (uint32_t)it.index);
                 r.label = pmx.morphs[(size_t)it.index].name;
                 if (auto t = mo.morphs.find(r.label); t != mo.morphs.end()) {
-                    keysOf(r.id, t->second, r.keys);
+                    keysOfModel(r.id, t->second, r.keys);
                     for (const auto& k : t->second) summary.insert(k.frame);
                 }
             } else {
                 r.id = MakeRowId(RowKind::Bone, g, (uint32_t)it.index);
                 r.label = pmx.bones[(size_t)it.index].name;
                 if (auto t = mo.bones.find(r.label); t != mo.bones.end()) {
-                    keysOf(r.id, t->second, r.keys);
+                    keysOfModel(r.id, t->second, r.keys);
                     for (const auto& k : t->second) summary.insert(k.frame);
                 }
             }
-            r.selected = d.selectedRows.count(r.id) != 0;
+            r.selected = d.selectedRows.count(r.id) != 0 || (!it.morph && d.selectedBones.count(it.index));
             childIds.push_back(r.id);
             if (group.expanded) children.push_back(std::move(r));
         }
@@ -1116,6 +1182,9 @@ void App::DrawStudioOutliner(float x0, float y0, float x1, float y1) {
         if (ImGui::IsItemClicked() && d.selectedModel != index) {
             d.selectedModel = index;
             d.selection.clear();
+            d.selectedRows.clear();
+            d.selectedBones.clear();
+            d.activeBone = -1;
             d.collapsed.clear();
             d.rowsKey = ~0ull;
         }
@@ -1196,9 +1265,25 @@ void App::DrawStudioInspector(float x0, float y0, float x1, float y1) {
             line(Tr("시점"), d.useMotionCamera ? Tr("카메라 모션") : Tr("자유 카메라"));
         }
     }
-    ImGui::Dummy(ImVec2(w, Dp(8.0f)));
-    cdl->AddLine(ImGui::GetCursorScreenPos(), ImVec2(ImGui::GetCursorScreenPos().x + w, ImGui::GetCursorScreenPos().y), p.line);
-    ImGui::Dummy(ImVec2(w, Dp(12.0f)));
+    // characters: keys / bone (pose) / morph tabs
+    if (StudioPoseModel()) {
+        ImGui::Dummy(ImVec2(w, Dp(4.0f)));
+        const char* tabs[] = {Tr("키"), Tr("본"), Tr("모프")};
+        const char* tabIcons[] = {icon::Diamond, icon::Bone, icon::Sliders};
+        d.inspectorTab = std::clamp(d.inspectorTab, 0, 2);
+        Segmented("##inspectortab", tabs, 3, &d.inspectorTab, w / Dpi(), 32.0f, tabIcons);
+        ImGui::Dummy(ImVec2(w, Dp(10.0f)));
+        if (d.inspectorTab == 1 || d.inspectorTab == 2) {
+            if (d.inspectorTab == 1) DrawStudioBoneTab(w);
+            else DrawStudioMorphTab(w);
+            ImGui::EndChild();
+            return;
+        }
+    } else {
+        ImGui::Dummy(ImVec2(w, Dp(8.0f)));
+        cdl->AddLine(ImGui::GetCursorScreenPos(), ImVec2(ImGui::GetCursorScreenPos().x + w, ImGui::GetCursorScreenPos().y), p.line);
+        ImGui::Dummy(ImVec2(w, Dp(12.0f)));
+    }
 
     // the first selected key decides what is shown; curve edits apply to every selected key of that kind
     const KeyId* first = nullptr;
@@ -1305,7 +1390,7 @@ void App::DrawStudioInspector(float x0, float y0, float x1, float y1) {
     }
     ImGui::Dummy(ImVec2(w, Dp(8.0f)));
 
-    const float plot = std::min(w, Dp(200.0f));
+    const float plot = std::min(w, Dp(168.0f));
     ImGui::SetCursorScreenPos(ImVec2(ImGui::GetCursorScreenPos().x + (w - plot) * 0.5f, ImGui::GetCursorScreenPos().y));
     const bool changed = BezierCurveEditor("##curve", curve, plot / Dpi());
     if (changed) {
@@ -1334,6 +1419,7 @@ void App::DrawStudioInspector(float x0, float y0, float x1, float y1) {
         d.curveBefore.clear();
         d.curveEditing = false;
     }
+    ImGui::Dummy(ImVec2(w, Dp(16.0f)));  // the panel scrolls: keep the last row clear of the bottom edge
     ImGui::EndChild();
 }
 
@@ -1436,6 +1522,19 @@ void App::DrawStudioTimeline(float x0, float y0, float x1, float y1) {
     }
     const float ty = y0 + th;
     dl->AddLine(ImVec2(x0, ty - 0.5f), ImVec2(x1, ty - 0.5f), p.line);
+    if (d.scrollToRow > 0) {
+        // bring a row picked elsewhere (viewport bone) into view
+        --d.scrollToRow;
+        for (size_t i = 0; i < d.rows.size(); ++i) {
+            if (d.rows[i].id != d.scrollRowId) continue;
+            const float rowH = Dp(24.0f), top = (float)i * rowH;
+            const float visibleH = (y1 - ty) - Dp(28.0f) - Dp(10.0f);
+            if (top < d.view.scrollY) d.view.scrollY = top;
+            else if (top + rowH > d.view.scrollY + visibleH) d.view.scrollY = top + rowH - visibleH;
+            d.scrollToRow = 0;
+            break;
+        }
+    }
     ImGui::SetCursorScreenPos(ImVec2(x0, ty));
     ImGui::BeginChild("##timeline", ImVec2(x1 - x0, y1 - ty), ImGuiChildFlags_None,
                       ImGuiWindowFlags_NoBackground | ImGuiWindowFlags_NoScrollWithMouse | ImGuiWindowFlags_NoScrollbar);
@@ -1457,12 +1556,38 @@ void App::DrawStudioViewport(float x0, float y0, float x1, float y1) {
     using namespace ui;
     StudioDoc& d = *studio_;
     ImGuiIO& io = ImGui::GetIO();
+    // camera of this frame: overlays, picking and the gizmo project with it
+    CameraParams cp;
+    StudioCamera(cp);
+    studioVp_ = MakeViewProj(cp.view, cp.eye, cp.fovYRadians, cp.nearZ, cp.farZ, x0, y0, std::max(1.0f, x1 - x0),
+                             std::max(1.0f, y1 - y0));
+
     ImGui::SetCursorScreenPos(ImVec2(x0, y0));
+    ImGui::SetNextItemAllowOverlap();  // the toolbar buttons drawn on top take the hover
     ImGui::InvisibleButton("##viewport", ImVec2(std::max(1.0f, x1 - x0), std::max(1.0f, y1 - y0)),
                            ImGuiButtonFlags_MouseButtonLeft | ImGuiButtonFlags_MouseButtonRight | ImGuiButtonFlags_MouseButtonMiddle);
     const bool active = ImGui::IsItemActive(), hovered = ImGui::IsItemHovered();
+    const bool activated = ImGui::IsItemActivated(), deactivated = ImGui::IsItemDeactivated();
     if (hovered) ImGui::SetItemKeyOwner(ImGuiKey_MouseWheelY);
-    const bool dragging = active && (io.MouseDelta.x != 0 || io.MouseDelta.y != 0);
+
+    // a left press goes to the gizmo or a bone first, else it orbits; right/middle always move the camera
+    if (activated) {
+        studioPressPos_ = io.MousePos;
+        studioPressMoved_ = false;
+        studioViewDrag_ = 1;
+    }
+    bool consumed = false;
+    StudioViewportPose(x0, y0, x1, y1, hovered || active, consumed);
+    if (active && (std::fabs(io.MousePos.x - studioPressPos_.x) > Dp(3.0f) || std::fabs(io.MousePos.y - studioPressPos_.y) > Dp(3.0f)))
+        studioPressMoved_ = true;
+    if (deactivated) {
+        // a click (no drag) on empty space clears the bone selection
+        if (studioViewDrag_ == 1 && !studioPressMoved_ && io.MouseReleased[0] && StudioPoseModel() && !d.selectedBones.empty())
+            StudioSelectBone(-1, false);
+        studioViewDrag_ = 0;
+    }
+
+    const bool dragging = active && studioViewDrag_ == 1 && (io.MouseDelta.x != 0 || io.MouseDelta.y != 0);
     if ((dragging || (hovered && io.MouseWheel != 0)) && d.useMotionCamera && d.cameraEval) {
         // take over the motion camera's current view, so the free camera starts where it was
         const CameraPose pose = d.cameraEval->Evaluate((float)(d.time * kMmdFps));
@@ -1488,13 +1613,15 @@ void App::DrawStudioViewport(float x0, float y0, float x1, float y1) {
         }
     }
     if (hovered && io.MouseWheel != 0.0f) cam.distance = std::clamp(cam.distance * std::pow(0.88f, io.MouseWheel), 2.0f, 600.0f);
+    (void)consumed;
 
-    // view label (top left of the viewport)
+    // view label (top left of the viewport) and the pose toolbar next to it, over the bone overlay
     const Palette& p = P();
     ImDrawList* dl = ImGui::GetWindowDrawList();
     const char* label = d.useMotionCamera && d.cameraEval ? Tr("카메라 모션") : Tr("자유 카메라");
     ImVec2 bs;
     Badge(dl, ImVec2(x0 + Dp(12.0f), y0 + Dp(12.0f)), label, WithAlpha(p.surface, 0.85f), p.ink2, &bs);
+    StudioViewportToolbar(x0 + Dp(12.0f) + bs.x + Dp(10.0f), y0 + Dp(12.0f) + bs.y * 0.5f);
 }
 
 } // namespace mmdx

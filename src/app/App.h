@@ -13,6 +13,7 @@
 #include "render/ColorLut.h"
 #include "render/Dx12Context.h"
 #include "render/Renderer.h"
+#include "studio/Gizmo.h"
 #include "studio/StudioDoc.h"
 #include <Windows.h>
 #include <chrono>
@@ -44,7 +45,10 @@ namespace mmdx {
 //                          capture <file.png> | log <text> |
 //                          studiostate (logs the Studio's frame, selection, rows, range, key counts, undo) |
 //                          studioexport <file.vmd> | studioimport <file.vmd> (the Studio's VMD export/import
-//                          without the dialogs).
+//                          without the dialogs) | studiovpdexport/studiovpdimport <file.vpd> (pose files, current
+//                          scope) | studiobone <name> (clicks that bone's joint in the viewport) |
+//                          studiogizmo <x|y|z|yz|zx|xy|rx|ry|rz> <dx> <dy> [steps] (drags that gizmo part by dx,dy px).
+//                          studiostate also logs a STUDIOPOSE line (active bone + value, pose layer, tool).
 //                          Coordinates in window pixels.
 //   --width <w> --height <h>  initial window client size
 //   --debug                enable the D3D12 debug layer
@@ -240,6 +244,26 @@ private:
     void DrawStudioInspector(float x0, float y0, float x1, float y1);
     void DrawStudioTimeline(float x0, float y0, float x1, float y1);
     void DrawStudioViewport(float x0, float y0, float x1, float y1);
+    void StudioCamera(CameraParams& cam) const;      // the view the viewport shows (motion or free camera)
+    // --- pose editing (UiStudioPose.cpp): bone overlay, picking, gizmo, pose layer, morph panel, VPD, mirror
+    studio::StudioModel* StudioPoseModel();          // the selected model if it is a character (pose editable)
+    void StudioSelectBone(int bone, bool toggle);    // viewport pick / bone row click: selection sync (-1 clears)
+    std::vector<studio::PoseBone> StudioCurrentPose(const studio::StudioModel& m) const;  // effective anim values
+    void StudioSetPose(const char* undoName, const studio::PoseLayer& before);  // push the selected model's layer edit
+    void StudioRegisterPose(bool allBones);          // keys for the edited bones/morphs (all: every listed bone)
+    void StudioResetPose();                          // drop the unregistered edits
+    void StudioMirrorPose();                         // left/right mirror (scope: whole model or selected bones)
+    void StudioImportVpd();
+    void StudioImportVpdFrom(const std::filesystem::path& path);
+    void StudioExportVpd();
+    bool StudioExportVpdTo(const std::filesystem::path& path);
+    void StudioApplyPose(studio::StudioModel& m);    // writes the pose layer over the evaluated motion (UpdateStudioScene)
+    bool StudioGizmoFrameOf(const studio::StudioModel& m, int bone, studio::GizmoFrame& f, studio::GizmoMode& mode) const;
+    void StudioViewportPose(float x0, float y0, float x1, float y1, bool hovered, bool& consumed);  // overlay + input
+    void StudioViewportToolbar(float x, float y);
+    void DrawStudioBoneTab(float w);
+    void DrawStudioMorphTab(float w);
+    bool StudioScriptGizmoPoint(int part, ImVec2& out) const;  // ui-script: a screen point on a gizmo part
 
     // --- scripted UI input for tests (UiScript.cpp)
     void PumpUiScript();  // before ImGui::NewFrame: feeds the events due at framesInScene_
@@ -427,6 +451,23 @@ private:
     std::unique_ptr<studio::StudioPackage> studioPackage_;
     double studioLastBind_ = 0;       // timeSeconds_ of the last motion re-bind (throttled while dragging)
     bool studioLeaveConfirm_ = false; // unsaved-changes prompt is open
+    // viewport pose editing (cached from the last drawn frame: overlay, picking, scripts)
+    studio::ViewProj studioVp_;
+    bool studioGizmoShown_ = false;
+    studio::GizmoFrame studioGizmoFrame_;
+    studio::GizmoMode studioGizmoMode_ = studio::GizmoMode::Rotate;
+    studio::GizmoPart studioGizmoHot_ = studio::GizmoPart::None;
+    int studioViewDrag_ = 0;          // 0 none, 1 camera (orbit/pan), 2 gizmo, 3 press consumed by a bone pick
+    ImVec2 studioPressPos_{};
+    bool studioPressMoved_ = false;
+    studio::GizmoDrag studioGizmoDrag_;
+    studio::PoseLayer studioPoseBefore_;  // the layer when a gizmo drag / numeric edit started (one undo step)
+    studio::PoseBone studioDragBase_;     // the bone's value when the drag started
+    DirectX::XMFLOAT4 studioDragParentRot_{0, 0, 0, 1};
+    float studioDragScale_ = 1.0f;
+    int studioDragBone_ = -1;
+    bool studioPoseFieldEdit_ = false;    // a numeric pose field / morph slider is being edited
+    int studioHoverBone_ = -1;
 
     // benchmark
     int benchCategory_ = 0;       // index into kBenchCategories

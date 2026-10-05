@@ -15,6 +15,25 @@ public:
     virtual size_t Bytes() const { return 256; }  // memory held by the command (undo budget); must not change after Push
 };
 
+// Several commands as one undo step (done in order, undone in reverse order).
+class CompositeCommand : public Command {
+public:
+    CompositeCommand(std::string name, std::vector<std::unique_ptr<Command>> parts)
+        : name_(std::move(name)), parts_(std::move(parts)) {}
+    void Do() override { for (auto& c : parts_) c->Do(); }
+    void Undo() override { for (auto it = parts_.rbegin(); it != parts_.rend(); ++it) (*it)->Undo(); }
+    std::string Name() const override { return name_; }
+    size_t Bytes() const override {
+        size_t bytes = sizeof(*this) + name_.size();
+        for (const auto& c : parts_) bytes += c->Bytes();
+        return bytes;
+    }
+
+private:
+    std::string name_;
+    std::vector<std::unique_ptr<Command>> parts_;
+};
+
 class CommandStack {
 public:
     // Executes the command and records it; clears the redo branch.

@@ -5,6 +5,7 @@
 #include <fstream>
 #include <sstream>
 
+#include "anim/ModelInstance.h"
 #include "core/Log.h"
 #include "core/TextUtil.h"
 #include "imgui.h"
@@ -137,6 +138,67 @@ void App::PumpUiScript() {
                          d.history.Bytes() / 1048576.0, d.view.scrollFrame, d.view.pxPerFrame,
                          GImGui->HoveredWindow ? GImGui->HoveredWindow->Name : "-", (unsigned)GImGui->ActiveId);
             }
+            if (studio_) {
+                const studio::StudioDoc& d = *studio_;
+                const studio::StudioModel* m = d.Selected();
+                std::string bone = "-", value;
+                size_t poseBones = 0, poseMorphs = 0;
+                int poseFrame = -1;
+                if (m && !m->isStage) {
+                    poseBones = m->pose.bones.size();
+                    poseMorphs = m->pose.morphs.size();
+                    poseFrame = m->pose.frame;
+                    if (d.activeBone >= 0 && d.activeBone < (int)m->pmx->bones.size()) {
+                        bone = m->pmx->bones[(size_t)d.activeBone].name;
+                        const auto& t = m->inst->BoneAnimTranslation(d.activeBone);
+                        const auto& r = m->inst->BoneAnimRotation(d.activeBone);
+                        char buf[160];
+                        std::snprintf(buf, sizeof(buf), "t=(%.3f,%.3f,%.3f) r=(%.4f,%.4f,%.4f,%.4f)", t.x, t.y, t.z, r.x, r.y, r.z, r.w);
+                        value = buf;
+                    }
+                }
+                LOG_INFO("STUDIOPOSE bone=%s %s selBones=%zu pose=%zu/%zu@%d tool=%d local=%d tab=%d gizmo=%d viewDrag=%d",
+                         bone.c_str(), value.c_str(), d.selectedBones.size(), poseBones, poseMorphs, poseFrame, d.gizmoTool,
+                         (int)d.gizmoLocal, d.inspectorTab, (int)studioGizmoShown_, studioViewDrag_);
+            }
+        } else if (s.cmd == "studiobone") {  // studiobone <name>: click the bone's joint in the viewport
+            const studio::StudioModel* m = studio_ ? studio_->Selected() : nullptr;
+            const int bone = m && !s.args.empty() ? m->pmx->FindBone(s.args[0]) : -1;
+            ImVec2 pt;
+            if (bone < 0 || !studioVp_.Project(studio::BoneJointWorld(*m->pmx, *m->inst, bone), pt)) {
+                LOG_WARN("ui script: bone '%s' not found or not visible", s.args.empty() ? "" : s.args[0].c_str());
+            } else {
+                uiScriptMouse_[0] = pt.x;
+                uiScriptMouse_[1] = pt.y;
+                io.AddMousePosEvent(pt.x, pt.y);
+                schedule(now + 1, "down", {"l"});
+                schedule(now + 2, "up", {"l"});
+            }
+        } else if (s.cmd == "studiogizmo") {  // studiogizmo <x|y|z|yz|zx|xy|rx|ry|rz> <dx> <dy> [frames]: drag a gizmo part
+            static const char* const kParts[] = {"", "x", "y", "z", "yz", "zx", "xy", "rx", "ry", "rz"};
+            int part = 0;
+            for (int i = 1; i < 10; ++i)
+                if (!s.args.empty() && s.args[0] == kParts[i]) part = i;
+            ImVec2 pt;
+            if (!studio_ || part == 0 || !StudioScriptGizmoPoint(part, pt)) {
+                LOG_WARN("ui script: gizmo part '%s' not shown", s.args.empty() ? "" : s.args[0].c_str());
+            } else {
+                const int steps = std::max(1, s.args.size() > 3 ? std::atoi(s.args[3].c_str()) : 8);
+                LOG_INFO("UISCRIPT gizmo %s at %.0f,%.0f", s.args[0].c_str(), pt.x, pt.y);
+                uiScriptMouse_[0] = pt.x;
+                uiScriptMouse_[1] = pt.y;
+                io.AddMousePosEvent(pt.x, pt.y);
+                schedule(now + 1, "down", {"l"});
+                for (int k = 1; k <= steps; ++k) {
+                    const float f = (float)k / steps;
+                    schedule(now + 1 + k, "move", {std::to_string(pt.x + num(1) * f), std::to_string(pt.y + num(2) * f)});
+                }
+                schedule(now + steps + 2, "up", {"l"});
+            }
+        } else if (s.cmd == "studiovpdimport") {
+            if (studio_ && !s.args.empty()) StudioImportVpdFrom(Utf8ToPath(s.args[0]));
+        } else if (s.cmd == "studiovpdexport") {
+            if (studio_ && !s.args.empty()) StudioExportVpdTo(Utf8ToPath(s.args[0]));
         } else if (s.cmd == "studioimport") {
             if (studio_ && !s.args.empty()) StudioImportVmdFrom(Utf8ToPath(s.args[0]));
         } else if (s.cmd == "studioexport") {

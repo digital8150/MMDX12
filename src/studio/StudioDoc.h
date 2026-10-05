@@ -7,6 +7,7 @@
 #include "asset/PmxModel.h"
 #include "studio/CommandStack.h"
 #include "studio/StudioMotion.h"
+#include "studio/StudioPose.h"
 #include "studio/UiTimeline.h"
 #include <cmath>
 #include <filesystem>
@@ -43,6 +44,10 @@ struct StudioModel {
     uint64_t motionVersion = 1;    // bumped by every edit of `motion`
     uint64_t boundVersion = 0;     // motionVersion `bound` was built from
     std::shared_ptr<BoundMotion> bound;
+    PoseLayer pose;                // unregistered viewport edits (override the motion at pose.frame)
+    // Display-frame group of each bone/morph's first timeline row (CanonicalRow); filled on load.
+    std::vector<uint32_t> boneRowGroup, morphRowGroup;
+    void BuildRowGroups();
 };
 
 // Timeline row ids: kind in the top byte, then a 24-bit group and a 32-bit index.
@@ -53,6 +58,10 @@ inline uint64_t MakeRowId(RowKind k, uint32_t group, uint32_t index) {
 inline RowKind RowKindOf(uint64_t id) { return (RowKind)(id >> 56); }
 inline uint32_t RowIndexOf(uint64_t id) { return (uint32_t)id; }
 inline uint32_t RowGroupOf(uint64_t id) { return (uint32_t)(id >> 32) & 0xFFFFFF; }
+
+// The row that represents a bone/morph track in the key selection: a bone listed in two display frames has two rows,
+// but its keys are selected through the first one only (CanonicalRow), so counts and edits see each key once.
+uint64_t CanonicalRow(const StudioModel& m, RowKind kind, uint32_t index);
 
 // A key in the timeline selection: row (bone/morph/camera rows only, never groups) + frame.
 using KeyId = std::pair<uint64_t, int>;
@@ -103,10 +112,24 @@ struct StudioDoc {
     RowKind curveClipKind = RowKind::Group;  // copied interpolation block: Bone (64 bytes) or Camera (24); Group = empty
     uint8_t curveClip[64] = {};
 
+    // pose editing (viewport)
+    std::set<int> selectedBones;      // bones picked in the viewport / on bone rows (selected model)
+    int activeBone = -1;              // the gizmo's bone (last picked), -1 none
+    int gizmoTool = 0;                // 0 rotate, 1 translate
+    bool gizmoLocal = false;          // gizmo axes: bone-local (true) or global
+    bool showBones = true;            // bone overlay
+    int inspectorTab = 0;             // 0 keys, 1 bone, 2 morphs (characters only)
+    int poseScope = 0;                // VPD / mirror scope: 0 whole model, 1 selected bones
+    int pendingSeekFrame = -1;        // set by pose undo/redo: the App seeks there (the pose belongs to that frame)
+    int scrollToRow = 0;              // > 0: the timeline scrolls the row `scrollRowId` into view (frames left to try)
+    uint64_t scrollRowId = 0;
+    char morphFilter[64] = {};
+
     int Frame() const { return (int)std::floor(time * kMmdFps + 1e-4); }
     bool HasRange() const { return view.rangeStart >= 0 && view.rangeEnd >= view.rangeStart; }
     int EndFrame() const;             // last key over all motions, the audio length, at least 300
     StudioModel* Selected() { return selectedModel >= 0 && selectedModel < (int)models.size() ? models[selectedModel].get() : nullptr; }
+    const StudioModel* Selected() const { return const_cast<StudioDoc*>(this)->Selected(); }
     void TouchModel(int model);       // after editing a motion (model -1 = camera)
 };
 
@@ -147,6 +170,32 @@ private:
     StudioDoc& doc_;
     std::string name_;
     std::vector<TrackState> before_, after_;
+};
+
+// Replaces a model's pose layer (viewport edits, register, reset, VPD, mirror). Restoring a non-empty layer of another
+// frame asks the App to seek there (pendingSeekFrame), since a pose only applies at its own frame.
+class PoseEditCommand : public Command {
+public:
+    PoseEditCommand(StudioDoc& doc, int model, std::string name, PoseLayer before, PoseLayer after)
+        : doc_(doc), model_(model), name_(std::move(name)), before_(std::move(before)), after_(std::move(after)) {}
+    void Do() override { Apply(after_); }
+    void Undo() override { Apply(before_); }
+    std::string Name() const override { return name_; }
+    size_t Bytes() const override {
+        return sizeof(*this) + name_.size() + (before_.bones.size() + after_.bones.size()) * 64 +
+               (before_.morphs.size() + after_.morphs.size()) * 48;
+    }
+
+private:
+    void Apply(const PoseLayer& l) {
+        if (model_ < 0 || model_ >= (int)doc_.models.size()) return;
+        doc_.models[model_]->pose = l;
+        if (!l.Empty() && l.frame != doc_.Frame()) doc_.pendingSeekFrame = l.frame;
+    }
+    StudioDoc& doc_;
+    int model_;
+    std::string name_;
+    PoseLayer before_, after_;
 };
 
 // Replaces a whole motion (VMD import): also covers IK tracks, which TrackState does not.
