@@ -138,7 +138,7 @@ bool LoadVmd(const std::filesystem::path& path, VmdMotion& out, std::string* err
             }
         }
 
-        // ---- self shadow keys (optional section, discarded) ----
+        // ---- self shadow keys (optional section) ----
         if (r.Remaining() > 0) {
             uint32_t shadowCount = 0;
             if (!r.Read(shadowCount) ||
@@ -148,11 +148,17 @@ bool LoadVmd(const std::filesystem::path& path, VmdMotion& out, std::string* err
                 out.sourcePath = std::filesystem::absolute(path);
                 return true;
             }
-            if (!r.Skip(static_cast<size_t>(shadowCount) * 9)) {
-                LOG_WARN("VMD %s: corrupt shadow section, ignoring the rest",
-                         out.modelName.c_str());
-                out.sourcePath = std::filesystem::absolute(path);
-                return true;
+            out.shadowKeys.resize(shadowCount);
+            for (uint32_t i = 0; i < shadowCount; ++i) {
+                VmdShadowKey& key = out.shadowKeys[i];
+                if (!r.Read(key.frame) || !r.Read(key.mode) || !r.Read(key.distance)) {
+                    LOG_WARN("VMD %s: corrupt shadow section, ignoring the rest",
+                             out.modelName.c_str());
+                    out.shadowKeys.resize(i);
+                    out.sourcePath = std::filesystem::absolute(path);
+                    return true;
+                }
+                out.maxFrame = UpdateMaxFrame(out.maxFrame, key.frame);
             }
         }
 

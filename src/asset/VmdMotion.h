@@ -17,7 +17,10 @@ struct VmdBoneKey {
     XMFLOAT3 translation{};
     XMFLOAT4 rotation{0, 0, 0, 1};  // quaternion xyzw
     // Raw 64-byte interpolation block. Channel c (0=X,1=Y,2=Z,3=Rotation) bezier control
-    // points: x1 = interp[c], y1 = interp[c+4], x2 = interp[c+8], y2 = interp[c+12]  (0..127)
+    // points: x1 = interp[c], y1 = interp[c+4], x2 = interp[c+8], y2 = interp[c+12]  (0..127),
+    // except that MMD overwrites interp[2] and interp[3] (Z/R x1) with physics flags: rows 1..3
+    // repeat row 0 shifted by 1..3 bytes, so Z x1 = interp[17] and R x1 = interp[18].
+    // Read/write curves with studio::GetBoneCurve / SetBoneCurve.
     uint8_t interp[64] = {};
 };
 
@@ -51,6 +54,12 @@ struct VmdIkKey {
     std::vector<std::pair<std::string, bool>> ikStates;  // (IK bone name, enabled)
 };
 
+struct VmdShadowKey {
+    uint32_t frame = 0;
+    uint8_t mode = 0;       // 0 off, 1 mode1, 2 mode2
+    float distance = 0;
+};
+
 struct VmdMotion {
     std::filesystem::path sourcePath;
     std::string modelName;  // "カメラ・照明" for camera files
@@ -58,11 +67,13 @@ struct VmdMotion {
     std::vector<VmdMorphKey> morphKeys;
     std::vector<VmdCameraKey> cameraKeys;
     std::vector<VmdLightKey> lightKeys;
+    std::vector<VmdShadowKey> shadowKeys;
     std::vector<VmdIkKey> ikKeys;
     uint32_t maxFrame = 0;  // largest frame number over all key types
 };
 
 bool LoadVmd(const std::filesystem::path& path, VmdMotion& out, std::string* error = nullptr);
+bool SaveVmd(const std::filesystem::path& path, const VmdMotion& motion, std::string* error = nullptr);
 
 struct VmdProbe {
     std::string modelName;

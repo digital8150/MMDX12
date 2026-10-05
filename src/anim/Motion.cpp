@@ -105,8 +105,10 @@ std::shared_ptr<BoundMotion> BoundMotion::Bind(const PmxModel& model, const std:
             const uint8_t* ip = k.interp;
             key.bx = Bezier::FromBytes(ip[0], ip[4], ip[8], ip[12]);
             key.by = Bezier::FromBytes(ip[1], ip[5], ip[9], ip[13]);
-            key.bz = Bezier::FromBytes(ip[2], ip[6], ip[10], ip[14]);
-            key.br = Bezier::FromBytes(ip[3], ip[7], ip[11], ip[15]);
+            // MMD overwrites bytes 2 and 3 (Z and rotation x1) with physics flags; the real values survive in
+            // the second row, which is the first one shifted by a byte (checked on 800k keys of the library).
+            key.bz = Bezier::FromBytes(ip[17], ip[6], ip[10], ip[14]);
+            key.br = Bezier::FromBytes(ip[18], ip[7], ip[11], ip[15]);
             m->boneTracks_[it->second].keys.push_back(key);
         }
         for (const VmdMorphKey& k : vmd->morphKeys) {
