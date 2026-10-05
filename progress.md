@@ -425,3 +425,44 @@ every frame and encodes an MP4, 3) GI with a Pixar/Disney-like look while keepin
 - Real file dialogs (open/save/add/audio) were not clicked by a test; the audio-file worker path only by code review.
 - Studio videos at full 4K/60 GI length (only short ranges rendered); no sample-render time estimate in the studio
   dialog (rough estimate only).
+
+## 2026-10-06 (2) — in-app auto-update
+
+### Done
+- **Updater** (`src/app/Updater.{h,cpp}`, module `mmdx::updater`): the portable app checks
+  `https://mmdx.codingbot.kr/latest.json` in the background at start (WinHTTP like
+  LeaderboardClient, silent failures, skipped in headless/scripted runs) and offers the update
+  on the select screen. Semantic version compare; `notes` resolved per UI language (ko/ja/zh/en
+  fallback). "Update": download (progress + cancel), verify size + SHA-256 (self-contained
+  FIPS 180-4 impl, streamed), extract with the Windows built-in `tar.exe` (CREATE_NO_WINDOW,
+  output piped), then a journal-based swap across a restart — the running exe cannot overwrite
+  itself, so it writes `update_tmp/state.json` (phase "pending") and spawns
+  `MMDX12.exe --apply-update --apply-wait <pid>`; the applier waits for the old process, renames
+  collided program files aside into `update_tmp/old/`, moves the new tree in, and relaunches.
+  Every failure rolls the renames back and relaunches the old exe; an interrupted swap is
+  applied by the next start (the journal is authoritative); leftovers are cleaned up on the
+  next start (`update: <ver> installed` breadcrumb logged, log archived to mmdx12.previous.log).
+  Only program files are replaced: the user's `library/`, ini, `recovery/` and logs survive.
+  An install folder that is not writable switches the notice to "open the release page".
+- UI (`UiUpdate.cpp`): an unobtrusive footer notice on the select screen (new version + its
+  note, Update / Later; "Later" hides it until the next start), a progress dialog
+  (download/verify/extract + cancel), the failure and not-writable variants with the release
+  page. UiKit style; strings in all four UI languages (ko source + en/ja/zh tables).
+- Testing hooks: `--update-feed <url-or-file>` (https, file: URL or local path; the zip url
+  may also be local), ui-script commands `updatecheck` (synchronous check, logs UPDATECHECK)
+  and `updateinstall` (stages, then the app exits for the restart). `updateFeedUrl` ini key.
+- Checked: `build.cmd` builds clean. Headless end-to-end in %TEMP%\opencode\upd_e2e: a copy of
+  the app (dist 1.0.0 tree + the new exe) with a dummy library file, ini nickname and recovery
+  file updated itself from a local feed + a locally zipped fake 9.9.9 version via
+  `--ui-script` `updateinstall`: zip verified (sha256 ok), extracted, swapped across the
+  restart (VERSION.txt 1.0.0 -> 9.9.9, NEW_IN_999.txt landed, msvcp140/dxcompiler DLLs
+  replaced), library/ini/recovery intact, update_tmp cleaned, and the restarted exe logged
+  `update: 9.9.9 installed (this run started after the update)`. Captures of the notice
+  (available / verifying / failed), a corrupted-sha run (update aborts, nothing installed, no
+  leftovers), and a click-through (Update button works from a ui-script). Studio unit tests
+  (15 + 66) still pass.
+
+### Not verified
+- The real https feed (the server does not serve latest.json yet); the not-writable path was
+  exercised only through the code path (Phase::NotWritable logic), not a read-only folder.
+- The update button + notice were clicked headlessly; a human should also see them once.

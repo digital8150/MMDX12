@@ -7,6 +7,7 @@
 #include "app/SceneLoader.h"
 #include "app/Settings.h"
 #include "app/ThumbnailCache.h"
+#include "app/Updater.h"
 #include "app/VideoEncoder.h"
 #include "asset/AssetLibrary.h"
 #include "audio/AudioPlayer.h"
@@ -50,6 +51,8 @@ namespace mmdx {
 //                          studiogizmo <x|y|z|yz|zx|xy|rx|ry|rz> <dx> <dy> [steps] (drags that gizmo part by dx,dy px).
 //                          studiostate also logs a STUDIOPOSE line (active bone + value, pose layer, tool) and a
 //                          STUDIOPROJ line + one STUDIOMODEL line per model (kind, keys, attach, root position).
+//                          updatecheck (synchronous update-feed check, logs UPDATECHECK) |
+//                          updateinstall (stage the feed's update; the app exits when staged)
 //                          Projects / models without dialogs (UiStudioProject.cpp): studionew | studiosave <file> |
 //                          studioopen <file> | studioautosave (writes the recovery file now) | studioadd
 //                          <character|stage|prop> <file> | studioaddlib <character|stage> <substr> | studiosong <substr>
@@ -90,6 +93,10 @@ namespace mmdx {
 //                                whole project; motion camera; project audio) and quits; --offline-still renders the
 //                                --seek frame (GI).
 //   --ui-scale <f>               UI scale for this run instead of the monitor's DPI scale (1.5 = 144 dpi; captures)
+//   --update-feed <url-or-file>  auto-update feed override: an https URL, a file: URL or a local
+//                                latest.json path (testing); the zip url may also be file:/local
+//   --apply-update               internal: apply a staged update with no window, then exit
+//   --apply-wait <pid>           internal: process id the applier waits for before the swap
 struct AppOptions {
     std::filesystem::path libraryOverride;
     std::string character, stage, song;
@@ -128,6 +135,9 @@ struct AppOptions {
     std::filesystem::path project;  // --project
     float uiScale = 0.0f;           // --ui-scale (0 = the window's DPI scale)
     std::string startScreen;  // --screen select|bench: open that screen after the scan; --frames then counts every frame  // --free-camera: start in the orbit camera instead of the VMD camera
+    std::string updateFeed;   // --update-feed: feed URL / file override (empty: the default feed)
+    bool applyUpdate = false; // --apply-update (internal): apply a staged update, then exit
+    uint32_t applyWaitPid = 0;        // --apply-wait (internal): pid the applier waits for
 };
 AppOptions ParseCommandLine(int argc, wchar_t** argv);  // unknown args are logged and ignored
 
@@ -343,6 +353,17 @@ private:
     // --- scripted UI input for tests (UiScript.cpp)
     void PumpUiScript();  // before ImGui::NewFrame: feeds the events due at framesInScene_
 
+    // --- auto-update (UiUpdate.cpp): background check, notice, staged install across a restart
+    void InitUpdater();          // once after the settings load: feed URL + current version
+    void StartUpdateCheck();     // background check when the run is not headless/scripted
+    void UpdateUpdate();         // every frame (any screen with the app bar): drains the workers
+    void DrawUpdateNotice();     // the select screen's notice (available / progress / failed)
+    void DrawUpdateProgressDialog();
+    void StartUpdateInstall();   // "Update": stages and spawns the applier, then quits
+    void UpdateCheckCommand();   // ui-script "updatecheck": synchronous check, logs the result
+    void UpdateInstallCommand(); // ui-script "updateinstall": full flow, exits when staged
+    bool HeadlessRun() const;    // --frames / --ui-script / benchmarks / offline renders
+
     // --- thumbnails (AppThumbnails.cpp)
     std::filesystem::path ThumbnailCacheDir() const;
     bool RenderThumbnail(ThumbnailKind kind, std::vector<LoadedModelCpu>& models, ImageRGBA8& out);
@@ -525,6 +546,12 @@ private:
     size_t uiScriptNext_ = 0;
     bool uiScriptLoaded_ = false;
     float uiScriptMouse_[2] = {-1e30f, -1e30f};  // last scripted mouse position (re-sent every frame)
+
+    // auto-update (Updater.h): the controller owns its worker threads; the UI polls
+    updater::Controller update_;
+    bool updateCheckQueued_ = false;   // the check starts once the window is up
+    bool updateInstallingFromCli_ = false;  // ui-script "updateinstall": exit when staged/failed
+    std::string updateRelaunchArgs_;   // argv for the restarted app (cli-triggered updates)
 
     // studio
     std::unique_ptr<studio::StudioDoc> studio_;

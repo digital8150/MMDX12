@@ -42,6 +42,7 @@ struct AppSettings {
     VideoRenderConfig video;         // video render (lobby dialog)
     std::vector<VideoProbe> videoProbes;  // measured sample renders, oldest first
     std::string leaderboardUrl = "https://home.codingbot.kr/api/benchmark";
+    std::string updateFeedUrl;               // auto-update feed (empty: the built-in default)
     std::string lastCharacter, lastStage, lastSong;  // asset ids
     std::map<std::string, float> characterScales;    // character id -> display scale (absent = 1)
     float CharacterScale(const std::string& id) const;

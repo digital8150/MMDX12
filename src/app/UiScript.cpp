@@ -291,6 +291,10 @@ void App::PumpUiScript() {
             }
         } else if (s.cmd == "log") {
             LOG_INFO("UISCRIPT %s", s.args.empty() ? "" : s.args[0].c_str());
+        } else if (s.cmd == "updatecheck") {  // synchronous update-feed check, logs UPDATECHECK
+            UpdateCheckCommand();
+        } else if (s.cmd == "updateinstall") {  // stage the feed's update; the app exits when staged
+            UpdateInstallCommand();
         } else {
             LOG_WARN("ui script: unknown command '%s'", s.cmd.c_str());
         }

@@ -616,6 +616,16 @@ const Entry kEnglish[] = {
     {"프로젝트", "Project"},
     {"마우스 · 뷰포트", "Mouse · viewport"},
     {"마우스 · 타임라인", "Mouse · timeline"},
+    {"나중에", "Later"},
+    {"업데이트", "Update"},
+    {"릴리스 페이지 열기", "Open release page"},
+    {"업데이트 확인에 실패했습니다", "Update check failed"},
+    {"새 버전이 있지만 설치 폴더에 쓸 수 없습니다", "A new version is available but the install folder is not writable"},
+    {"새 버전", "New version"},
+    {"MMDX12 %s(으)로 업데이트하는 중...", "Updating to MMDX12 %s..."},
+    {"확인하는 중", "Verifying"},
+    {"압축을 푸는 중", "Extracting"},
+    {"다운로드하는 중", "Downloading"},
 };
 const int kEnglishCount = (int)(sizeof(kEnglish) / sizeof(kEnglish[0]));
 

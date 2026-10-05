@@ -80,7 +80,8 @@ std::string SanitizeFileName(std::string s) {
     return s;
 }
 
-// Width ui::Button gives itself for `label` (+ optional icon) with size.x == 0.
+// Width ui::Button gives itself for `label` (+ optional icon) with size.x == 0. UiUpdate.cpp
+// carries the same local helper (UiHelpers.h stays free of UiKit includes).
 float ButtonWidth(const char* label, bool withIcon) {
     return ui::Dp(32.0f) + (withIcon ? ui::Dp(18.0f + 8.0f) : 0.0f) +
            ui::TextSize(ui::Font::Semibold, ui::size::Body, label).x;

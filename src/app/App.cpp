@@ -150,6 +150,12 @@ AppOptions ParseCommandLine(int argc, wchar_t** argv) {
                 opt.hasCamera = true;
                 opt.freeCamera = true;
             }
+        } else if (arg == L"--update-feed") {
+            opt.updateFeed = WideToUtf8(next());
+        } else if (arg == L"--apply-update") {
+            opt.applyUpdate = true;
+        } else if (arg == L"--apply-wait") {
+            opt.applyWaitPid = (uint32_t)_wtoi(next().c_str());
         } else {
             LOG_WARN("unknown command line argument: %s", WideToUtf8(arg).c_str());
         }
@@ -163,6 +169,16 @@ AppOptions ParseCommandLine(int argc, wchar_t** argv) {
 
 int App::Run(HINSTANCE instance, const AppOptions& options) {
     options_ = options;
+
+    // A leftover staged update (the applier never ran, e.g. the machine was switched off mid
+    // swap) is completed before anything else opens; --apply-update runs the applier directly.
+    if (options_.applyUpdate) return updater::ApplyPendingUpdateAndRelaunch(options_.applyWaitPid, true);
+    if (updater::HasPendingUpdate()) {
+        LOG_INFO("update: applying a staged update left by the previous run");
+        return updater::ApplyPendingUpdateAndRelaunch(0, false);
+    }
+    updater::CleanupUpdateLeftovers();
+
     LOG_INFO("MMDX12 %s", MMDX12_VERSION);
     settingsPath_ = ExecutableDir() / L"mmdx12.ini";
     settings_.Load(settingsPath_);
@@ -226,6 +242,7 @@ int App::Run(HINSTANCE instance, const AppOptions& options) {
     QueryPerformanceCounter(&start);
     timeSeconds_ = (double)start.QuadPart / (double)freq.QuadPart;
 
+    InitUpdater();
     StartScan();
     MainLoop();
 
@@ -444,6 +461,7 @@ void App::RenderFrame() {
     PollScan();
     PollLoad();
     PollProbeScene();
+    UpdateUpdate();
 
     switch (screen_) {
     case Screen::Scanning: DrawScanning(); break;
@@ -452,6 +470,7 @@ void App::RenderFrame() {
         DrawSelect();
         DrawVideoRenderDialog();
         DrawRecoveryPrompt();
+        DrawUpdateNotice();
         DrawToast();
         break;
     case Screen::Loading: DrawLoading(); break;

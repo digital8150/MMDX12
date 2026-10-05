@@ -135,6 +135,7 @@ bool AppSettings::Load(const std::filesystem::path& file) {
             }
         }
         else if (key == "leaderboardUrl") leaderboardUrl = value;
+        else if (key == "updateFeedUrl") updateFeedUrl = value;
         else if (key == "characterScale") {
             // characterScale=<scale>|<character id>
             const size_t bar = value.find('|');
@@ -242,6 +243,7 @@ bool AppSettings::Save(const std::filesystem::path& file) const {
     for (const VideoProbe& pr : videoProbes)
         std::fprintf(f, "videoProbe=%llx:%.4f\n", (unsigned long long)pr.key, pr.secondsPerFrame);
     std::fprintf(f, "leaderboardUrl=%s\n", leaderboardUrl.c_str());
+    std::fprintf(f, "updateFeedUrl=%s\n", updateFeedUrl.c_str());
     for (const auto& [id, scale] : characterScales) std::fprintf(f, "characterScale=%.3f|%s\n", scale, id.c_str());
     std::fprintf(f, "lastCharacter=%s\n", lastCharacter.c_str());
     std::fprintf(f, "lastStage=%s\n", lastStage.c_str());
