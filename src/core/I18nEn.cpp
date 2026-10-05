@@ -30,7 +30,6 @@ const Entry kEnglish[] = {
     {"MP4 인코더를 만들 수 없습니다 (HRESULT 0x%08X)", "Could not create the MP4 encoder (HRESULT 0x%08X)"},
     {"Media Foundation을 초기화할 수 없습니다", "Could not initialize Media Foundation"},
     {"M샘플/초", "M samples/s"},
-    {"PMX 모델, 스테이지, VMD 모션과 음원이 들어 있는 폴더입니다. 폴더 구성은 자유롭게 두어도 됩니다.", "The folder that holds your PMX models, stages, VMD motions and music. The folder layout doesn't matter."},
     {"가장 깨끗하지만 가장 오래 걸립니다", "Cleanest result, but takes the longest"},
     {"건", ""},
     {"검색 결과가 없습니다", "No results"},
@@ -70,7 +69,6 @@ const Entry kEnglish[] = {
     {"라이브러리 다시 검색", "Rescan library"},
     {"라이브러리 폴더 변경", "Change library folder"},
     {"라이브러리 폴더", "Library folder"},
-    {"라이브러리 폴더에 PMX 모델을 넣어 주세요", "Put PMX models in the library folder"},
     {"라이브러리 폴더에 VMD 댄스 모션을 넣어 주세요", "Put VMD dance motions in the library folder"},
     {"라이브러리", "Library"},
     {"라이브러리로 (Esc)", "Back to library (Esc)"},
@@ -277,6 +275,14 @@ const Entry kEnglish[] = {
     {"시네벤치처럼 장면 한 장을 오프라인 GI 렌더러로 그리고, 끝까지 걸린 시간으로 점수를 매깁니다. 내 라이브러리에서 정점이 가장 많은 캐릭터 3명이 춤 동작의 한 순간을 취하고, 유리 큐브의 굴절·분산·투과와 소프트박스 조명을 이래디언스 캐시와 패스 트레이싱으로 계산합니다. 4K · 픽셀당 4096 샘플 고정.", "Like Cinebench, it draws one scene with the offline GI renderer and scores you on the time it takes. The three characters with the most vertices in your library strike a dance pose, and a glass cube's refraction, dispersion, transmission and softbox lighting are computed with an irradiance cache and path tracing. 4K, fixed at 4096 samples per pixel."},
     {"내 라이브러리에서 정점이 가장 많은 캐릭터와 무대, 길이가 2분 30초에 가장 가까운 곡을 자동으로 골라 같은 작업량(프레임당 1/60초)으로 측정합니다. 음소거, 수직 동기화와 업스케일러 끔, 높음 품질. 래스터·RT는 MSAA 4x, PT는 1 spp · 3회 반사.", "Automatically picks the character and stage with the most vertices in your library and the song closest to 2:30, and measures them with the same workload (1/60 s per frame). Muted, V-Sync and upscaler off, High quality. Raster/RT use MSAA 4x; PT uses 1 spp and 3 bounces."},
     {"%d위  ·  전체 %d건", "Rank %d  ·  %d total"},
+    {"캐릭터(PMX·VRM·glTF·FBX), 스테이지, VMD 모션과 음원이 들어 있는 폴더입니다. characters·stages·songs 폴더에 나눠 두면 확실하고, 아무렇게나 두어도 내용으로 분류합니다. 카드를 우클릭하면 종류를 바꾸거나 숨길 수 있습니다.", "The folder with your characters (PMX, VRM, glTF, FBX), stages, VMD motions and audio. Sorting them into characters, stages and songs folders is the sure way; anything else is classified by content. Right-click a card to change its type or hide it."},
+    {"라이브러리의 characters 폴더에 모델을 넣어 주세요", "Put models in the library's characters folder"},
+    {"스테이지로 사용", "Use as a stage"},
+    {"캐릭터로 사용", "Use as a character"},
+    {"숨기기", "Hide"},
+    {"자동 분류로 되돌리기", "Back to automatic"},
+    {"탐색기에서 보기", "Show in Explorer"},
+    {"숨긴 항목 다시 표시", "Show hidden items"},
 };
 const int kEnglishCount = (int)(sizeof(kEnglish) / sizeof(kEnglish[0]));
 

@@ -31,14 +31,23 @@ progress.md is the session log. Read its latest entry first.
     Add `--frames 100000 --capture out.png` to capture the result screen.
   - Each run opens a visible window: never launch app runs in parallel or in batches without telling the user.
 - Tools:
-  - `asset_probe <library> [--full]`: scan, classify, and load everything
+  - `asset_probe <library> [--full]`: scan, classify (prints notes on skipped/guessed files), and load everything
   - `anim_probe <pmx> <vmd> [cam.vmd]`: IK convergence, CPU skinning bounds, NaN scan, physics scan (explosions, cost)
   - `render_smoke`: renders a cube with no assets
 - The play bar auto-hides while playing with no mouse movement, so captures usually don't show it.
 
 ## Architecture (src/)
 - `core`: logging, text encodings (Shift-JIS/UTF-16/UTF-8).
-- `asset`: PMX/VMD parsers, image loading (stb with a WIC fallback), `AssetLibrary` (content-based classification).
+- `asset`: PMX/VMD parsers, image loading (stb with a WIC fallback, also from memory), `AssetLibrary`, `ModelImport`.
+  - `AssetLibrary` precedence: app overrides (`library_overrides.json` next to the exe, right-click on a card) > `mmdx.json`
+    sidecars > folder names (characters/models, stages, songs/motions, several languages) > content. Several songs in one
+    folder are split only when it also holds several audio files or cameras; audio/cameras are matched by length + file name.
+    New installs get `assets/library_template` (characters/ stages/ songs/) copied into an empty library.
+  - `ModelImport`: `LoadModelFile(path, role)` reads PMX natively and converts glTF/GLB/VRM (cgltf) and FBX/OBJ (ufbx) into a
+    `PmxModel` via `ImpScene` (ImportScene.h). Characters: humanoid map (VRM table or name dictionary) -> MMD bone names,
+    synthesised センター/グルーブ + leg IK, arms re-posed to 38 deg (MMD A-pose), morph aliases (あいうえお, まばたき); no physics.
+    Stages: baked, one root bone, moved onto their main floor when nothing is under the origin. Embedded textures live in
+    `PmxModel::embeddedTextures`. Test assets: `captures/testlib` (messy layout) and `captures/assets_dl` (three.js/Khronos/VRM samples).
 - `anim`: `ModelInstance` (bones, append, IK, morphs) and `Motion` (VMD Bezier evaluation, camera).
   - `PhysicsWorld` (Bullet, `Physics.cpp` only) runs between the before- and after-physics bones in `UpdatePose(dt)`.
     Only the character enables it. `App::UpdateScene` derives dt from the motion clock and resets the bodies on seeks/loops.
@@ -74,7 +83,8 @@ progress.md is the session log. Read its latest entry first.
 - Runtime shader compile errors only appear in `build/bin/mmdx12.log` as `[E]` lines (warnings `[W]`); a failed optional pipeline silently falls back, so grep the log after every capture. `line` is a reserved word in HLSL (DXC rejects it as a variable name).
 - Shaders under `build/bin/shaders` compile at runtime, so a shader can be debugged by editing that copy and rerunning (restore it afterwards).
 - `library/` (MMD assets, about 1.4 GB) and `captures/` are git-ignored test data. Never modify `library/`.
-- `external/` is vendored third-party code (imgui, stb, miniaudio, DirectX-Headers, nlohmann json, Bullet 3.25 subset). Don't edit it.
+- `external/` is vendored third-party code (imgui, stb, miniaudio, DirectX-Headers, nlohmann json, Bullet 3.25 subset, cgltf 1.15, ufbx 0.23.1). Don't edit it.
+  - miniaudio's implementation lives in `core/AudioProbe.cpp` (the scanner measures audio lengths).
   - Bullet is built per file, not from its `*All.cpp` unity files (`btVector3.cpp` defines `BT_USE_SSE_IN_API`, which breaks later files).
 
 ## Private notes

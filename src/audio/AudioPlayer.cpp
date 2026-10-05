@@ -1,6 +1,5 @@
 #include "audio/AudioPlayer.h"
 
-#define MINIAUDIO_IMPLEMENTATION
 #include "miniaudio.h"
 
 #include "core/Log.h"

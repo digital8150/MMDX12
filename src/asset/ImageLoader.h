@@ -21,6 +21,9 @@ struct ImageRGBA8 {
 // the content, so the extension is irrelevant). Builds mips with a 2x2 box filter down
 // to 1x1 (odd sizes: clamp the source coordinate). Returns false on failure.
 bool LoadImageRGBA8(const std::filesystem::path& path, ImageRGBA8& out, std::string* error = nullptr);
+// Same decode from an in-memory file image (textures embedded in glTF/GLB/VRM/FBX). WIC covers
+// formats stb lacks (e.g. WebP when the system codec is installed).
+bool LoadImageRGBA8FromMemory(const uint8_t* bytes, size_t size, ImageRGBA8& out, std::string* error = nullptr);
 
 // Writes level 0 of an RGBA8 buffer as PNG (stb_image_write).
 bool SavePngRGBA8(const std::filesystem::path& path, uint32_t width, uint32_t height,

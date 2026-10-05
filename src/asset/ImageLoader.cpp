@@ -25,11 +25,12 @@ namespace mmdx {
 
 namespace {
 
-bool LoadWithWic(const std::filesystem::path& path, std::vector<uint8_t>& pixels,
+bool LoadWithWic(const uint8_t* bytes, size_t size, std::vector<uint8_t>& pixels,
                  int& w, int& h) {
     HRESULT hr = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
     bool mustUninit = SUCCEEDED(hr);  // S_OK or S_FALSE
     IWICImagingFactory* factory = nullptr;
+    IWICStream* stream = nullptr;
     IWICBitmapDecoder* decoder = nullptr;
     IWICBitmapFrameDecode* frame = nullptr;
     IWICBitmapSource* converted = nullptr;
@@ -38,8 +39,11 @@ bool LoadWithWic(const std::filesystem::path& path, std::vector<uint8_t>& pixels
         hr = CoCreateInstance(CLSID_WICImagingFactory, nullptr, CLSCTX_INPROC_SERVER,
                               IID_PPV_ARGS(&factory));
         if (FAILED(hr)) break;
-        hr = factory->CreateDecoderFromFilename(path.c_str(), nullptr, GENERIC_READ,
-                                                WICDecodeMetadataCacheOnDemand, &decoder);
+        hr = factory->CreateStream(&stream);
+        if (FAILED(hr)) break;
+        hr = stream->InitializeFromMemory(const_cast<BYTE*>(bytes), static_cast<DWORD>(size));
+        if (FAILED(hr)) break;
+        hr = factory->CreateDecoderFromStream(stream, nullptr, WICDecodeMetadataCacheOnDemand, &decoder);
         if (FAILED(hr)) break;
         hr = decoder->GetFrame(0, &frame);
         if (FAILED(hr)) break;
@@ -59,6 +63,7 @@ bool LoadWithWic(const std::filesystem::path& path, std::vector<uint8_t>& pixels
     if (converted) converted->Release();
     if (frame) frame->Release();
     if (decoder) decoder->Release();
+    if (stream) stream->Release();
     if (factory) factory->Release();
     if (mustUninit) CoUninitialize();
     return ok;
@@ -67,14 +72,27 @@ bool LoadWithWic(const std::filesystem::path& path, std::vector<uint8_t>& pixels
 } // namespace
 
 bool LoadImageRGBA8(const std::filesystem::path& path, ImageRGBA8& out, std::string* error) {
+    out = ImageRGBA8{};
+    std::vector<uint8_t> fileData;
+    std::string readError;
+    if (!ReadWholeFile(path, fileData, &readError)) {
+        if (error) *error = readError;
+        return false;
+    }
+    return LoadImageRGBA8FromMemory(fileData.data(), fileData.size(), out, error);
+}
+
+bool LoadImageRGBA8FromMemory(const uint8_t* bytes, size_t size, ImageRGBA8& out, std::string* error) {
     try {
         out = ImageRGBA8{};
-        std::vector<uint8_t> fileData;
-        std::string readError;
-        if (!ReadWholeFile(path, fileData, &readError)) {
-            if (error) *error = readError;
-            return false;
-        }
+        const std::string readError = "empty image data";
+        struct View {
+            const uint8_t* ptr;
+            size_t n;
+            const uint8_t* data() const { return ptr; }
+            size_t size() const { return n; }
+            bool empty() const { return n == 0; }
+        } fileData{bytes, bytes ? size : 0};
 
         std::vector<uint8_t> pixels;
         int w = 0, h = 0, n = 0;
@@ -105,7 +123,7 @@ bool LoadImageRGBA8(const std::filesystem::path& path, ImageRGBA8& out, std::str
             // WIC fallback.
             std::vector<uint8_t> wicPixels;
             int ww = 0, wh = 0;
-            if (LoadWithWic(path, wicPixels, ww, wh)) {
+            if (!fileData.empty() && LoadWithWic(fileData.data(), fileData.size(), wicPixels, ww, wh)) {
                 w = ww;
                 h = wh;
                 pixels = std::move(wicPixels);

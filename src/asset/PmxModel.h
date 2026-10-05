@@ -155,6 +155,9 @@ struct PmxModel {
     std::vector<uint32_t> indices;     // triangle list, already widened to 32-bit
     // Texture paths exactly as stored in the file (UTF-8, may contain '\\').
     std::vector<std::string> textures;
+    // Encoded image bytes for textures that live inside the source file (glTF/GLB/VRM/FBX
+    // imports). Empty, or parallel to `textures` with empty entries for file textures.
+    std::vector<std::vector<uint8_t>> embeddedTextures;
     std::vector<PmxMaterial> materials;
     std::vector<PmxBone> bones;
     std::vector<PmxMorph> morphs;

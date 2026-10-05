@@ -82,7 +82,8 @@ MMDX12의 영상 모드로 노래 한 곡을 통째로 렌더해서 그대로 �
 
 ## 할 수 있는 것
 
-- **파일은 그냥 던져 넣으면 끝.** 폴더 정리 안 해도 캐릭터, 무대, 춤을 알아서 구분해요.
+- **PMX, VRM, glTF, FBX.** VRoid, Mixamo, Ready Player Me 아바타도 MMD 모션으로 춤추고, glTF/FBX/OBJ 씬은 무대로 쓸 수 있어요.
+- **정리는 마음대로.** `characters`, `stages`, `songs` 폴더에 나누면 확실하고, 아니어도 내용을 보고 구분해요. 틀리면 앱에서 바로잡으면 됩니다.
 - **실시간 재생.** 익숙한 MMD 툰 느낌 그대로 보거나, 레이 트레이싱·패스 트레이싱을 켜서 사실적인 빛과 반사로 볼 수 있어요.
 - **머리카락이랑 치마가 흔들려요.** 모델에 들어 있는 물리 설정을 그대로 씁니다.
 - **DLSS, FSR, XeSS** 지원. 프레임이 아쉬우면 켜 보세요.
@@ -98,7 +99,15 @@ MMDX12의 영상 모드로 노래 한 곡을 통째로 렌더해서 그대로 �
 > [!IMPORTANT]
 > MMDX12에는 모델, 춤, 무대, 음악이 하나도 들어 있지 않아요. MMD 에셋은 만든 분들의 것이라 같이 배포할 수가 없거든요. 갖고 계신 걸 쓰시되, 에셋마다 정해진 규약은 꼭 지켜 주세요 (상업적 이용 금지나 영상 올릴 때 크레딧 표기 같은 것들요). 여기 나온 이미지와 영상은 제 개인 라이브러리로 만들었습니다.
 
-`MMDX12.exe` 옆의 `library` 폴더에 넣거나, 앱에서 원하는 폴더를 고르면 돼요. 곡 폴더에는 춤 모션(`.vmd`)과 음악 파일만 있으면 되고, 카메라 모션이 있으면 알아서 같이 씁니다.
+`MMDX12.exe` 옆의 `library` 폴더에 넣으면 돼요 (앱에서 다른 폴더를 골라도 됩니다). 처음부터 폴더 세 개가 들어 있어요.
+
+| 폴더 | 넣을 것 | 형식 |
+|---|---|---|
+| `characters/` | 모델마다 폴더 하나 (텍스처 포함) | PMX, VRM, glTF/GLB, FBX |
+| `stages/` | 스테이지마다 폴더 하나 (안의 PMX는 함께 그려짐) | PMX, glTF/GLB, FBX, OBJ |
+| `songs/` | 곡마다 폴더 하나: 춤 모션, 카메라 모션, 음악 | VMD, WAV/MP3/OGG/FLAC |
+
+다르게 정리해도 괜찮아요. `models`, `motions` 같은 폴더 이름도 알아듣고, 그런 이름이 없으면 내용을 보고 짐작합니다 (사람 뼈대면 캐릭터, 큰 정적인 씬이면 스테이지, 한 폴더에 곡이 여러 개면 길이와 파일 이름으로 나눔). 잘못 짐작했으면 카드를 우클릭해서 캐릭터나 스테이지로 쓰거나 숨기면 되고, 폴더에 `mmdx.json`을 두어 직접 정할 수도 있어요 (`{"type": "song", "dance": "dance.vmd", "camera": "cam.vmd", "audio": "song.mp3"}` 처럼). PMX가 아닌 모델은 사람 뼈대(VRM, VRoid, Mixamo, Ready Player Me, Unity/Blender/UE 리그)가 있어야 하고, 불러올 때 MMD 본으로 바꿔요. 머리카락/치마 물리는 아직 없습니다.
 
 ## 시작하기
 
@@ -157,6 +166,8 @@ powershell -ExecutionPolicy Bypass -File tools/fetch_sdks.ps1
 | [miniaudio](https://github.com/mackron/miniaudio) | MIT-0 / 퍼블릭 도메인 |
 | [DirectX-Headers](https://github.com/microsoft/DirectX-Headers) | MIT |
 | [nlohmann/json](https://github.com/nlohmann/json) | MIT |
+| [cgltf](https://github.com/jkuhlmann/cgltf) | MIT |
+| [ufbx](https://github.com/ufbx/ufbx) | MIT / Public domain |
 | [Bullet Physics 3.25 subset](https://github.com/bulletphysics/bullet3) | zlib |
 | [NVIDIA DLSS SDK](https://github.com/NVIDIA/DLSS) | NVIDIA RTX SDK license |
 | [AMD FidelityFX SDK](https://github.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SDK) | MIT |

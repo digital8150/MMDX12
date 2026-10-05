@@ -82,7 +82,8 @@ MMDX12 の動画モードで 1 曲まるごとレンダリングして、その�
 
 ## できること
 
-- **ファイルは放り込むだけ。** フォルダを整理しなくても、キャラクター、ステージ、ダンスを自動で見分けます。
+- **PMX、VRM、glTF、FBX。** VRoid、Mixamo、Ready Player Me のアバターも MMD モーションで踊り、glTF/FBX/OBJ のシーンはステージとして使えます。
+- **整理の仕方は自由。** `characters`・`stages`・`songs` フォルダに分ければ確実で、そうでなくても中身から見分けます。間違いはアプリで直せます。
 - **リアルタイム再生。** おなじみの MMD のトゥーン風のまま見ることも、レイトレーシングやパストレーシングをオンにして、リアルな光と反射で見ることもできます。
 - **髪やスカートが揺れます。** モデルに入っている物理設定をそのまま使います。
 - **DLSS、FSR、XeSS** に対応。フレームレートが物足りないときに試してみてください。
@@ -98,7 +99,15 @@ MMDX12 の動画モードで 1 曲まるごとレンダリングして、その�
 > [!IMPORTANT]
 > MMDX12 には、モデル・ダンス・ステージ・音楽がひとつも入っていません。MMD のアセットは作った方々のものなので、一緒に配布できないためです。お手持ちのものを使い、アセットごとの規約(商用利用の禁止や、動画を公開するときのクレジット表記など)は必ず守ってください。ここに載せている画像や動画は、私個人のライブラリで作ったものです。
 
-`MMDX12.exe` の隣にある `library` フォルダに入れるか、アプリで好きなフォルダを選んでください。曲のフォルダには、ダンスのモーション(`.vmd`)と音楽ファイルだけあれば大丈夫です。カメラモーションがあれば、自動でいっしょに使います。
+`MMDX12.exe` の隣にある `library` フォルダに入れてください (アプリで別のフォルダも選べます)。最初から 3 つのフォルダが入っています。
+
+| フォルダ | 入れるもの | 形式 |
+|---|---|---|
+| `characters/` | モデルごとにフォルダ一つ (テクスチャ込み) | PMX, VRM, glTF/GLB, FBX |
+| `stages/` | ステージごとにフォルダ一つ (中の PMX は一緒に描画) | PMX, glTF/GLB, FBX, OBJ |
+| `songs/` | 曲ごとにフォルダ一つ: ダンス、カメラ、音楽 | VMD, WAV/MP3/OGG/FLAC |
+
+ほかの整理の仕方でも大丈夫です。`models` や `motions` といったフォルダ名も分かりますし、なければ中身から推測します。間違っていたらカードを右クリックしてキャラクター/ステージとして使うか非表示にでき、フォルダに `mmdx.json` を置いて自分で決めることもできます (`{"type": "song", "dance": "dance.vmd", "camera": "cam.vmd", "audio": "song.mp3"}` など)。PMX 以外のモデルは人型の骨格 (VRM、VRoid、Mixamo、Ready Player Me、Unity/Blender/UE のリグ) が必要で、読み込み時に MMD ボーンへ変換します。髪やスカートの物理はまだありません。
 
 ## はじめかた
 
@@ -157,6 +166,8 @@ powershell -ExecutionPolicy Bypass -File tools/fetch_sdks.ps1
 | [miniaudio](https://github.com/mackron/miniaudio) | MIT-0 / パブリックドメイン |
 | [DirectX-Headers](https://github.com/microsoft/DirectX-Headers) | MIT |
 | [nlohmann/json](https://github.com/nlohmann/json) | MIT |
+| [cgltf](https://github.com/jkuhlmann/cgltf) | MIT |
+| [ufbx](https://github.com/ufbx/ufbx) | MIT / Public domain |
 | [Bullet Physics 3.25 subset](https://github.com/bulletphysics/bullet3) | zlib |
 | [NVIDIA DLSS SDK](https://github.com/NVIDIA/DLSS) | NVIDIA RTX SDK license |
 | [AMD FidelityFX SDK](https://github.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SDK) | MIT |

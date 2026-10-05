@@ -58,13 +58,13 @@ void CheckBadge(ImDrawList* dl, ImVec2 c, float t) {
 uint64_t App::CharacterThumb(int index) {
     if (index < 0 || index >= (int)library_.characters.size()) return 0;
     const CharacterAsset& a = library_.characters[(size_t)index];
-    return thumbs_.Get("c:" + a.id, ThumbnailKind::Character, {a.pmxPath});
+    return thumbs_.Get("c:" + a.id, ThumbnailKind::Character, {a.modelPath});
 }
 
 uint64_t App::StageThumb(int index) {
     if (index < 0 || index >= (int)library_.stages.size()) return 0;
     const StageAsset& a = library_.stages[(size_t)index];
-    return thumbs_.Get("s:" + a.id, ThumbnailKind::Stage, a.pmxParts);
+    return thumbs_.Get("s:" + a.id, ThumbnailKind::Stage, a.parts);
 }
 
 void App::DrawAppBar(int activeNav) {
@@ -148,7 +148,7 @@ void App::DrawAppBar(int activeNav) {
         Gap(4.0f);
         PushFont(Font::Regular, size::Caption);
         ImGui::PushStyleColor(ImGuiCol_Text, ImGui::ColorConvertU32ToFloat4(p.ink3));
-        ImGui::TextWrapped(Tr("PMX 모델, 스테이지, VMD 모션과 음원이 들어 있는 폴더입니다. 폴더 구성은 자유롭게 두어도 됩니다."));
+        ImGui::TextWrapped(Tr("캐릭터(PMX·VRM·glTF·FBX), 스테이지, VMD 모션과 음원이 들어 있는 폴더입니다. characters·stages·songs 폴더에 나눠 두면 확실하고, 아무렇게나 두어도 내용으로 분류합니다. 카드를 우클릭하면 종류를 바꾸거나 숨길 수 있습니다."));
         ImGui::PopStyleColor();
         PopFont();
         Gap(8.0f);
@@ -161,6 +161,56 @@ void App::DrawAppBar(int activeNav) {
         ImGui::SameLine();
         if (Button("##libopen", Tr("탐색기에서 열기"), icon::FolderOpen, ButtonKind::Secondary))
             ShellExecuteW(nullptr, L"open", Utf8ToPath(libraryPathEdit_).c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+        int hiddenCount = 0;
+        for (auto& [rel, k] : LoadLibraryOverrides().byPath) hiddenCount += k == AssetKind::Hidden;
+        if (hiddenCount > 0) {
+            Gap(6.0f);
+            const std::string label = Tr("숨긴 항목 다시 표시") + std::string(" (") + std::to_string(hiddenCount) + ")";
+            if (Button("##libunhide", label.c_str(), icon::Eye, ButtonKind::Ghost)) {
+                ImGui::CloseCurrentPopup();
+                ClearHiddenOverrides();
+            }
+        }
+        ImGui::EndPopup();
+    }
+    ImGui::PopStyleVar();
+}
+
+// Right-click menu on a library card: reclassify, hide, or show the files in Explorer.
+void App::AssetContextMenu(const std::vector<std::filesystem::path>& files, bool character) {
+    if (files.empty()) return;
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(Dp(12.0f), Dp(12.0f)));
+    ImGui::SetNextWindowSize(ImVec2(Dp(240.0f), 0));
+    if (ImGui::BeginPopupContextItem("##assetmenu")) {
+        const LibraryOverrides ov = LoadLibraryOverrides();
+        bool overridden = false;
+        const std::filesystem::path root = library_.root.lexically_normal();
+        for (const auto& f : files) {
+            std::string rel = PathToUtf8(f.lexically_normal().lexically_relative(root));
+            for (char& c : rel)
+                if (c == '\\') c = '/';
+            overridden |= ov.byPath.count(rel) > 0;
+        }
+        std::optional<AssetKind> pick;
+        if (character && Chip("##asstage", Tr("스테이지로 사용"), icon::Mountains, false, -1.0f)) pick = AssetKind::Stage;
+        if (!character && files.size() == 1 && Chip("##aschar", Tr("캐릭터로 사용"), icon::User, false, -1.0f))
+            pick = AssetKind::Character;
+        Gap(4.0f);
+        if (Chip("##ashide", Tr("숨기기"), icon::EyeSlash, false, -1.0f)) pick = AssetKind::Hidden;
+        if (overridden) {
+            Gap(4.0f);
+            if (Chip("##asauto", Tr("자동 분류로 되돌리기"), icon::Refresh, false, -1.0f)) pick = AssetKind::Auto;
+        }
+        Gap(4.0f);
+        if (Chip("##asfolder", Tr("탐색기에서 보기"), icon::FolderOpen, false, -1.0f)) {
+            const std::wstring args = L"/select,\"" + files[0].lexically_normal().wstring() + L"\"";
+            ShellExecuteW(nullptr, L"open", L"explorer.exe", args.c_str(), nullptr, SW_SHOWNORMAL);
+            ImGui::CloseCurrentPopup();
+        }
+        if (pick) {
+            ImGui::CloseCurrentPopup();
+            SetLibraryOverride(files, *pick);
+        }
         ImGui::EndPopup();
     }
     ImGui::PopStyleVar();
@@ -317,6 +367,7 @@ void App::DrawSelect() {
                     selCharacter_ = (int)i;
                     settings_.lastCharacter = a.id;
                 }
+                AssetContextMenu({a.modelPath}, true);
                 const bool sel = selCharacter_ == (int)i;
                 const float hv = Anim(ImGui::GetID("##hv"), hovered);
                 const float sv = Anim(ImGui::GetID("##sv"), sel, 14.0f);
@@ -338,7 +389,8 @@ void App::DrawSelect() {
                     Skeleton(dl, ImVec2(ta.x + Dp(10), ta.y + Dp(10)), ImVec2(tb.x - Dp(10), tb.y - Dp(10)), Dp(10.0f));
                 TextEllipsis(dl, Font::Semibold, size::Body, ImVec2(a0.x + Dp(14.0f), tb.y + Dp(12.0f)), b0.x - Dp(12.0f),
                              p.ink, a.displayName.c_str());
-                const std::string meta = Tr("정점 ") + Thousands(a.vertexCount) + Tr("  ·  본 ") + Thousands(a.boneCount);
+                const std::string meta = (a.format != "PMX" ? a.format + "  ·  " : std::string()) + Tr("정점 ") +
+                                         Thousands(a.vertexCount) + Tr("  ·  본 ") + Thousands(a.boneCount);
                 TextEllipsis(dl, Font::Regular, size::Caption, ImVec2(a0.x + Dp(14.0f), tb.y + Dp(35.0f)),
                              b0.x - Dp(12.0f), p.ink3, meta.c_str());
                 if (sv > 0.01f) dl->AddRect(a0, b0, WithAlpha(p.accent, sv), r, 0, Dp(2.0f));
@@ -347,7 +399,7 @@ void App::DrawSelect() {
                 ImGui::PopID();
             }
             if (n == 0) {
-                const char* msg = library_.characters.empty() ? Tr("라이브러리 폴더에 PMX 모델을 넣어 주세요")
+                const char* msg = library_.characters.empty() ? Tr("라이브러리의 characters 폴더에 모델을 넣어 주세요")
                                                               : Tr("검색 결과가 없습니다");
                 const ImVec2 ms = TextSize(Font::Semibold, size::Title, msg);
                 Text(dl, Font::Semibold, size::Title, ImVec2(origin.x + (availW - ms.x) * 0.5f, origin.y + Dp(80.0f)),
@@ -376,6 +428,7 @@ void App::DrawSelect() {
                     selStage_ = i;
                     settings_.lastStage = a ? a->id : std::string();
                 }
+                if (a) AssetContextMenu(a->parts, false);
                 const bool sel = selStage_ == i;
                 const float hv = Anim(ImGui::GetID("##hv"), hovered);
                 const float sv = Anim(ImGui::GetID("##sv"), sel, 14.0f);
@@ -402,8 +455,8 @@ void App::DrawSelect() {
                 const char* name = a ? a->displayName.c_str() : Tr("스튜디오");
                 TextEllipsis(dl, Font::Semibold, size::Body, ImVec2(a0.x + Dp(14.0f), tb.y + Dp(12.0f)), b0.x - Dp(12.0f),
                              p.ink, name);
-                const std::string meta = a ? Tr("파트 ") + std::to_string(a->pmxParts.size()) + Tr("  ·  정점 ") +
-                                                 Thousands(a->vertexCount)
+                const std::string meta = a ? (a->format != "PMX" ? a->format + "  ·  " : std::string()) + Tr("파트 ") +
+                                                 std::to_string(a->parts.size()) + Tr("  ·  정점 ") + Thousands(a->vertexCount)
                                            : std::string(Tr("스테이지 없이 밝은 바닥 위에서"));
                 TextEllipsis(dl, Font::Regular, size::Caption, ImVec2(a0.x + Dp(14.0f), tb.y + Dp(35.0f)),
                              b0.x - Dp(12.0f), p.ink3, meta.c_str());

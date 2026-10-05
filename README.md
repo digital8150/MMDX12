@@ -82,7 +82,8 @@ Full songs rendered with MMDX12's video mode, uploaded as-is.
 
 ## What it does
 
-- **Just throw your files in.** Any folder layout works. MMDX12 figures out which files are characters, stages and dances on its own.
+- **PMX, VRM, glTF and FBX.** VRoid, Mixamo or Ready Player Me avatars dance to ordinary MMD motions, and glTF/FBX/OBJ scenes work as stages.
+- **Organise your files your way.** `characters`, `stages` and `songs` folders are the sure way; anything else is sorted by content, and you can correct it in the app.
 - **Real-time playback** with the classic MMD toon look, or switch on ray tracing and path tracing for realistic light and reflections.
 - **Hair and skirts move** with the model's own physics setup.
 - **DLSS, FSR and XeSS** if you want more frames.
@@ -98,7 +99,24 @@ Full songs rendered with MMDX12's video mode, uploaded as-is.
 > [!IMPORTANT]
 > MMDX12 doesn't come with any models, dances, stages or music. MMD assets belong to their creators and can't be redistributed, so you use your own collection. Please follow each asset's rules (many don't allow commercial use, or ask for credit when you post a video). Everything shown here was made with my own local library.
 
-Put everything in a `library` folder next to `MMDX12.exe`, or pick a folder inside the app. A song folder just needs the dance motion (`.vmd`) and the music file. A camera motion is used automatically if there is one.
+Put everything in the `library` folder next to `MMDX12.exe` (or pick a folder inside the app). It comes with three folders:
+
+| Folder | What goes in | Formats |
+|---|---|---|
+| `characters/` | one folder per model, with its textures | PMX, VRM, glTF/GLB, FBX |
+| `stages/` | one folder per stage (all PMX files in it are drawn together) | PMX, glTF/GLB, FBX, OBJ |
+| `songs/` | one folder per song: dance motion, camera motion, music | VMD, WAV/MP3/OGG/FLAC |
+
+Other layouts work too: folder names like `models` or `motions` count, and without them MMDX12 guesses from the content (a humanoid skeleton is a character, a big static scene is a stage, several songs in one folder are told apart by length and file names). If it guesses wrong, right-click the card to use it as a character or a stage, or to hide it. Or put an `mmdx.json` in the folder:
+
+```json
+[
+  {"type": "character", "model": "avatar.fbx", "name": "My avatar"},
+  {"type": "song", "dance": "dance.vmd", "camera": "cam.vmd", "audio": "song.mp3"}
+]
+```
+
+`type` is `character`, `stage`, `song` or `ignore`; without file names it applies to the whole folder. Models other than PMX need a humanoid skeleton (VRM, VRoid, Mixamo, Ready Player Me, Unity/Blender/UE rigs). They're converted to MMD bones when loaded, without hair or skirt physics.
 
 ## Getting started
 
@@ -157,6 +175,8 @@ powershell -ExecutionPolicy Bypass -File tools/fetch_sdks.ps1
 | [miniaudio](https://github.com/mackron/miniaudio) | MIT-0 / Public domain |
 | [DirectX-Headers](https://github.com/microsoft/DirectX-Headers) | MIT |
 | [nlohmann/json](https://github.com/nlohmann/json) | MIT |
+| [cgltf](https://github.com/jkuhlmann/cgltf) | MIT |
+| [ufbx](https://github.com/ufbx/ufbx) | MIT / Public domain |
 | [Bullet Physics 3.25 subset](https://github.com/bulletphysics/bullet3) | zlib |
 | [NVIDIA DLSS SDK](https://github.com/NVIDIA/DLSS) | NVIDIA RTX SDK license |
 | [AMD FidelityFX SDK](https://github.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SDK) | MIT |

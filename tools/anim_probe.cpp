@@ -3,6 +3,7 @@
 // then plays the motion with physics and flags exploding rigs. PHYS_DUMP=1 lists bodies + joints.
 #include "anim/ModelInstance.h"
 #include "anim/Motion.h"
+#include "asset/ModelImport.h"
 #include "asset/PmxModel.h"
 #include "asset/VmdMotion.h"
 #include <Windows.h>
@@ -17,7 +18,7 @@ int wmain(int argc, wchar_t** argv) {
     if (argc < 3) { printf("usage: anim_probe <model.pmx> <motion.vmd> [camera.vmd]\n"); return 2; }
     auto pmx = std::make_shared<PmxModel>();
     std::string err;
-    if (!LoadPmx(argv[1], *pmx, &err)) { printf("pmx: %s\n", err.c_str()); return 1; }
+    if (!LoadModelFile(argv[1], ModelRole::Character, *pmx, &err)) { printf("pmx: %s\n", err.c_str()); return 1; }
     VmdMotion vmd;
     if (!LoadVmd(argv[2], vmd, &err)) { printf("vmd: %s\n", err.c_str()); return 1; }
     auto motion = BoundMotion::Bind(*pmx, {&vmd});

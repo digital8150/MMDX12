@@ -336,3 +336,36 @@ every frame and encodes an MP4, 3) GI with a Pixar/Disney-like look while keepin
 ### Not verified
 - Temporal stability in motion (only still captures); ghosting on fast camera moves not checked.
 - With the medium now attenuating the scene, high densities (the saved 4.0) look much foggier than before; 1-1.5 reads best.
+
+## 2026-10-05 — glTF / VRM / FBX models, library classification rework, library skeleton
+
+### Done
+- Investigation (captured in `captures/import/baseline_*.txt`): the old scanner made one song per folder, so a flat dump with
+  two songs lost one (or layered a short dance onto the other); audio was picked by extension and size, and a folder without
+  audio took any audio file from its parent.
+- `ModelImport` (`LoadModelFile(path, role)`): PMX natively; glTF/GLB/VRM 0.x/1.0 via cgltf 1.15 and FBX/OBJ via ufbx 0.23.1
+  (both vendored in `external/`) into a format-neutral `ImpScene`, then converted to `PmxModel`.
+  - Characters: humanoid slots from the VRM table or a name dictionary (Mixamo, VRoid, RPM, Unity/Blender/UE/Biped; shape
+    checks reject quadrupeds), renamed to MMD bones, センター/グルーブ + 足ＩＫ/つま先ＩＫ synthesised, upper arms re-posed to 38 deg
+    (measured 36..42 in the library's PMX rigs), facing detected from the arms, scale 12.5 units/m. Morph targets become
+    vertex morphs; VRM presets / ARKit / VRoid names get MMD aliases (あいうえお, まばたき, 笑い, ウィンク). No physics.
+  - Stages: baked into one root bone; when no floor lies under the origin the scene is moved onto its main floor.
+  - Embedded textures: `PmxModel::embeddedTextures` + `LoadImageRGBA8FromMemory` (WIC from memory as fallback).
+- `AssetLibrary` rewrite. Precedence: app overrides (`library_overrides.json` next to the exe, right-click menu on cards:
+  use as stage/character, hide, back to automatic, show in Explorer) > `mmdx.json` sidecars (type + files + name, comments
+  allowed) > folder names (several languages) > content. Songs: dances clustered by length, split into several songs only
+  when the folder also has several audio files or cameras; cameras/audio matched by length and file-name tokens; parent
+  audio only on a match. Audio lengths via miniaudio (implementation moved to `core/AudioProbe.cpp`).
+  Non-PMX models next to a PMX are skipped (usually exports of the same model). Scan notes in `LibraryScanResult::notes`.
+- `assets/library_template` (characters/ stages/ songs/ + READMEs in 4 languages): copied into an empty library on first run
+  and into the release zip by `package_release.ps1` (also bundles cgltf/ufbx licences). Format badges on cards, new UI
+  strings translated; benchmarks prefer PMX models. READMEs (4 languages) updated.
+- Checked: real library scan identical to the baseline except the new `furry_police/model.glb` character; messy test library
+  (`captures/testlib`, public three.js/Khronos/VRM samples in `captures/assets_dl`) classified as intended, sidecars and
+  overrides applied; anim_probe IK convergence on Michelle/Seed-san/Samba; captures of glTF/VRM/FBX characters dancing,
+  spaceship hallway and collision-world stages (raster + RT), PMX regression scene, select screen, empty-library skeleton.
+
+### Not verified
+- The right-click menu was not clicked (overrides tested by writing the JSON); `package_release.ps1` not run.
+- dungeon_warkarma (enclosed, near-black materials) shows nothing useful from the free camera; no manual stage offset/scale yet.
+- Textured FBX characters and Draco/meshopt glTF (rejected with a warning) untested; imported characters have no physics.

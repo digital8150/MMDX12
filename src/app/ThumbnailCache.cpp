@@ -1,5 +1,6 @@
 #include "app/ThumbnailCache.h"
 
+#include "asset/ModelImport.h"
 #include "asset/PmxModel.h"
 #include "core/Log.h"
 #include "core/TextUtil.h"
@@ -215,7 +216,7 @@ void ThumbnailCache::WorkerLoop() {
                     auto m = LoadedModelCpu{};
                     m.pmx = std::make_shared<PmxModel>();
                     std::string err;
-                    if (!LoadPmx(src, *m.pmx, &err)) {
+                    if (!LoadModelFile(src, kind == ThumbnailKind::Character ? ModelRole::Character : ModelRole::Stage, *m.pmx, &err)) {
                         if (kind == ThumbnailKind::Character) {
                             LOG_WARN("thumbnail model load failed: %s: %s", PathToUtf8(src).c_str(), err.c_str());
                             result = State::Failed;

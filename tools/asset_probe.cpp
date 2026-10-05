@@ -1,5 +1,6 @@
 #include "asset/AssetLibrary.h"
 #include "asset/ImageLoader.h"
+#include "asset/ModelImport.h"
 #include "asset/PmxModel.h"
 #include "asset/VmdMotion.h"
 #include "core/Log.h"
@@ -44,14 +45,14 @@ int wmain(int argc, wchar_t** argv) {
     printf("root: %s\n", mmdx::PathToUtf8(scan.root).c_str());
     printf("characters (%d):\n", static_cast<int>(scan.characters.size()));
     for (const auto& c : scan.characters) {
-        printf("  %s | %s | v=%u b=%u m=%u\n", c.displayName.c_str(), c.id.c_str(),
+        printf("  %s | %s | %s | v=%u b=%u m=%u\n", c.displayName.c_str(), c.id.c_str(), c.format.c_str(),
                c.vertexCount, c.boneCount, c.materialCount);
     }
     printf("stages (%d):\n", static_cast<int>(scan.stages.size()));
     for (const auto& s : scan.stages) {
-        printf("  %s | %s | parts=%d v=%u\n", s.displayName.c_str(), s.id.c_str(),
-               static_cast<int>(s.pmxParts.size()), s.vertexCount);
-        for (const auto& part : s.pmxParts) {
+        printf("  %s | %s | %s | parts=%d v=%u\n", s.displayName.c_str(), s.id.c_str(), s.format.c_str(),
+               static_cast<int>(s.parts.size()), s.vertexCount);
+        for (const auto& part : s.parts) {
             printf("    - %s\n", Rel(part, scan.root).c_str());
         }
     }
@@ -68,20 +69,22 @@ int wmain(int argc, wchar_t** argv) {
     for (const auto& w : scan.warnings) {
         printf("  %s\n", w.c_str());
     }
+    printf("notes (%d):\n", static_cast<int>(scan.notes.size()));
+    for (const auto& n : scan.notes) printf("  %s\n", n.c_str());
     printf("scan time: %.2fs\n", scan.scanSeconds);
 
     if (full) {
         printf("\n--- full load ---\n");
-        std::vector<std::filesystem::path> pmxPaths;
-        for (const auto& c : scan.characters) pmxPaths.push_back(c.pmxPath);
+        std::vector<std::pair<std::filesystem::path, mmdx::ModelRole>> pmxPaths;
+        for (const auto& c : scan.characters) pmxPaths.push_back({c.modelPath, mmdx::ModelRole::Character});
         for (const auto& s : scan.stages) {
-            for (const auto& part : s.pmxParts) pmxPaths.push_back(part);
+            for (const auto& part : s.parts) pmxPaths.push_back({part, mmdx::ModelRole::Stage});
         }
-        for (const auto& p : pmxPaths) {
+        for (const auto& [p, role] : pmxPaths) {
             mmdx::PmxModel model;
             std::string error;
             const std::string rel = Rel(p, scan.root);
-            if (!mmdx::LoadPmx(p, model, &error)) {
+            if (!mmdx::LoadModelFile(p, role, model, &error)) {
                 printf("LOAD %s: FAIL %s\n", rel.c_str(), error.c_str());
                 continue;
             }
@@ -110,11 +113,12 @@ int wmain(int argc, wchar_t** argv) {
             std::vector<std::string> missing;
             for (const auto& [idx, raw] : referenced) {
                 (void)raw;
-                const std::filesystem::path texPath = model.ResolveTexturePath(idx);
                 mmdx::ImageRGBA8 image;
                 std::string texError;
-                if (!texPath.empty() &&
-                    mmdx::LoadImageRGBA8(texPath, image, &texError)) {
+                const bool embedded = (size_t)idx < model.embeddedTextures.size() && !model.embeddedTextures[idx].empty();
+                const std::filesystem::path texPath = embedded ? std::filesystem::path{} : model.ResolveTexturePath(idx);
+                if (embedded ? mmdx::LoadImageRGBA8FromMemory(model.embeddedTextures[idx].data(), model.embeddedTextures[idx].size(), image, &texError)
+                             : (!texPath.empty() && mmdx::LoadImageRGBA8(texPath, image, &texError))) {
                     ++texOk;
                 } else {
                     missing.push_back(raw);

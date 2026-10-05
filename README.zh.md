@@ -82,7 +82,8 @@
 
 ## 功能
 
-- **文件直接丢进去就行。** 不用整理文件夹,角色、舞台和舞蹈会自动识别。
+- **PMX、VRM、glTF、FBX。** VRoid、Mixamo、Ready Player Me 的模型也能跟着 MMD 动作跳舞,glTF/FBX/OBJ 场景可以当舞台。
+- **随意整理。** 分到 `characters`、`stages`、`songs` 文件夹最可靠,不分也会按内容识别;认错了可以在软件里改。
 - **实时播放。** 可以保持熟悉的 MMD 卡通风格,也可以打开光线追踪或路径追踪,看到真实的光影和反射。
 - **头发和裙子会摆动。** 直接使用模型自带的物理设置。
 - 支持 **DLSS、FSR、XeSS**。帧率不够时可以试试。
@@ -98,7 +99,15 @@
 > [!IMPORTANT]
 > MMDX12 本身不含任何模型、舞蹈、舞台和音乐。MMD 素材归创作者所有,无法随软件一起分发。请使用你自己拥有的素材,并务必遵守各素材的使用规约(例如禁止商用、发布视频时需要标注署名等)。这里展示的图片和视频,都是用我个人的素材库制作的。
 
-把素材放进 `MMDX12.exe` 旁边的 `library` 文件夹,或者在软件里选择任意文件夹即可。歌曲文件夹里只需要舞蹈动作(`.vmd`)和音乐文件;如果有镜头动作,会自动一并使用。
+把素材放进 `MMDX12.exe` 旁边的 `library` 文件夹(也可以在软件里选择其他文件夹)。里面自带三个文件夹:
+
+| 文件夹 | 放什么 | 格式 |
+|---|---|---|
+| `characters/` | 每个模型一个文件夹(含贴图) | PMX, VRM, glTF/GLB, FBX |
+| `stages/` | 每个舞台一个文件夹(其中的 PMX 一起绘制) | PMX, glTF/GLB, FBX, OBJ |
+| `songs/` | 每首歌一个文件夹:舞蹈动作、镜头动作、音乐 | VMD, WAV/MP3/OGG/FLAC |
+
+其他整理方式也可以:能识别 `models`、`motions` 之类的文件夹名,没有的话就按内容判断。判断错了可以右键点击卡片改为角色/舞台或隐藏,也可以在文件夹里放 `mmdx.json` 自行指定(例如 `{"type": "song", "dance": "dance.vmd", "camera": "cam.vmd", "audio": "song.mp3"}`)。PMX 以外的模型需要人形骨骼(VRM、VRoid、Mixamo、Ready Player Me、Unity/Blender/UE 骨架),读取时会转换为 MMD 骨骼,暂不支持头发和裙子的物理。
 
 ## 开始使用
 
@@ -157,6 +166,8 @@ powershell -ExecutionPolicy Bypass -File tools/fetch_sdks.ps1
 | [miniaudio](https://github.com/mackron/miniaudio) | MIT-0 / 公有领域 |
 | [DirectX-Headers](https://github.com/microsoft/DirectX-Headers) | MIT |
 | [nlohmann/json](https://github.com/nlohmann/json) | MIT |
+| [cgltf](https://github.com/jkuhlmann/cgltf) | MIT |
+| [ufbx](https://github.com/ufbx/ufbx) | MIT / Public domain |
 | [Bullet Physics 3.25 subset](https://github.com/bulletphysics/bullet3) | zlib |
 | [NVIDIA DLSS SDK](https://github.com/NVIDIA/DLSS) | NVIDIA RTX SDK license |
 | [AMD FidelityFX SDK](https://github.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SDK) | MIT |

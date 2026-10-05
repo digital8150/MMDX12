@@ -7,6 +7,9 @@
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <fstream>
+
+#include <json.hpp>
 
 #include "app/Lighting.h"
 #include "app/UiKit.h"
@@ -523,14 +526,77 @@ std::filesystem::path App::ResolveLibraryPath() const {
     return local;
 }
 
+namespace {
+
+std::string LibraryRel(const std::filesystem::path& p, const std::filesystem::path& root) {
+    std::string rel = PathToUtf8(p.lexically_normal().lexically_relative(root.lexically_normal()));
+    for (char& c : rel)
+        if (c == '\\') c = '/';
+    return rel;
+}
+
+nlohmann::json ReadOverridesFile(const std::filesystem::path& file) {
+    std::ifstream in(file, std::ios::binary);
+    if (!in) return nlohmann::json::object();
+    nlohmann::json j = nlohmann::json::parse(in, nullptr, false);
+    return j.is_object() ? j : nlohmann::json::object();
+}
+
+const char* KindName(AssetKind k) {
+    return k == AssetKind::Character ? "character" : k == AssetKind::Stage ? "stage" : k == AssetKind::Hidden ? "hidden" : "auto";
+}
+
+} // namespace
+
+LibraryOverrides App::LoadLibraryOverrides() const {
+    LibraryOverrides out;
+    const nlohmann::json j = ReadOverridesFile(ExecutableDir() / L"library_overrides.json");
+    const std::string key = PathToUtf8(ResolveLibraryPath().lexically_normal());
+    if (!j.contains(key) || !j[key].is_object()) return out;
+    for (auto& [rel, v] : j[key].items()) {
+        const std::string s = v.is_string() ? v.get<std::string>() : std::string();
+        const AssetKind k = s == "character" ? AssetKind::Character : s == "stage" ? AssetKind::Stage
+                          : s == "hidden" ? AssetKind::Hidden : AssetKind::Auto;
+        if (k != AssetKind::Auto) out.byPath[rel] = k;
+    }
+    return out;
+}
+
+void App::SetLibraryOverride(const std::vector<std::filesystem::path>& files, AssetKind kind) {
+    const std::filesystem::path file = ExecutableDir() / L"library_overrides.json";
+    nlohmann::json j = ReadOverridesFile(file);
+    const std::filesystem::path root = ResolveLibraryPath();
+    const std::string key = PathToUtf8(root.lexically_normal());
+    if (!j.contains(key) || !j[key].is_object()) j[key] = nlohmann::json::object();
+    for (const auto& f : files) {
+        const std::string rel = LibraryRel(f, root);
+        if (kind == AssetKind::Auto) j[key].erase(rel);
+        else j[key][rel] = KindName(kind);
+        LOG_INFO("library override: %s -> %s", rel.c_str(), KindName(kind));
+    }
+    std::ofstream(file, std::ios::binary) << j.dump(2);
+    StartScan();
+}
+
+void App::ClearHiddenOverrides() {
+    std::vector<std::filesystem::path> hidden;
+    const std::filesystem::path root = ResolveLibraryPath();
+    for (auto& [rel, k] : LoadLibraryOverrides().byPath)
+        if (k == AssetKind::Hidden) hidden.push_back(root / Utf8ToPath(rel));
+    if (!hidden.empty()) SetLibraryOverride(hidden, AssetKind::Auto);
+}
+
 void App::StartScan() {
     screen_ = Screen::Scanning;
     thumbsClearPending_ = true;
     scanProgress_.filesVisited.store(0, std::memory_order_relaxed);
     scanProgress_.filesTotal.store(0, std::memory_order_relaxed);
     const std::filesystem::path path = ResolveLibraryPath();
-    scanFuture_ = std::async(std::launch::async, [this, path] {
-        return ScanLibrary(path, &scanProgress_);
+    const std::filesystem::path templateDir = ExecutableDir() / L"assets" / L"library_template";
+    const LibraryOverrides overrides = LoadLibraryOverrides();
+    scanFuture_ = std::async(std::launch::async, [this, path, templateDir, overrides] {
+        CreateLibrarySkeleton(path, templateDir);  // first run: suggest characters/ stages/ songs/
+        return ScanLibrary(path, &scanProgress_, &overrides);
     });
 }
 

@@ -8,6 +8,8 @@
 
 #include "anim/ModelInstance.h"
 #include "anim/Motion.h"
+#include "asset/ImageLoader.h"
+#include "asset/ModelImport.h"
 #include "asset/VmdMotion.h"
 #include "core/Log.h"
 #include "core/TextUtil.h"
@@ -37,6 +39,17 @@ void DecodeModelTextures(LoadedModelCpu& m, LoadProgress* progress, float fracBe
     const int total = (int)referenced.size();
     std::for_each(std::execution::par, referenced.begin(), referenced.end(),
                   [&](int32_t index) {
+                      if ((size_t)index < m.pmx->embeddedTextures.size() && !m.pmx->embeddedTextures[index].empty()) {
+                          const auto& bytes = m.pmx->embeddedTextures[index];
+                          std::string err;
+                          if (!LoadImageRGBA8FromMemory(bytes.data(), bytes.size(), m.textures[index], &err))
+                              LOG_WARN("embedded texture decode failed: %s (%s): %s", m.pmx->textures[index].c_str(), label, err.c_str());
+                          int d = ++done;
+                          if (progress && total > 0)
+                              progress->fraction.store(fracBegin + (fracEnd - fracBegin) * (float)d / (float)total,
+                                                       std::memory_order_relaxed);
+                          return;
+                      }
                       const std::filesystem::path p = m.pmx->ResolveTexturePath(index);
                       if (p.empty()) {
                           LOG_WARN("texture not found: %s (%s)", m.pmx->textures[index].c_str(), label);
@@ -65,7 +78,7 @@ bool LoadScenePackage(const CharacterAsset& character, const StageAsset* stage, 
                 progress->SetStatus(Tr("캐릭터 로드: ") + character.displayName);
             }
             out.character.pmx = std::make_shared<PmxModel>();
-            if (!LoadPmx(character.pmxPath, *out.character.pmx, &err)) {
+            if (!LoadModelFile(character.modelPath, ModelRole::Character, *out.character.pmx, &err)) {
                 if (error) *error = Tr("캐릭터를 불러오지 못했습니다: ") + err;
                 return false;
             }
@@ -76,9 +89,9 @@ bool LoadScenePackage(const CharacterAsset& character, const StageAsset* stage, 
 
         // 3. Stage parts.
         if (stage) {
-            const size_t n = stage->pmxParts.size();
+            const size_t n = stage->parts.size();
             for (size_t k = 0; k < n; ++k) {
-                const std::filesystem::path& partPath = stage->pmxParts[k];
+                const std::filesystem::path& partPath = stage->parts[k];
                 std::string label = stage->displayName +
                                     (n > 1 ? " " + std::to_string(k + 1) + "/" + std::to_string(n) : "");
                 if (progress) progress->SetStatus(Tr("스테이지 로드: ") + label);
@@ -86,7 +99,7 @@ bool LoadScenePackage(const CharacterAsset& character, const StageAsset* stage, 
                 LoadedModelCpu part;
                 part.pmx = std::make_shared<PmxModel>();
                 std::string err;
-                if (!LoadPmx(partPath, *part.pmx, &err)) {
+                if (!LoadModelFile(partPath, ModelRole::Stage, *part.pmx, &err)) {
                     LOG_WARN("stage part load failed: %s: %s", PathToUtf8(partPath).c_str(), err.c_str());
                     continue;
                 }
@@ -172,7 +185,7 @@ bool LoadRenderBenchPackage(const std::vector<CharacterAsset>& characters, const
             if (progress) progress->SetStatus(Tr("캐릭터 로드: ") + characters[i].displayName);
             m.pmx = std::make_shared<PmxModel>();
             std::string err;
-            if (!LoadPmx(characters[i].pmxPath, *m.pmx, &err)) {
+            if (!LoadModelFile(characters[i].modelPath, ModelRole::Character, *m.pmx, &err)) {
                 if (error) *error = Tr("캐릭터를 불러오지 못했습니다: ") + err;
                 return false;
             }

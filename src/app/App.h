@@ -139,6 +139,12 @@ private:
     void RenderFrame();          // one iteration: ImGui frame, update, record, present
     std::filesystem::path ResolveLibraryPath() const;
     void StartScan();
+    // Per-file classification overrides chosen in the app (library_overrides.json next to the
+    // ini, keyed by library folder). Changing them rescans the library.
+    LibraryOverrides LoadLibraryOverrides() const;
+    void SetLibraryOverride(const std::vector<std::filesystem::path>& files, AssetKind kind);  // Auto removes
+    void ClearHiddenOverrides();
+    void AssetContextMenu(const std::vector<std::filesystem::path>& files, bool character);
     void PollScan();
     void ApplyCommandLinePreselection();
     void ApplyRenderSettings();

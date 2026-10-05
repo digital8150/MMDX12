@@ -43,12 +43,16 @@ constexpr double kScorePerMsps = 6.25;
 bool PickRenderBenchCast(const LibraryScanResult& library, RenderBenchCast& out) {
     if (library.characters.empty()) return false;
 
-    // characters: indices sorted by vertexCount descending (stable, ties keep the lower index).
+    // characters: PMX first (imported glTF/FBX models have no physics), then by vertexCount
+    // descending (stable, ties keep the lower index).
     std::vector<int> sorted;
     sorted.reserve(library.characters.size());
     for (size_t i = 0; i < library.characters.size(); ++i) sorted.push_back((int)i);
     std::stable_sort(sorted.begin(), sorted.end(), [&library](int a, int b) {
-        return library.characters[(size_t)a].vertexCount > library.characters[(size_t)b].vertexCount;
+        const auto& ca = library.characters[(size_t)a];
+        const auto& cb = library.characters[(size_t)b];
+        if ((ca.format == "PMX") != (cb.format == "PMX")) return ca.format == "PMX";
+        return ca.vertexCount > cb.vertexCount;
     });
     for (int k = 0; k < kRenderBenchPerformerCount; ++k)
         out.characters[k] = sorted[(size_t)(k % (int)sorted.size())];

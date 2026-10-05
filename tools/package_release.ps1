@@ -1,7 +1,7 @@
 # Builds a Release configuration of MMDX12 in build_release\ and packages a portable zip in dist\.
 #   powershell -ExecutionPolicy Bypass -File tools\package_release.ps1 -Version 0.1.1
 # The zip holds MMDX12.exe, the shaders and fonts, the runtime DLLs (DXC, upscalers, the VC++ runtime,
-# app-local), the licences and an empty library\ folder. Run tools\fetch_sdks.ps1 first for the upscalers.
+# app-local), the licences and a library\ folder skeleton. Run tools\fetch_sdks.ps1 first for the upscalers.
 param([Parameter(Mandatory = $true)][string]$Version)
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
@@ -50,6 +50,8 @@ $third = @{
     'miniaudio'       = 'external\miniaudio\LICENSE'
     'DirectX-Headers' = 'external\DirectX-Headers\LICENSE'
     'bullet'          = 'external\bullet\LICENSE.txt'
+    'cgltf'           = 'external\cgltf\LICENSE'
+    'ufbx'            = 'external\ufbx\LICENSE'
     'NVIDIA-DLSS'     = 'external\dlss\LICENSE.txt'
     'AMD-FidelityFX'  = 'external\ffx\LICENSE.txt'
     'Intel-XeSS'      = 'external\xess\LICENSE.txt'
@@ -70,17 +72,10 @@ msvcp140.dll / vcruntime140.dll / vcruntime140_1.dll: Microsoft Visual C++ runti
 under the Visual Studio redistribution terms.
 '@ | Set-Content -Encoding utf8 (Join-Path $lic 'Microsoft-runtime.txt')
 
+# Suggested library layout (characters/ stages/ songs/ with READMEs); the app creates the same on first run.
 $lib = Join-Path $stage 'library'
 New-Item -ItemType Directory -Force $lib | Out-Null
-@'
-Put your MMD assets here (any folder layout): character PMX models, stage PMX models, and dance sets
-(a folder with the dance VMD, an optional camera VMD and the song as wav/mp3/flac/ogg).
-MMDX12 ships no assets. Follow each asset's terms of use. You can also pick another folder in the app.
-
-MMD 에셋을 이 폴더에 넣으세요 (폴더 구조 자유): 캐릭터 PMX, 무대 PMX, 댄스 세트(댄스 VMD, 카메라 VMD,
-wav/mp3/flac/ogg 음원이 든 폴더). MMDX12에는 에셋이 들어 있지 않습니다. 에셋마다 이용 규약을 지켜 주세요.
-앱에서 다른 폴더를 고를 수도 있습니다.
-'@ | Set-Content -Encoding utf8 (Join-Path $lib 'README.txt')
+Copy-Item -Recurse -Force (Join-Path $root 'assets\library_template\*') $lib
 
 # 3. Zip
 $zip = Join-Path $dist "$name.zip"

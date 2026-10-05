@@ -29,15 +29,18 @@ constexpr Tier kTiers[] = {
 
 BenchmarkScene PickBenchmarkScene(const LibraryScanResult& library) {
     BenchmarkScene out;
-    for (size_t i = 0; i < library.characters.size(); ++i) {
-        if (out.character < 0 ||
-            library.characters[i].vertexCount > library.characters[(size_t)out.character].vertexCount)
-            out.character = (int)i;
-    }
-    for (size_t i = 0; i < library.stages.size(); ++i) {
-        if (out.stage < 0 || library.stages[i].vertexCount > library.stages[(size_t)out.stage].vertexCount)
-            out.stage = (int)i;
-    }
+    // The heaviest PMX models (imported glTF/FBX ones only when there is no PMX): scores should
+    // measure MMD scenes, physics included.
+    auto heavier = [](const auto& list, size_t i, int cur) {
+        if (cur < 0) return true;
+        const bool pi = list[i].format == "PMX", pc = list[(size_t)cur].format == "PMX";
+        if (pi != pc) return pi;
+        return list[i].vertexCount > list[(size_t)cur].vertexCount;
+    };
+    for (size_t i = 0; i < library.characters.size(); ++i)
+        if (heavier(library.characters, i, out.character)) out.character = (int)i;
+    for (size_t i = 0; i < library.stages.size(); ++i)
+        if (heavier(library.stages, i, out.stage)) out.stage = (int)i;
     // Songs with a camera motion first, then the dance length closest to kBenchSongTargetSec.
     bool anyCamera = false;
     for (const SongAsset& s : library.songs)
