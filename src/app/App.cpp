@@ -57,6 +57,8 @@ AppOptions ParseCommandLine(int argc, wchar_t** argv) {
             opt.quitAfterFrames = _wtoi(next().c_str());
         } else if (arg == L"--capture") {
             opt.capturePath = next();
+        } else if (arg == L"--ui-script") {
+            opt.uiScript = next();
         } else if (arg == L"--width") {
             opt.width = _wtoi(next().c_str());
         } else if (arg == L"--height") {
@@ -418,6 +420,7 @@ void App::RenderFrame() {
 
     ImGui_ImplDX12_NewFrame();
     ImGui_ImplWin32_NewFrame();
+    PumpUiScript();
     ImGui::NewFrame();
     ui::NewFrame((float)dt);
 
@@ -450,6 +453,10 @@ void App::RenderFrame() {
     case Screen::BenchRun: DrawBenchRunOverlay(); break;
     case Screen::BenchResult: DrawBenchResult(); break;
     case Screen::BenchRender: DrawRenderBenchOverlay(); break;
+    case Screen::Studio:
+        UpdateStudio(dt);
+        if (screen_ == Screen::Studio) DrawStudio();
+        break;
     }
 
     ImGui::Render();
@@ -468,7 +475,10 @@ void App::RenderFrame() {
         RecordOfflineFrame(cmd);          // the sample render behind the dialog: nothing is presented
         renderer_.ClearBackBuffer(cmd);   // the UI draws on a clean surface as usual
     } else {
-        if (inScene) {
+        if (screen_ == Screen::Studio && studio_) {
+            UpdateStudioScene();
+            BuildStudioFrameView(view);
+        } else if (inScene) {
             const float frame = (float)(playTime_ * kMmdFps);
             UpdateScene(frame);
             BuildFrameView(frame, view);
@@ -480,7 +490,10 @@ void App::RenderFrame() {
     ImGui_ImplDX12_RenderDrawData(ImGui::GetDrawData(), cmd);
 
     bool quit = false;
-    if (inScene || screen_ == Screen::Offline || !options_.startScreen.empty()) {
+    const bool countFrame = options_.startScreen == "studio"
+                                ? screen_ != Screen::Scanning && screen_ != Screen::Loading
+                                : inScene || screen_ == Screen::Offline || !options_.startScreen.empty();
+    if (countFrame) {
         ++framesInScene_;
         // --frames runs: average GPU time over the second half (after loading hitches settle)
         if (inScene && options_.quitAfterFrames > 0 && framesInScene_ > options_.quitAfterFrames / 2) {
@@ -639,6 +652,14 @@ void App::PollScan() {
         libraryTab_ = 2;
     } else if (options_.startScreen == "settings") {
         advancedOpen_ = true;
+    } else if (options_.startScreen == "studio") {
+        if (selCharacter_ >= 0) {
+            StartStudioLoad(&library_.characters[(size_t)selCharacter_],
+                            selStage_ >= 0 ? &library_.stages[(size_t)selStage_] : nullptr,
+                            selSong_ >= 0 ? &library_.songs[(size_t)selSong_] : nullptr);
+            return;
+        }
+        LOG_ERROR("--screen studio needs --character");
     } else if (options_.startScreen == "video") {
         // needs --character and --song; with --offline-video <file> it starts the render without the dialog
         videoDialogOpen_ = true;
@@ -872,6 +893,15 @@ void App::PollLoad() {
     if (loadFuture_.wait_for(std::chrono::seconds(0)) != std::future_status::ready) return;
 
     bool ok = loadFuture_.get();
+    if (loadTarget_ == LoadTarget::Studio) {
+        if (ok && !FinishStudioLoad()) {
+            ok = false;
+            loadError_ = Tr("GPU 리소스 생성 실패");
+        }
+        studioPackage_.reset();
+        if (!ok) LOG_ERROR("%s", loadError_.c_str());
+        return;
+    }
     if (ok) {
         ok = BuildSceneRuntime(*loadPackage_);
         if (!ok) loadError_ = Tr("GPU 리소스 생성 실패");

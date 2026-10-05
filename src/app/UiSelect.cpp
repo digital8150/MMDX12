@@ -571,7 +571,8 @@ void App::DrawSelect() {
 
         // settings column (scrolls when the detailed settings are open)
         const float playH = Dp(52.0f);
-        const float bottomBlock = playH + Dp(20.0f) + (ch && song ? 0.0f : Dp(26.0f));
+        const float studioH = Dp(40.0f + 10.0f);  // the studio row under play / video
+        const float bottomBlock = playH + studioH + Dp(20.0f) + (ch && song ? 0.0f : Dp(26.0f));
         ImGui::SetCursorScreenPos(ImVec2(pa.x + ip, y));
         ImGui::BeginChild("##settings", ImVec2(innerW + Dp(8.0f), pb.y - y - bottomBlock - Dp(8.0f)), ImGuiChildFlags_None,
                           ImGuiWindowFlags_NoBackground);
@@ -754,7 +755,7 @@ void App::DrawSelect() {
 
         // play
         const bool canPlay = ch && song;
-        float by = pb.y - ip - playH;
+        float by = pb.y - ip - studioH - playH;
         if (!canPlay) {
             const char* hint = !ch ? Tr("캐릭터와 곡을 고르면 시작할 수 있어요") : Tr("곡을 고르면 시작할 수 있어요");
             const ImVec2 hs = TextSize(Font::Regular, size::Caption, hint);
@@ -771,6 +772,14 @@ void App::DrawSelect() {
         if (Button("##video", Tr("영상 렌더"), icon::FilmStrip, ButtonKind::Secondary, ImVec2(videoW, 52.0f))) {
             settings_.Save(settingsPath_);
             videoDialogOpen_ = true;
+        }
+        ImGui::EndDisabled();
+        // The studio only needs a character (a song brings its motion, camera and audio along).
+        ImGui::SetCursorScreenPos(ImVec2(pa.x + ip, by + playH + Dp(10.0f)));
+        ImGui::BeginDisabled(!ch);
+        if (Button("##studio", Tr("스튜디오에서 편집"), icon::Sliders, ButtonKind::Ghost, ImVec2(innerW / Dpi(), 40.0f))) {
+            settings_.Save(settingsPath_);
+            StartStudioLoad(ch, st, song);
         }
         ImGui::EndDisabled();
     }
@@ -797,7 +806,8 @@ void App::DrawLoading() {
     const ImVec2 a(c.x - w * 0.5f, c.y - h * 0.5f), b(c.x + w * 0.5f, c.y + h * 0.5f);
     Panel(dl, a, b, Dp(18.0f), 1.2f);
 
-    const bool sceneLoad = loadTarget_ == LoadTarget::Play || loadTarget_ == LoadTarget::OfflineVideo;
+    const bool sceneLoad = loadTarget_ == LoadTarget::Play || loadTarget_ == LoadTarget::OfflineVideo ||
+                           loadTarget_ == LoadTarget::Studio;
     const CharacterAsset* ch = selCharacter_ >= 0 && sceneLoad ? &library_.characters[(size_t)selCharacter_] : nullptr;
     const StageAsset* st = selStage_ >= 0 && sceneLoad ? &library_.stages[(size_t)selStage_] : nullptr;
     const SongAsset* song = selSong_ >= 0 && sceneLoad ? &library_.songs[(size_t)selSong_] : nullptr;

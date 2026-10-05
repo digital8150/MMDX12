@@ -3,6 +3,7 @@
 // round-trips through VMD files and can be bound to any model), sorted by frame, one key per frame.
 // Evaluation stays with BoundMotion: the studio converts to VmdMotion (ToVmd) and binds.
 #include "asset/VmdMotion.h"
+#include "asset/PmxModel.h"
 #include <DirectXMath.h>
 #include <algorithm>
 #include <cstdint>
@@ -86,9 +87,21 @@ struct MotionData {
     int EndFrame() const;  // last key frame over everything (0 when empty)
 
     static MotionData FromVmd(const VmdMotion& vmd);
+    // Adds `other`'s keys (same frame: other wins). Used to merge a dance with its facial VMDs.
+    void Merge(const MotionData& other);
+    // Renames tracks whose VMD name is a 15/20-byte truncation of a model bone/morph name to the full name,
+    // so the timeline can find them by model name. Tracks without a match keep their name (and stay exported).
+    void CanonicalizeNames(const PmxModel& model);
     // Sorted by frame then name. IK keys are regrouped: every frame that has an IK key in any track writes
     // one VMD IK record listing the state of ALL IK tracks at that frame (last key at or before it; enabled before the first).
     VmdMotion ToVmd() const;
 };
+
+// Interpolated values between keys, exactly as BoundMotion::Evaluate computes them (before the first key: the first
+// key, after the last: the last). The returned key's interpolation block is the next key's (or linear past the end).
+// `keys` must not be empty.
+BoneKf SampleBone(const std::vector<BoneKf>& keys, int frame);
+float SampleMorph(const std::vector<MorphKf>& keys, int frame);
+CameraKf SampleCamera(const std::vector<CameraKf>& keys, int frame);
 
 } // namespace mmdx::studio

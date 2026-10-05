@@ -1,7 +1,10 @@
 #include "studio/StudioMotion.h"
+#include "anim/Motion.h"
+#include "core/TextUtil.h"
 #include <algorithm>
 #include <cstring>
 #include <set>
+#include <unordered_map>
 
 namespace mmdx::studio {
 
@@ -89,6 +92,121 @@ MotionData MotionData::FromVmd(const VmdMotion& vmd) {
     d.shadow = vmd.shadowKeys;
     std::sort(d.shadow.begin(), d.shadow.end(), [](const VmdShadowKey& a, const VmdShadowKey& b) { return a.frame < b.frame; });
     return d;
+}
+
+void MotionData::Merge(const MotionData& o) {
+    for (const auto& [name, keys] : o.bones) for (const BoneKf& k : keys) UpsertKey(bones[name], k);
+    for (const auto& [name, keys] : o.morphs) for (const MorphKf& k : keys) UpsertKey(morphs[name], k);
+    for (const auto& [name, keys] : o.ik) for (const IkKf& k : keys) UpsertKey(ik[name], k);
+    for (const CameraKf& k : o.camera) UpsertKey(camera, k);
+    for (const LightKf& k : o.light) UpsertKey(light, k);
+}
+
+namespace {
+// VMD name of `full` as the loader decodes it after truncation to `bytes` Shift-JIS bytes (Motion.cpp NameIndex).
+std::string TruncatedVmdName(const std::string& full, size_t bytes) {
+    const std::string sjis = Utf8ToSjis(full);
+    return sjis.size() > bytes ? SjisToUtf8(sjis.substr(0, bytes)) : full;
+}
+
+template <class K, class GetName>
+void Canonicalize(std::map<std::string, std::vector<K>>& tracks, size_t count, GetName getName, size_t bytes) {
+    std::unordered_map<std::string, std::string> exact, truncated;  // name -> full name, first occurrence wins
+    for (size_t i = 0; i < count; ++i) {
+        const std::string& full = getName(i);
+        exact.emplace(full, full);
+        const std::string t = TruncatedVmdName(full, bytes);
+        if (t != full) truncated.emplace(t, full);
+    }
+    std::map<std::string, std::vector<K>> out;
+    for (auto& [name, keys] : tracks) {
+        std::string target = name;
+        if (!exact.count(name)) {
+            if (auto it = truncated.find(name); it != truncated.end()) target = it->second;
+        }
+        auto& dst = out[target];
+        for (const K& k : keys) UpsertKey(dst, k);
+    }
+    tracks.swap(out);
+}
+} // namespace
+
+void MotionData::CanonicalizeNames(const PmxModel& model) {
+    Canonicalize(bones, model.bones.size(), [&](size_t i) -> const std::string& { return model.bones[i].name; }, 15);
+    Canonicalize(morphs, model.morphs.size(), [&](size_t i) -> const std::string& { return model.morphs[i].name; }, 15);
+    Canonicalize(ik, model.bones.size(), [&](size_t i) -> const std::string& { return model.bones[i].name; }, 20);
+}
+
+namespace {
+// Index of the last key with frame <= f (keys non-empty, f strictly inside the key range).
+template <class K> size_t Segment(const std::vector<K>& keys, int f) {
+    auto it = std::upper_bound(keys.begin(), keys.end(), f, [](int v, const K& k) { return v < k.frame; });
+    return (size_t)(it - keys.begin()) - 1;
+}
+float Curve(const uint8_t c[4], float t) { return Bezier::FromBytes(c[0], c[1], c[2], c[3]).Evaluate(t); }
+} // namespace
+
+BoneKf SampleBone(const std::vector<BoneKf>& keys, int frame) {
+    if (frame <= keys.front().frame || keys.size() == 1) { BoneKf k = keys.front(); k.frame = frame; return k; }
+    if (frame >= keys.back().frame) {
+        BoneKf k = keys.back();
+        k.frame = frame;
+        FillLinearInterp(k.interp);
+        return k;
+    }
+    const size_t i = Segment(keys, frame);
+    if (keys[i].frame == frame) return keys[i];
+    const BoneKf& a = keys[i];
+    const BoneKf& b = keys[i + 1];
+    const float t = (float)(frame - a.frame) / (float)(b.frame - a.frame);
+    uint8_t c[4];
+    BoneKf out = b;
+    out.frame = frame;
+    GetBoneCurve(b.interp, 0, c); out.t.x = a.t.x + (b.t.x - a.t.x) * Curve(c, t);
+    GetBoneCurve(b.interp, 1, c); out.t.y = a.t.y + (b.t.y - a.t.y) * Curve(c, t);
+    GetBoneCurve(b.interp, 2, c); out.t.z = a.t.z + (b.t.z - a.t.z) * Curve(c, t);
+    GetBoneCurve(b.interp, 3, c);
+    DirectX::XMStoreFloat4(&out.r, DirectX::XMQuaternionSlerp(DirectX::XMLoadFloat4(&a.r), DirectX::XMLoadFloat4(&b.r),
+                                                              Curve(c, t)));
+    return out;
+}
+
+float SampleMorph(const std::vector<MorphKf>& keys, int frame) {
+    if (frame <= keys.front().frame || keys.size() == 1) return keys.front().weight;
+    if (frame >= keys.back().frame) return keys.back().weight;
+    const size_t i = Segment(keys, frame);
+    const float t = (float)(frame - keys[i].frame) / (float)(keys[i + 1].frame - keys[i].frame);
+    return keys[i].weight + (keys[i + 1].weight - keys[i].weight) * t;
+}
+
+CameraKf SampleCamera(const std::vector<CameraKf>& keys, int frame) {
+    if (frame <= keys.front().frame || keys.size() == 1) { CameraKf k = keys.front(); k.frame = frame; return k; }
+    if (frame >= keys.back().frame) {
+        CameraKf k = keys.back();
+        k.frame = frame;
+        FillLinearCameraInterp(k.interp);
+        return k;
+    }
+    const size_t i = Segment(keys, frame);
+    if (keys[i].frame == frame) return keys[i];
+    const CameraKf& a = keys[i];
+    const CameraKf& b = keys[i + 1];
+    CameraKf out = b;
+    out.frame = frame;
+    // A one-frame gap is a cut: MMD holds the first key.
+    if (b.frame - a.frame <= 1) { out = a; out.frame = frame; return out; }
+    const float t = (float)(frame - a.frame) / (float)(b.frame - a.frame);
+    uint8_t c[4];
+    auto lerp = [&](int p, float x, float y) { GetCameraCurve(b.interp, p, c); return x + (y - x) * Curve(c, t); };
+    out.target.x = lerp(0, a.target.x, b.target.x);
+    out.target.y = lerp(1, a.target.y, b.target.y);
+    out.target.z = lerp(2, a.target.z, b.target.z);
+    out.rotation.x = lerp(3, a.rotation.x, b.rotation.x);
+    out.rotation.y = lerp(3, a.rotation.y, b.rotation.y);
+    out.rotation.z = lerp(3, a.rotation.z, b.rotation.z);
+    out.distance = lerp(4, a.distance, b.distance);
+    out.fovDeg = (uint32_t)std::lround(lerp(5, (float)a.fovDeg, (float)b.fovDeg));
+    return out;
 }
 
 VmdMotion MotionData::ToVmd() const {

@@ -147,6 +147,14 @@ struct PmxJoint {
     XMFLOAT3 springLinear{}, springAngular{};
 };
 
+// Display frame (表示枠): MMD's grouping of bones and morphs in the timeline.
+struct PmxDisplayFrame {
+    std::string name, nameEn;
+    bool special = false;  // "Root" / "表情" frames
+    struct Item { bool morph = false; int32_t index = -1; };
+    std::vector<Item> items;
+};
+
 struct PmxModel {
     std::filesystem::path sourcePath;  // absolute path of the loaded .pmx
     float version = 2.0f;
@@ -163,6 +171,7 @@ struct PmxModel {
     std::vector<PmxMorph> morphs;
     std::vector<PmxRigidBody> rigidBodies;
     std::vector<PmxJoint> joints;
+    std::vector<PmxDisplayFrame> displayFrames;  // empty for imported (non-PMX) models
 
     // Resolves textures[index] against the model directory. Handles '\\' separators,
     // tolerates a leading ".\\", and when the exact file does not exist tries, in the same

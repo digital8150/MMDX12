@@ -503,21 +503,26 @@ bool LoadPmx(const std::filesystem::path& path, PmxModel& out, std::string* erro
                 truncated = true;
             }
             for (int32_t i = 0; i < displayFrameCount && !truncated; ++i) {
-                std::string nameTmp, nameEnTmp;
+                PmxDisplayFrame frame;
                 uint8_t special = 0;
                 int32_t n = 0;
-                if (!readTextTolerant(&nameTmp) || !readTextTolerant(&nameEnTmp) ||
+                if (!readTextTolerant(&frame.name) || !readTextTolerant(&frame.nameEn) ||
                     !r.Read(special) || !r.Read(n) || n < 0) {
                     truncated = true;
                     break;
                 }
+                frame.special = special != 0;
                 for (int32_t j = 0; j < n && !truncated; ++j) {
                     uint8_t kind = 0;
                     if (!r.Read(kind)) { truncated = true; break; }
-                    if (kind == 0) r.ReadIndex(bIdxSize);
-                    else r.ReadIndex(morphIdxSize);
-                    if (r.Failed()) truncated = true;
+                    PmxDisplayFrame::Item item;
+                    item.morph = kind != 0;
+                    item.index = item.morph ? r.ReadIndex(morphIdxSize) : r.ReadIndex(bIdxSize);
+                    if (r.Failed()) { truncated = true; break; }
+                    const size_t limit = item.morph ? out.morphs.size() : out.bones.size();
+                    if (item.index >= 0 && (size_t)item.index < limit) frame.items.push_back(item);
                 }
+                if (!truncated) out.displayFrames.push_back(std::move(frame));
             }
         }
 

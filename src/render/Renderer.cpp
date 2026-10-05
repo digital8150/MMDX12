@@ -510,16 +510,19 @@ void Renderer::Render(ID3D12GraphicsCommandList* cmd, const FrameView& view) {
     IUpscaler* up = EffectiveUpscaler();
     const RenderPath path = EffectivePath();
     uint32_t outW, outH;
+    float area[4];
+    ViewportArea(settings_, (float)ctx_->Width(), (float)ctx_->Height(), area);
+    const uint32_t areaW = std::max(16u, (uint32_t)area[2]), areaH = std::max(16u, (uint32_t)area[3]);
     if (settings_.fixedResolution) {
         outW = settings_.fixedWidth;
         outH = settings_.fixedHeight;
     } else if (up) {
-        outW = ctx_->Width();
-        outH = ctx_->Height();
+        outW = areaW;
+        outH = areaH;
     } else {
         float scale = std::clamp(settings_.renderScale, 0.25f, 2.0f);
-        outW = std::max(16u, (uint32_t)(ctx_->Width() * scale));
-        outH = std::max(16u, (uint32_t)(ctx_->Height() * scale));
+        outW = std::max(16u, (uint32_t)(areaW * scale));
+        outH = std::max(16u, (uint32_t)(areaH * scale));
     }
     uint32_t w = outW, h = outH;
     if (up) IUpscaler::ComputeRenderSize(outW, outH, settings_.upscalerQuality, w, h);
@@ -557,11 +560,7 @@ void Renderer::Render(ID3D12GraphicsCommandList* cmd, const FrameView& view) {
         targets_.uiBackdrop->WriteSrv(ctx_->Device(), ctx_->SrvHeap().Cpu(backdropSrv_));
         backdropSrvRes_ = targets_.uiBackdrop->res.Get();
     }
-    const float s = std::min(bw / (float)outW, bh / (float)outH);
-    presentRect_[2] = outW * s;
-    presentRect_[3] = outH * s;
-    presentRect_[0] = (bw - presentRect_[2]) * 0.5f;
-    presentRect_[1] = (bh - presentRect_[3]) * 0.5f;
+    FitInArea(area, (float)outW, (float)outH, presentRect_);
     sceneVisible_ = !settings_.headless;
     hasFinal_ = true;
 }

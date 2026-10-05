@@ -54,10 +54,11 @@ bool Timeline(const char* id, ImVec2 size, const std::vector<TimelineRow>& rows,
 
     float keyAreaX = bb.Min.x + colWidth;
     float keyAreaW = std::max(0.0f, bb.Max.x - keyAreaX);
+    const float originX = keyAreaX + Dp(12.0f);  // x of frame `scrollFrame` (inset keeps frame-0 keys whole)
     float contentY = bb.Min.y + rulerHeight;
     float contentH = std::max(0.0f, bb.Max.y - contentY);
 
-    float visibleFrames = keyAreaW / (view.pxPerFrame * Dpi());
+    float visibleFrames = (keyAreaW - Dp(12.0f)) / (view.pxPerFrame * Dpi());
     float maxScrollFrame = std::max(0.0f, (float)(maxFrame + 120) - visibleFrames);
     float contentHeightAll = rows.size() * rowHeight;
     float maxScrollY = std::max(0.0f, contentHeightAll - contentH);
@@ -81,8 +82,8 @@ bool Timeline(const char* id, ImVec2 size, const std::vector<TimelineRow>& rows,
             if (io.KeyCtrl) {
                 float oldPx = view.pxPerFrame;
                 view.pxPerFrame = std::clamp(view.pxPerFrame * (io.MouseWheel > 0 ? 1.15f : (1.0f / 1.15f)), 1.0f, 40.0f);
-                float mouseFrame = view.scrollFrame + (mousePos.x - keyAreaX) / (oldPx * Dpi());
-                view.scrollFrame = mouseFrame - (mousePos.x - keyAreaX) / (view.pxPerFrame * Dpi());
+                float mouseFrame = view.scrollFrame + (mousePos.x - originX) / (oldPx * Dpi());
+                view.scrollFrame = mouseFrame - (mousePos.x - originX) / (view.pxPerFrame * Dpi());
             } else if (io.KeyShift) {
                 view.scrollFrame -= io.MouseWheel * 20.0f * (6.0f / view.pxPerFrame);
             } else {
@@ -118,7 +119,7 @@ bool Timeline(const char* id, ImVec2 size, const std::vector<TimelineRow>& rows,
                     float bestDistSq = Dp(7.0f) * Dp(7.0f);
                     const TimelineKey* bestKey = nullptr;
                     for (const auto& k : r.keys) {
-                        float kx = keyAreaX + (k.frame - view.scrollFrame) * view.pxPerFrame * Dpi();
+                        float kx = originX + (k.frame - view.scrollFrame) * view.pxPerFrame * Dpi();
                         float dx = mousePos.x - kx;
                         float dy = mousePos.y - rowY;
                         float distSq = dx * dx + dy * dy;
@@ -152,7 +153,7 @@ bool Timeline(const char* id, ImVec2 size, const std::vector<TimelineRow>& rows,
                         if (r.keysEditable && !r.isGroup) {
                             ev.addKeyAt = true;
                             ev.addKeyRow = r.id;
-                            ev.addKeyFrame = (int)std::round((mousePos.x - keyAreaX) / (view.pxPerFrame * Dpi()) + view.scrollFrame);
+                            ev.addKeyFrame = (int)std::round((mousePos.x - originX) / (view.pxPerFrame * Dpi()) + view.scrollFrame);
                             changed = true;
                         }
                     }
@@ -164,10 +165,11 @@ bool Timeline(const char* id, ImVec2 size, const std::vector<TimelineRow>& rows,
         }
     }
 
-    if (ImGui::IsItemActive() && leftDown) {
+    // ButtonBehavior clears the active id in the release frame, so drags are tracked by view.dragMode.
+    if ((held || ImGui::IsItemActive()) && leftDown) {
         if (view.dragMode == 1) {
             ev.seek = true;
-            ev.seekFrame = std::max(0, (int)std::round((mousePos.x - keyAreaX) / (view.pxPerFrame * Dpi()) + view.scrollFrame));
+            ev.seekFrame = std::max(0, (int)std::round((mousePos.x - originX) / (view.pxPerFrame * Dpi()) + view.scrollFrame));
             changed = true;
         } else if (view.dragMode == 2) {
             float dx = mousePos.x - io.MouseClickedPos[0].x;
@@ -183,7 +185,7 @@ bool Timeline(const char* id, ImVec2 size, const std::vector<TimelineRow>& rows,
         }
     }
 
-    if (ImGui::IsItemActive() && leftReleased) {
+    if (leftReleased && view.dragMode != 0) {
         if (view.dragMode == 1) {
             // done
         } else if (view.dragMode == 2) {
@@ -214,7 +216,7 @@ bool Timeline(const char* id, ImVec2 size, const std::vector<TimelineRow>& rows,
                 float rowY = contentY - view.scrollY + ri * rowHeight + rowHeight * 0.5f;
                 if (rowY >= by0 && rowY <= by1) {
                     for (const auto& k : r.keys) {
-                        float kx = keyAreaX + (k.frame - view.scrollFrame) * view.pxPerFrame * Dpi();
+                        float kx = originX + (k.frame - view.scrollFrame) * view.pxPerFrame * Dpi();
                         if (kx >= bx0 && kx <= bx1) {
                             ev.selectKeys.push_back({r.id, k.frame});
                         }
@@ -262,10 +264,11 @@ bool Timeline(const char* id, ImVec2 size, const std::vector<TimelineRow>& rows,
 
         float labelX = bb.Min.x + Dp(4.0f) + r.depth * Dp(14.0f);
         if (r.isGroup) {
-            Icon(dl, r.expanded ? icon::CaretDown : icon::CaretRight, Dp(16.0f), ImVec2(labelX + Dp(8.0f), rowY + rowHeight * 0.5f), p.ink);
+            Icon(dl, r.expanded ? icon::CaretDown : icon::CaretRight, 13.0f, ImVec2(labelX + Dp(8.0f), rowY + rowHeight * 0.5f), p.ink);
             labelX += Dp(16.0f);
         }
-        TextEllipsis(dl, Font::Regular, size::Body, ImVec2(labelX, rowY + Dp(2.0f)), keyAreaX - Dp(4.0f), p.ink, r.label.c_str());
+        TextEllipsis(dl, r.isGroup ? Font::Semibold : Font::Regular, size::Small,
+                     ImVec2(labelX, rowY + (rowHeight - Dp(size::Small * 1.25f)) * 0.5f), keyAreaX - Dp(4.0f), p.ink, r.label.c_str());
 
         dl->AddLine(ImVec2(rmin.x, rmax.y), ImVec2(rmax.x, rmax.y), p.line);
     }
@@ -285,11 +288,11 @@ bool Timeline(const char* id, ImVec2 size, const std::vector<TimelineRow>& rows,
     }
     
     int startFrame = std::max(0, (int)std::floor(view.scrollFrame));
-    int endFrame = startFrame + (int)std::ceil(keyAreaW / (view.pxPerFrame * Dpi()));
+    int endFrame = startFrame + (int)std::ceil(keyAreaW / (view.pxPerFrame * Dpi())) + 1;
     
     dl->PushClipRect(ImVec2(keyAreaX, bb.Min.y), bb.Max, true);
     for (int f = (startFrame / tickStep) * tickStep; f <= endFrame; f += tickStep) {
-        float x = keyAreaX + (f - view.scrollFrame) * view.pxPerFrame * Dpi();
+        float x = originX + (f - view.scrollFrame) * view.pxPerFrame * Dpi();
         if (x < keyAreaX || x > bb.Max.x) continue;
         
         dl->AddLine(ImVec2(x, contentY - Dp(6.0f)), ImVec2(x, contentY), p.ink3);
@@ -321,7 +324,7 @@ bool Timeline(const char* id, ImVec2 size, const std::vector<TimelineRow>& rows,
         if (rowY + rowHeight * 0.5f < contentY || rowY - rowHeight * 0.5f > bb.Max.y) continue;
         
         for (const auto& k : r.keys) {
-            float kx = keyAreaX + (k.frame - view.scrollFrame) * view.pxPerFrame * Dpi();
+            float kx = originX + (k.frame - view.scrollFrame) * view.pxPerFrame * Dpi();
             if (kx < keyAreaX - Dp(10.0f) || kx > bb.Max.x + Dp(10.0f)) continue;
             
             float radius = r.isGroup ? Dp(4.0f) : Dp(6.5f);
@@ -333,7 +336,7 @@ bool Timeline(const char* id, ImVec2 size, const std::vector<TimelineRow>& rows,
             if (!dragged) drawDiamond(std::round(kx), std::round(rowY), col, radius);
 
             if (dragged) {
-                float gx = keyAreaX + (k.frame + view.dragDelta - view.scrollFrame) * view.pxPerFrame * Dpi();
+                float gx = originX + (k.frame + view.dragDelta - view.scrollFrame) * view.pxPerFrame * Dpi();
                 drawDiamond(std::round(gx), std::round(rowY), p.accent, radius);
                 ImVec2 pts[4] = {
                     ImVec2(std::round(kx), std::round(rowY - radius)), ImVec2(std::round(kx + radius), std::round(rowY)),
@@ -346,7 +349,7 @@ bool Timeline(const char* id, ImVec2 size, const std::vector<TimelineRow>& rows,
     
     dl->PopClipRect();
     dl->PushClipRect(ImVec2(keyAreaX, bb.Min.y), bb.Max, true);
-    float phx = std::round(keyAreaX + (currentFrame - view.scrollFrame) * view.pxPerFrame * Dpi());
+    float phx = std::round(originX + (currentFrame - view.scrollFrame) * view.pxPerFrame * Dpi());
     if (phx >= keyAreaX && phx <= bb.Max.x) {
         dl->AddLine(ImVec2(phx, bb.Min.y), ImVec2(phx, bb.Max.y), p.accent, std::max(1.0f, std::round(Dp(1.5f))));
         ImVec2 hpts[3] = {

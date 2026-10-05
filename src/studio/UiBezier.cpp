@@ -1,5 +1,6 @@
 #include "UiBezier.h"
 #include "app/UiKit.h"
+#include "core/I18n.h"
 #include "imgui_internal.h"
 #include <algorithm>
 #include <cmath>
@@ -7,8 +8,9 @@
 
 namespace mmdx::studio {
 
+// Korean source strings (I18n keys), translated with Tr() when drawn.
 const char* const kBezierPresetNames[kBezierPresetCount] = {
-    "Linear", "Ease in", "Ease out", "Ease in-out", "Fast-slow"
+    "선형", "천천히 시작", "천천히 끝", "천천히 시작과 끝", "빠르게 시작"
 };
 
 void BezierPreset(int index, uint8_t out[4]) {
@@ -131,14 +133,19 @@ bool BezierCurveEditor(const char* id, uint8_t c[4], float plotSize) {
     ImGuiStyle& style = ImGui::GetStyle();
     ImGui::PushID(id);
     
-    float windowVisibleX2 = ImGui::GetWindowPos().x + ImGui::GetWindowContentRegionMax().x;
+    // Presets and fields use the full line under the plot (the plot may be centred).
+    ImGui::Dummy(ImVec2(0.0f, Dp(4.0f)));
+    const float lineX = ImGui::GetCursorScreenPos().x;
+    const float rightX = lineX + ImGui::GetContentRegionAvail().x;
     for (int i = 0; i < kBezierPresetCount; ++i) {
-        float expectedW = ui::TextSize(ui::Font::Regular, ui::size::Body, kBezierPresetNames[i]).x + style.FramePadding.x * 2.0f;
-        float nextX = ImGui::GetCursorScreenPos().x + expectedW + style.ItemSpacing.x;
-        if (i > 0 && nextX <= windowVisibleX2) {
-            ImGui::SameLine();
-        }
-        if (ui::Button(kBezierPresetNames[i], kBezierPresetNames[i], nullptr, ui::ButtonKind::Secondary)) {
+        const char* label = Tr(kBezierPresetNames[i]);
+        const float expectedW = ui::TextSize(ui::Font::Semibold, ui::size::Body, label).x + Dp(32.0f);  // ui::Button auto width
+        if (i > 0 && ImGui::GetItemRectMax().x + style.ItemSpacing.x + expectedW <= rightX) ImGui::SameLine();
+        ImGui::PushID(i);
+        const bool clicked = ui::Button("##preset", label, nullptr, ui::ButtonKind::Secondary,
+                                        ImVec2(0.0f, 28.0f));
+        ImGui::PopID();
+        if (clicked) {
             BezierPreset(i, c);
             changed = true;
         }
@@ -146,7 +153,7 @@ bool BezierCurveEditor(const char* id, uint8_t c[4], float plotSize) {
     
     int vals[4] = { c[0], c[1], c[2], c[3] };
     const char* labels[] = { "##x1", "##y1", "##x2", "##y2" };
-    float w = (sz - style.ItemSpacing.x * 3) / 4.0f;
+    float w = (rightX - lineX - style.ItemSpacing.x * 3) / 4.0f;
     for (int i = 0; i < 4; ++i) {
         if (i > 0) ImGui::SameLine();
         ImGui::SetNextItemWidth(std::max(Dp(40.0f), w));

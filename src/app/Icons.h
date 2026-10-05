@@ -64,4 +64,23 @@ inline constexpr const char* Headphones = "\xee\x8a\xa6";
 inline constexpr const char* MicrophoneStage = "\xee\x9d\x9c";
 inline constexpr const char* Spinner = "\xee\x99\xaa";
 inline constexpr const char* CircleNotch = "\xee\xad\x84";
+// Studio
+inline constexpr const char* ArrowCw = "\xee\x80\xb6";
+inline constexpr const char* FloppyDisk = "\xee\x89\x88";
+inline constexpr const char* DownloadSimple = "\xee\x88\x8c";
+inline constexpr const char* UploadSimple = "\xee\x93\x80";
+inline constexpr const char* SkipForward = "\xee\x96\xa6";
+inline constexpr const char* Diamond = "\xee\x87\xac";
+inline constexpr const char* Plus = "\xee\x8f\x94";
+inline constexpr const char* Trash = "\xee\x92\xa6";
+inline constexpr const char* Copy = "\xee\x87\x8a";
+inline constexpr const char* ClipboardText = "\xee\x86\x98";
+inline constexpr const char* PersonSimple = "\xee\x9c\xae";
+inline constexpr const char* Export = "\xee\xab\xb0";
+inline constexpr const char* Crosshair = "\xee\x87\x96";
+inline constexpr const char* CaretLineLeft = "\xee\x84\xb2";
+inline constexpr const char* CaretLineRight = "\xee\x84\xb0";
+inline constexpr const char* Bone = "\xee\x9f\xb2";
+inline constexpr const char* ArrowsOutCardinal = "\xee\x82\xa4";
+inline constexpr const char* Magnet = "\xee\x9a\x80";
 } // namespace mmdx::icon

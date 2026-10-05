@@ -841,10 +841,10 @@ void PresentPass::Execute(PassContext& pc) {
 
     const float bw = (float)ctx.Width();
     const float bh = (float)ctx.Height();
-    float s = std::min(bw / (float)t.ldr.width, bh / (float)t.ldr.height);
-    float vw = (float)t.ldr.width * s;
-    float vh = (float)t.ldr.height * s;
-    D3D12_VIEWPORT viewport{(bw - vw) / 2.0f, (bh - vh) / 2.0f, vw, vh, 0.0f, 1.0f};
+    float area[4], fit[4];
+    ViewportArea(pc.settings, bw, bh, area);
+    FitInArea(area, (float)t.ldr.width, (float)t.ldr.height, fit);
+    D3D12_VIEWPORT viewport{fit[0], fit[1], fit[2], fit[3], 0.0f, 1.0f};
     D3D12_RECT scissor{0, 0, (LONG)bw, (LONG)bh};
     cmd->RSSetViewports(1, &viewport);
     cmd->RSSetScissorRects(1, &scissor);

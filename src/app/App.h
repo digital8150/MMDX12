@@ -13,6 +13,7 @@
 #include "render/ColorLut.h"
 #include "render/Dx12Context.h"
 #include "render/Renderer.h"
+#include "studio/StudioDoc.h"
 #include <Windows.h>
 #include <chrono>
 #include <filesystem>
@@ -36,11 +37,19 @@ namespace mmdx {
 //   --bench-spp <n>        render benchmark: override kRenderBenchSamples (testing; the result cannot be submitted)
 //   --frames <n>           quit after n frames have been rendered in Play/BenchmarkRun state
 //   --capture <file.png>   capture the final frame (with --frames) to a PNG
+//   --ui-script <file>     scripted ImGui input for UI tests (UiScript.cpp): lines "<frame> <command> [args]",
+//                          frame = frames counted like --frames; commands: move x y | down [l|r|m] | up [l|r|m] |
+//                          click x y | dblclick x y | wheel dy | key <ImGuiKey name> [ctrl] [shift] | capture <file.png> |
+//                          log <text> | studiostate (logs the Studio's frame, selection, key counts, undo) |
+//                          studioexport <file.vmd> | studioimport <file.vmd> (the Studio's VMD export/import
+//                          without the dialogs).
+//                          Coordinates in window pixels.
 //   --width <w> --height <h>  initial window client size
 //   --debug                enable the D3D12 debug layer
 //   --free-camera          start with the free orbit camera
-//   --screen <select|stages|songs|settings|video|bench|bench-gi> open that screen after the scan (UI testing;
-//                          --frames counts all frames)
+//   --screen <select|stages|songs|settings|video|bench|bench-gi|studio> open that screen after the scan (UI testing;
+//                          --frames counts all frames; studio: opens --character/--stage/--song in the Studio at
+//                          --seek and counts frames from the Studio on)
 //   --lighting <0..3>      lighting preset for this run (Studio, Sunset, Concert, Night)
 //   --quality <0..3>       graphics preset for this run (low, medium, high, ultra)
 //   --render <raster|rt|pt>            render path for this run (override settings)
@@ -72,6 +81,7 @@ struct AppOptions {
     int benchSpp = 0;          // --bench-spp (0 = kRenderBenchSamples)
     int quitAfterFrames = 0;
     std::filesystem::path capturePath;
+    std::filesystem::path uiScript;
     int width = 0, height = 0;
     bool debugLayer = false;
     bool freeCamera = false;
@@ -108,8 +118,8 @@ public:
     LRESULT HandleMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
 
 private:
-    enum class Screen { Scanning, Select, Loading, Play, BenchLobby, BenchRun, BenchResult, Offline, BenchRender };
-    enum class LoadTarget { Play, Benchmark, RenderBench, OfflineVideo };
+    enum class Screen { Scanning, Select, Loading, Play, BenchLobby, BenchRun, BenchResult, Offline, BenchRender, Studio };
+    enum class LoadTarget { Play, Benchmark, RenderBench, OfflineVideo, Studio };
 
     struct SceneRuntime {
         std::unique_ptr<ModelInstance> character;
@@ -190,6 +200,35 @@ private:
     // Lobby / loading card for the render benchmark scene: the last finished image when there is
     // one, else a dark studio with the three performers' thumbnails (UiBenchmark.cpp).
     void DrawRenderBenchPreview(float x0, float y0, float x1, float y1, float rounding);
+
+    // --- studio (UiStudio.cpp): the editor screen for keyframe work on a multi-model scene
+    void StartStudioLoad(const CharacterAsset* ch, const StageAsset* st, const SongAsset* song);  // -> Loading -> Studio
+    bool FinishStudioLoad();          // main thread: GPU upload of studioPackage_, enters Screen::Studio
+    void LeaveStudio();               // -> Select (unloads)
+    void UpdateStudio(double dt);     // input, playback clock
+    void DrawStudio();                // panels; sets the renderer's viewport to the free area
+    void UpdateStudioScene();         // evaluate motions at the current frame, upload poses
+    void BuildStudioFrameView(FrameView& view);
+    void StudioSeek(double seconds);
+    void StudioSetPlaying(bool play);
+    void StudioRebuildRows();
+    void StudioHandleTimeline(const studio::TimelineEvents& ev);
+    void StudioPushTrackEdit(const char* name, const std::vector<studio::TrackState>& before);  // after = current state
+    std::vector<studio::TrackState> StudioCaptureSelectedTracks();
+    bool StudioTrackOfRow(uint64_t row, studio::RowKind& kind, std::string& name) const;
+    void StudioInsertKeys(const std::vector<uint64_t>& rows, int frame);  // key the current value of each row
+    void StudioImportVmd();                                   // open dialog, then StudioImportVmdFrom
+    void StudioImportVmdFrom(const std::filesystem::path& path);  // merge into the selected model (camera VMDs: camera)
+    void StudioExportVmd();                                   // save dialog, then StudioExportVmdTo
+    bool StudioExportVmdTo(const std::filesystem::path& path);  // selected model's motion (or the camera)
+    void DrawStudioTopBar(float x0, float y0, float x1, float y1);
+    void DrawStudioOutliner(float x0, float y0, float x1, float y1);
+    void DrawStudioInspector(float x0, float y0, float x1, float y1);
+    void DrawStudioTimeline(float x0, float y0, float x1, float y1);
+    void DrawStudioViewport(float x0, float y0, float x1, float y1);
+
+    // --- scripted UI input for tests (UiScript.cpp)
+    void PumpUiScript();  // before ImGui::NewFrame: feeds the events due at framesInScene_
 
     // --- thumbnails (AppThumbnails.cpp)
     std::filesystem::path ThumbnailCacheDir() const;
@@ -361,6 +400,18 @@ private:
         bool error = false;
         double until = 0;             // timeSeconds_ when it disappears
     } toast_;
+
+    // ui script
+    struct UiScriptStep { int frame = 0; std::string cmd; std::vector<std::string> args; };
+    std::vector<UiScriptStep> uiScript_;
+    size_t uiScriptNext_ = 0;
+    bool uiScriptLoaded_ = false;
+
+    // studio
+    std::unique_ptr<studio::StudioDoc> studio_;
+    std::unique_ptr<studio::StudioPackage> studioPackage_;
+    double studioLastBind_ = 0;       // timeSeconds_ of the last motion re-bind (throttled while dragging)
+    bool studioLeaveConfirm_ = false; // unsaved-changes prompt is open
 
     // benchmark
     int benchCategory_ = 0;       // index into kBenchCategories

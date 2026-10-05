@@ -15,6 +15,6 @@ bool BezierCurveEditor(const char* id, uint8_t c[4], float plotSize = 180.0f);
 // 0 Linear {20,20,107,107}  1 Ease in {42,0,108,64}  2 Ease out {20,70,87,127}  3 Ease in-out {64,0,64,127}  4 Fast then slow {0,64,64,127}  (index out of range -> Linear)
 void BezierPreset(int index, uint8_t out[4]);
 inline constexpr int kBezierPresetCount = 5;
-extern const char* const kBezierPresetNames[kBezierPresetCount];  // "Linear","Ease in","Ease out","Ease in-out","Fast-slow"
+extern const char* const kBezierPresetNames[kBezierPresetCount];  // Korean I18n keys (pass through mmdx::Tr)
 
 } // namespace mmdx::studio

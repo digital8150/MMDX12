@@ -58,7 +58,27 @@ struct RenderSettings {
     float fog = 0.35f;               // 0 = off; distance haze toward the horizon colour
     bool transparentBackground = false;  // thumbnails: no sky, alpha = coverage
     bool headless = false;               // render without touching the back buffer (background sample renders)
+    // Output area in the back buffer (Studio viewport between its panels). viewportW/H == 0: the whole window.
+    // The output resolution follows the area's size; the image is letterboxed into it.
+    uint32_t viewportX = 0, viewportY = 0, viewportW = 0, viewportH = 0;
 };
+
+// The back-buffer area the scene is presented into (x, y, w, h), and the image rectangle fitted into it.
+inline void ViewportArea(const RenderSettings& s, float bw, float bh, float area[4]) {
+    if (s.viewportW > 0 && s.viewportH > 0) {
+        area[0] = (float)s.viewportX; area[1] = (float)s.viewportY;
+        area[2] = (float)s.viewportW; area[3] = (float)s.viewportH;
+    } else {
+        area[0] = 0; area[1] = 0; area[2] = bw; area[3] = bh;
+    }
+}
+inline void FitInArea(const float area[4], float imageW, float imageH, float rect[4]) {
+    const float s = (area[2] / imageW) < (area[3] / imageH) ? area[2] / imageW : area[3] / imageH;
+    rect[2] = imageW * s;
+    rect[3] = imageH * s;
+    rect[0] = area[0] + (area[2] - rect[2]) * 0.5f;
+    rect[1] = area[1] + (area[3] - rect[3]) * 0.5f;
+}
 
 struct CameraParams {
     DirectX::XMFLOAT4X4 view{};   // LH view matrix (row-vector convention)
