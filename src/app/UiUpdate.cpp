@@ -155,9 +155,18 @@ void App::DrawUpdateNotice() {
         buttonsW = pageW;
     }
 
-    const float noteH = s.note.empty() ? 0.0f : Dp(20.0f);
+    // The feed's notes are a few short lines ("• ..."): one row each, left of the buttons.
+    std::vector<std::string> noteLines;
+    for (size_t start = 0; start < s.note.size() && noteLines.size() < 4;) {
+        size_t end = s.note.find('\n', start);
+        if (end == std::string::npos) end = s.note.size();
+        if (end > start) noteLines.push_back(s.note.substr(start, end - start));
+        start = end + 1;
+    }
+    const float lineH = Dp(19.0f);
+    const float textH = Dp(22.0f) + lineH * float(noteLines.size());
     const float w = std::min(ds.x - Dp(56.0f), Dp(560.0f));
-    const float h = Dp(24.0f) + btnH + noteH + Dp(18.0f);
+    const float h = Dp(28.0f) + std::max(textH, btnH);
     const ImVec2 a(ds.x * 0.5f - w * 0.5f, ds.y - h - Dp(20.0f)), b(a.x + w, a.y + h);
 
     ImGui::SetNextWindowPos(a);
@@ -172,9 +181,10 @@ void App::DrawUpdateNotice() {
     const float tx = a.x + Dp(20.0f);
     float y = a.y + Dp(14.0f);
     Text(dl, Font::Semibold, size::Body, ImVec2(tx, y), p.ink, title);
-    if (!s.note.empty()) {
-        y += Dp(22.0f);
-        TextEllipsis(dl, Font::Regular, size::Small, ImVec2(tx, y), b.x - Dp(16.0f), p.ink2, s.note.c_str());
+    y += Dp(22.0f);
+    for (const std::string& line : noteLines) {
+        TextEllipsis(dl, Font::Regular, size::Small, ImVec2(tx, y), b.x - Dp(32.0f) - buttonsW, p.ink2, line.c_str());
+        y += lineH;
     }
     y = b.y - Dp(14.0f) - btnH;
 
