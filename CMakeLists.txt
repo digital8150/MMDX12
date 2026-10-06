@@ -8,6 +8,10 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 
 if(MSVC)
   add_compile_options(/utf-8 /W3 /MP /permissive- /Zc:__cplusplus)
+  # Stated explicitly: a CMake cache whose CMAKE_CXX_FLAGS* came up empty once produced a release exe without
+  # /O2, NDEBUG and /EHsc (physics ran at 2-10 fps). These duplicate the defaults harmlessly.
+  add_compile_options(/EHsc "$<$<CONFIG:Release,RelWithDebInfo,MinSizeRel>:/O2>")
+  add_compile_definitions("$<$<CONFIG:Release,RelWithDebInfo,MinSizeRel>:NDEBUG>")
   add_compile_definitions(NOMINMAX WIN32_LEAN_AND_MEAN UNICODE _UNICODE _CRT_SECURE_NO_WARNINGS)
 endif()
 

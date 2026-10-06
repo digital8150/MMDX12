@@ -15,6 +15,7 @@ $script = Join-Path ([IO.Path]::GetTempPath()) 'mmdx12_release_build.cmd'
 @echo off
 call "$vsDevCmd" -arch=x64 -host_arch=x64 >nul || exit /b 1
 set PATH=$pip;%PATH%
+if exist "$build\CMakeCache.txt" del "$build\CMakeCache.txt"
 cmake -S "$root" -B "$build" -G Ninja -DCMAKE_BUILD_TYPE=Release >nul || exit /b 1
 cmake --build "$build" --target MMDX12 || exit /b 1
 echo VCREDIST=%VCToolsRedistDir%
