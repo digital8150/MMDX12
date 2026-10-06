@@ -578,3 +578,48 @@ Started with the opencode worker (full level); the worker was stopped midway and
 - `tools/package_release.ps1` copies only exe, dlls, shaders, assets: `shader_cache` is not packaged. The updater applier was not read for
   handling of extra folders.
 - Far-away joints show as 2 px dark dots (min clamp), readable but dense on hair bones.
+
+## 2026-10-07 — Shader pack ecosystem + hoyo_toon
+
+Feedback round 1: the picker was only in the play bar (not visible to people rendering from the library) -> library panel.
+Round 2: "an ecosystem, not MMD-vs-hoyo": list view, contributor fields, docs/gallery on the website, online installs.
+Workers: antigravity (first attempt, 30 min timeout, no output), opencode (M1 pack core), antigravity (M4 website).
+
+### Done
+- Render: `PSPack` in mmd.hlsl behind `MMDX_PACK` (PSMain untouched), contract `shaders/pack_api.hlsli` (PACK_API_VERSION 1),
+  compiled with DXC on first use (FXC cannot `#include` a macro) + RT variant; errors -> `[E]`, status, toast, default shading.
+  Per-model data in `MaterialConstants` (class, head bone, head bind pos, 16 params); bone SRV visible to the PS; "no AO" =
+  negative reflectivity in the normal target. Shader cache key covers the pack folder.
+- Pack format v2 (`render/ShaderPack.*`, opencode): localized name / description / recommendedFor / param labels, authors,
+  license, homepage, repository, tags, apiVersion, minAppVersion, preview.png; status per pack (compile error, incompatible,
+  invalid manifest, duplicate) kept across rescans; hot reload (`PollChanges`, stat every 0.5 s); install folder / zip
+  (allowed extensions, 200 files / 32 MB, no links, zip-slip check, tmp + rename), uninstall, create from
+  `shaders/pack_template`. `tools/pack_check <dir|zip> [--compile]` (shipped in the release zip).
+- `core/NetUtil.*`: HTTP GET, download, SHA-256, zip extraction, version compare moved out of the updater (shared).
+- Online gallery `app/ShaderPackStore.*`: index.json (default mmdx.codingbot.kr/shader-packs/index.json, `--pack-index` for
+  tests), previews cached in shader_cache/previews, downloads checked against size + SHA-256, installed on the main thread.
+- UI: top tab "셰이더" (`UiShaders.cpp`, `--screen shaders|shaders-online`): installed / online card grids with search,
+  source + status badges, detail panel (description, recommended models, authors + links, license, links, tags, params,
+  compiler errors, open folder, delete), zip install, drop zip / folder on the window, new pack dialog. Library panel / play
+  bar / studio inspector share one selector row with a searchable list (`UiShaderPack.cpp`); video dialog warns for PT / GI.
+  Choice saved per character (`characterShader=` ini) and per studio model (`.mmdxproj` "shader"); `--shader-pack`.
+- hoyo_toon v1.0.0: head-frame face shadow (SDF stand-in), no face AO, two-tone ramp, toon-derived shadow colour, flat
+  ambient, banded hair highlight / rim; preview from a real render.
+- Website (MMDX12_Web, not deployed yet): docs in ko/en/ja/zh (overview, quickstart, manifest, shader API, hoyo_toon,
+  debugging, publishing), gallery + pack pages, `scripts/build-packs.mjs` (deterministic zips + index.json from `shader-packs/`).
+  The repo's `docs/shader-packs.md` was removed; README links the site.
+
+### Verified
+- Same-frame comparison (raster video renderer, 10.75 s): Furina's face loses the self-shadow band and nose / cheek modelling.
+- `--render rt` (Raiden), non-HoYo model (Miku), broken surface -> fallback + toast.
+- Scripted UI (build_dev): shader screen installed / online tabs, online install of a test pack from a local index
+  (`.mmdx_install.json` written), SHA-256 mismatch rejected (nothing installed, no temp left), library selector + popup.
+- Hot reload: editing surface.hlsl while playing -> generation 2 + recompile (log).
+- pack_check: hoyo_toon / template OK with --compile; worker tested broken json / missing surface / syntax error / apiVersion 99 /
+  zip / zip-slip. Site build twice -> identical zip SHA-256; pages looked at 1440 and 390 wide.
+- studio_project/edit/pose/gizmo tests pass.
+
+### Not verified / notes
+- Website not deployed (needs the user's OK); until then the app's online tab shows "온라인 목록을 불러오지 못했습니다".
+- New pack dialog, delete, drag & drop on a real window, play-bar popup and the studio row were built but not clicked through.
+- PT / offline GI ignore packs (by design for now). Face width is in model units (slider for other head sizes).

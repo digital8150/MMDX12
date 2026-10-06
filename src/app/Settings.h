@@ -5,6 +5,7 @@
 #include <vector>
 
 #include "app/VideoConfig.h"
+#include "render/ShaderPack.h"
 
 namespace mmdx {
 
@@ -48,6 +49,9 @@ struct AppSettings {
     std::map<std::string, float> characterScales;    // character id -> display scale (absent = 1)
     float CharacterScale(const std::string& id) const;
     void SetCharacterScale(const std::string& id, float scale);  // ~1 removes the entry
+    std::map<std::string, ShaderChoice> characterShaders;  // character id -> shader pack (absent = default shading)
+    ShaderChoice CharacterShader(const std::string& id) const;
+    void SetCharacterShader(const std::string& id, const ShaderChoice& choice);  // empty pack removes the entry
     int windowWidth = 1600, windowHeight = 900;
     std::vector<std::string> recentProjects;         // studio projects (UTF-8 absolute paths), newest first, max 8
     void AddRecentProject(const std::string& path);  // moves it to the front (case-insensitive match)

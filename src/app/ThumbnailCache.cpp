@@ -192,10 +192,16 @@ void ThumbnailCache::WorkerLoop() {
             snprintf(name, sizeof(name), "%016llx.png", (unsigned long long)h);
             cacheFile = cacheDir_ / name;
 
-            // Cache hit?
+            // Cache hit? (Image entries: the picture itself)
             bool loaded = false;
             std::error_code ec;
-            if (std::filesystem::exists(cacheFile, ec)) {
+            if (kind == ThumbnailKind::Image) {
+                std::string err;
+                if (!sources.empty() && LoadImageRGBA8(sources[0], img, &err)) loaded = true;
+                else LOG_WARN("preview image load failed: %s", err.c_str());
+                cacheFile.clear();
+                if (!loaded) throw std::runtime_error("image");
+            } else if (std::filesystem::exists(cacheFile, ec)) {
                 std::string err;
                 if (LoadImageRGBA8(cacheFile, img, &err)) {
                     loaded = true;

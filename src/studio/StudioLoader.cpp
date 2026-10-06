@@ -242,6 +242,7 @@ bool LoadStudioProjectPackage(const std::filesystem::path& file, bool recovery, 
             m.visible = pm.visible;
             m.attach = pm.attach;
             m.place = pm.place;
+            m.shader = pm.shader;
             m.motion = std::move(pm.motion);
             m.motion.CanonicalizeNames(*m.pmx);
             if (m.motion.modelName.empty()) m.motion.modelName = m.pmx->name;

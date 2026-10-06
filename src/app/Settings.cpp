@@ -11,6 +11,16 @@
 
 namespace mmdx {
 
+ShaderChoice AppSettings::CharacterShader(const std::string& id) const {
+    auto it = characterShaders.find(id);
+    return it == characterShaders.end() ? ShaderChoice{} : it->second;
+}
+
+void AppSettings::SetCharacterShader(const std::string& id, const ShaderChoice& choice) {
+    if (choice.pack.empty()) characterShaders.erase(id);
+    else characterShaders[id] = choice;
+}
+
 namespace {
 
 std::string Trim(const std::string& s) {
@@ -143,6 +153,27 @@ bool AppSettings::Load(const std::filesystem::path& file) {
             if (bar != std::string::npos && ParseFloat(value.substr(0, bar), f) && f > 0.0f && std::isfinite(f))
                 characterScales[value.substr(bar + 1)] = std::clamp(f, 0.25f, 4.0f);
         }
+        else if (key == "characterShader") {
+            // characterShader=<pack id>|<key>:<value>,<key>:<value>|<character id>
+            const size_t a = value.find('|');
+            const size_t b = a == std::string::npos ? a : value.find('|', a + 1);
+            if (b != std::string::npos && a > 0) {
+                ShaderChoice c;
+                c.pack = value.substr(0, a);
+                const std::string list = value.substr(a + 1, b - a - 1);
+                size_t pos = 0;
+                while (pos < list.size()) {
+                    size_t end = list.find(',', pos);
+                    if (end == std::string::npos) end = list.size();
+                    const std::string item = list.substr(pos, end - pos);
+                    const size_t colon = item.find(':');
+                    if (colon != std::string::npos && ParseFloat(item.substr(colon + 1), f) && std::isfinite(f))
+                        c.params[item.substr(0, colon)] = f;
+                    pos = end + 1;
+                }
+                characterShaders[value.substr(b + 1)] = std::move(c);
+            }
+        }
         else if (key == "lastCharacter") lastCharacter = value;
         else if (key == "lastStage") lastStage = value;
         else if (key == "lastSong") lastSong = value;
@@ -247,6 +278,15 @@ bool AppSettings::Save(const std::filesystem::path& file) const {
     std::fprintf(f, "leaderboardUrl=%s\n", leaderboardUrl.c_str());
     std::fprintf(f, "updateFeedUrl=%s\n", updateFeedUrl.c_str());
     for (const auto& [id, scale] : characterScales) std::fprintf(f, "characterScale=%.3f|%s\n", scale, id.c_str());
+    for (const auto& [id, c] : characterShaders) {
+        std::string list;
+        for (const auto& [k, v] : c.params) {
+            char buf[64];
+            std::snprintf(buf, sizeof(buf), "%.4g", v);
+            list += (list.empty() ? "" : ",") + k + ":" + buf;
+        }
+        std::fprintf(f, "characterShader=%s|%s|%s\n", c.pack.c_str(), list.c_str(), id.c_str());
+    }
     std::fprintf(f, "lastCharacter=%s\n", lastCharacter.c_str());
     std::fprintf(f, "lastStage=%s\n", lastStage.c_str());
     std::fprintf(f, "lastSong=%s\n", lastSong.c_str());

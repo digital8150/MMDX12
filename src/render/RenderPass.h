@@ -132,15 +132,22 @@ using ShaderDefines = std::vector<std::pair<std::string, std::string>>;
 // Compiles with DXC (dxcompiler.dll + dxil.dll next to the exe, loaded on first use) for
 // shader model 6.x targets such as "cs_6_5" / "ps_6_5" (needed for inline ray queries).
 // Same defines and error logging as CompileShader; includes resolve relative to `file`.
-// Returns null (and logs once) when dxcompiler.dll is missing.
+// Returns null (and logs once) when dxcompiler.dll is missing. `errors` (optional) receives the compiler's error
+// text on failure.
 ComPtr<ID3DBlob> CompileShaderDxc(const std::filesystem::path& file, const char* entry, const char* target,
-                                  const ShaderDefines& defines = {});
+                                  const ShaderDefines& defines = {}, std::string* errors = nullptr);
+
+// Both compilers cache bytecode in <exe>/shader_cache, keyed by the sources of the shader's directory (and, with a
+// MMDX_PACK define, the pack's directory). The directory hashes are computed once per run: call this after shader
+// files change on disk (shader pack reload).
+void ResetShaderSourceHashes();
 
 // Compiles an HLSL entry point with D3DCompileFromFile (D3DCOMPILE_ENABLE_STRICTNESS,
 // plus DEBUG|SKIP_OPTIMIZATION in debug builds, OPTIMIZATION_LEVEL3 otherwise).
-// `target` e.g. "vs_5_1". Logs compiler errors via LOG_ERROR and returns null on failure.
+// `target` e.g. "vs_5_1". Logs compiler errors via LOG_ERROR and returns null on failure. `errors` (optional)
+// receives the compiler's error text on failure.
 ComPtr<ID3DBlob> CompileShader(const std::filesystem::path& file, const char* entry, const char* target,
-                               const ShaderDefines& defines = {});
+                               const ShaderDefines& defines = {}, std::string* errors = nullptr);
 
 // A fullscreen-triangle pixel shader pass. Root signature:
 //   0: CBV b0 (SceneConstants), 1: 16 root constants b1, 2: SRV table t0..t7,

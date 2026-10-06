@@ -97,6 +97,7 @@ bool App::FinishStudioLoad() {
         sm->visible = m.visible;
         sm->attach = m.attach;
         sm->place = sm->placeApplied = m.place;
+        sm->shader = m.shader;
         sm->uid = doc->nextUid++;
         sm->path = m.pmx->sourcePath;
         sm->pmx = m.pmx;
@@ -465,6 +466,14 @@ void App::StudioUpdateModel(StudioModel& m, uint64_t slot, float frame, float ph
     if (!m.IsStage() || m.bound) inst.UpdatePose(physicsDt);
     m.gpu->UpdateSkinning(slot, inst.SkinMatrices());
     m.gpu->UpdateMorphs(slot, inst.VertexMorphDeltas(), inst.MorphVersion());
+    if (m.kind == ModelKind::Character) {
+        ShaderChoice shader = m.shader;
+        if (options_.shaderPackSet) {   // --shader-pack: this run only, the project keeps its choice
+            if (shader.pack != options_.shaderPack) shader.params.clear();
+            shader.pack = options_.shaderPack;
+        }
+        ApplyShaderChoice(*m.gpu, shader);
+    }
     m.gpu->UpdateMaterials(slot, inst.MaterialMul(), inst.MaterialAdd(), inst.MaterialVersion());
 }
 
@@ -1710,6 +1719,7 @@ void App::DrawStudioInspector(float x0, float y0, float x1, float y1) {
             line(Tr("본 / 모프"), std::to_string(m->pmx->bones.size()) + " / " + std::to_string(m->pmx->morphs.size()));
             if (m->IsProp()) DrawStudioPropPanel(w);
             else DrawStudioPlacePanel(w);
+            if (m->kind == ModelKind::Character) DrawStudioShaderRow(w);
         } else {
             char counts[96];
             std::snprintf(counts, sizeof(counts), Tr("카메라 %d · 조명 %d · 섀도 %d"), (int)d.camera.camera.size(),

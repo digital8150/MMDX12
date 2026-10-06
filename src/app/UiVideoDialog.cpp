@@ -9,6 +9,7 @@
 #include "app/Icons.h"
 #include "app/UiHelpers.h"
 #include "app/UiKit.h"
+#include "studio/StudioDoc.h"
 #include "core/TextUtil.h"
 #include "imgui.h"
 #include "imgui_internal.h"
@@ -186,6 +187,25 @@ void App::DrawVideoRenderDialog() {
                              summaryText);
 
                 ImGui::RenderNavCursor(bb, gid);
+            }
+        }
+
+        // shader packs only change the raster / real-time RT renderers: say so where the renderer is chosen
+        if (cfg.renderer == (int)VideoRenderer::PathTraced || cfg.renderer == (int)VideoRenderer::OfflineGI) {
+            bool anyPack = false;
+            if (studio) {
+                for (const auto& m : studio_->models)
+                    anyPack |= m->kind == studio::ModelKind::Character && !m->shader.pack.empty();
+            } else if (selCharacter_ >= 0 && (size_t)selCharacter_ < library_.characters.size()) {
+                anyPack = !settings_.CharacterShader(library_.characters[(size_t)selCharacter_].id).pack.empty();
+            }
+            if (anyPack) {
+                Gap(6.0f);
+                PushFont(Font::Regular, size::Caption);
+                ImGui::PushStyleColor(ImGuiCol_Text, ImGui::ColorConvertU32ToFloat4(p.warn));
+                ImGui::TextWrapped("%s", Tr("이 렌더러는 셰이더 팩을 쓰지 않습니다. 팩을 적용하려면 래스터나 실시간 RT를 고르세요."));
+                ImGui::PopStyleColor();
+                PopFont();
             }
         }
 

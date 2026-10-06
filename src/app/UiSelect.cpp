@@ -33,15 +33,6 @@ bool MatchesFilter(const std::string& needle, const std::string& a, const std::s
            ToLowerAscii(b).find(needle) != std::string::npos;
 }
 
-// Card hit area: an invisible ImGui item so hover/click/nav work like any widget.
-bool CardItem(const char* id, ImVec2 a, ImVec2 b, bool* hovered) {
-    ImGui::SetCursorScreenPos(a);
-    const bool pressed = ImGui::InvisibleButton(id, ImVec2(b.x - a.x, b.y - a.y));
-    *hovered = ImGui::IsItemHovered();
-    if (*hovered) ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
-    return pressed;
-}
-
 void CheckBadge(ImDrawList* dl, ImVec2 c, float t) {
     if (t <= 0.01f) return;
     const float r = Dp(12.0f) * (0.6f + 0.4f * t);
@@ -90,13 +81,15 @@ void App::DrawAppBar(int activeNav) {
 
     // Primary navigation.
     ImGui::SetCursorScreenPos(ImVec2(navX, (h - Dp(38.0f)) * 0.5f));
-    const char* nav[] = {Tr("라이브러리"), Tr("벤치마크")};
-    const char* navIcons[] = {icon::Stack, icon::Gauge};
+    const char* nav[] = {Tr("라이브러리"), Tr("셰이더"), Tr("벤치마크")};
+    const char* navIcons[] = {icon::Stack, icon::Diamond, icon::Gauge};
     int sel = activeNav;
-    if (Segmented("##nav", nav, 2, &sel, 0.0f, 38.0f, navIcons)) {
-        if (sel == 1) {
+    if (Segmented("##nav", nav, 3, &sel, 0.0f, 38.0f, navIcons)) {
+        if (sel == 2) {
             screen_ = Screen::BenchLobby;
             RefreshLeaderboard();
+        } else if (sel == 1) {
+            screen_ = Screen::Shaders;
         } else {
             screen_ = Screen::Select;
         }
@@ -618,6 +611,39 @@ void App::DrawSelect() {
             const float colW = innerW;
             ImGui::BeginGroup();
             ImGui::PushClipRect(win->Pos, ImVec2(win->Pos.x + colW + Dp(4.0f), win->Pos.y + win->Size.y), true);
+            // shader pack of the selected character (saved per character; play, stills and videos use it)
+            if (ch) {
+                SectionLabel(Tr("셰이더"));
+                ShaderChoice choice = settings_.CharacterShader(ch->id);
+                bool shaderChanged = DrawShaderSelector("##lobbyshader", choice, colW);
+                const ShaderPack* pack = choice.pack.empty() ? nullptr : ShaderPacks().Find(choice.pack);
+                if (pack && pack->Selectable() && !pack->params.empty()) {
+                    Gap(4.0f);
+                    ImGuiWindow* w = ImGui::GetCurrentWindow();
+                    const ImVec2 da = w->DC.CursorPos;
+                    bool hovered = false;
+                    if (CardItem("##shaderparams", da, ImVec2(da.x + colW, da.y + Dp(30.0f)), &hovered))
+                        shaderParamsOpen_ = !shaderParamsOpen_;
+                    const std::string label = std::string(Tr("팩 설정")) + (choice.params.empty() ? "" : Tr("  ·  변경됨"));
+                    Text(w->DrawList, Font::Semibold, size::Small, ImVec2(da.x, da.y + Dp(6.0f)), hovered ? p.ink : p.ink2,
+                         label.c_str());
+                    Icon(w->DrawList, shaderParamsOpen_ ? icon::CaretDown : icon::CaretRight, 14.0f,
+                         ImVec2(da.x + colW - Dp(10.0f), da.y + Dp(15.0f)), p.ink2);
+                    if (shaderParamsOpen_) shaderChanged |= DrawShaderPackParams(choice);
+                }
+                if (pack) {
+                    PushFont(Font::Regular, size::Caption);
+                    ImGui::PushStyleColor(ImGuiCol_Text, ImGui::ColorConvertU32ToFloat4(P().ink3));
+                    ImGui::TextUnformatted(Tr("래스터 · 레이 트레이싱에 적용 (패스 트레이싱 · 오프라인 GI는 기본 셰이딩)"));
+                    ImGui::PopStyleColor();
+                    PopFont();
+                }
+                if (shaderChanged) {
+                    settings_.SetCharacterShader(ch->id, choice);
+                    settings_.Save(settingsPath_);
+                }
+                Gap(18.0f);
+            }
             SectionLabel(Tr("그래픽 품질"));
             const char* q[] = {Tr("낮음"), Tr("보통"), Tr("높음"), Tr("최고")};
             int preset = settings_.graphicsPreset;

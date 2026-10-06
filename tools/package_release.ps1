@@ -17,7 +17,7 @@ call "$vsDevCmd" -arch=x64 -host_arch=x64 >nul || exit /b 1
 set PATH=$pip;%PATH%
 if exist "$build\CMakeCache.txt" del "$build\CMakeCache.txt"
 cmake -S "$root" -B "$build" -G Ninja -DCMAKE_BUILD_TYPE=Release >nul || exit /b 1
-cmake --build "$build" --target MMDX12 || exit /b 1
+cmake --build "$build" --target MMDX12 pack_check || exit /b 1
 echo VCREDIST=%VCToolsRedistDir%
 "@ | Set-Content -Encoding ascii $script
 $out = cmd /c $script
@@ -35,6 +35,7 @@ if (Test-Path $stage) { Remove-Item -Recurse -Force $stage }
 New-Item -ItemType Directory -Force $stage | Out-Null
 $bin = Join-Path $build 'bin'
 Copy-Item (Join-Path $bin 'MMDX12.exe') $stage
+Copy-Item (Join-Path $bin 'pack_check.exe') $stage   # shader pack authors: manifest + compile check
 Copy-Item (Join-Path $bin '*.dll') $stage
 Copy-Item -Recurse (Join-Path $bin 'shaders') $stage
 Copy-Item -Recurse (Join-Path $bin 'assets') $stage

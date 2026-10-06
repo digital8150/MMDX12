@@ -65,11 +65,14 @@ struct MaterialConstants {            // b1, one 256-byte slot per material
     DirectX::XMFLOAT4 edgeColor;
     uint32_t flags;              // MaterialShaderFlags
     float reflectivity;          // base SSR reflectivity derived from the MMD specular
-    uint32_t _pad[2];
+    // Shader packs (GpuModel::SetShaderPack, pack_api.hlsli); only the pack PSOs read them.
+    uint32_t packClass;          // PackClass of the material
+    uint32_t packHeadBone;       // head bone index
     // Material morph texture factors (PMX): sampled colour = saturate(colour * mul + add) for the
     // texture, sphere and toon maps that the material has. Identity: mul 1, add 0.
     DirectX::XMFLOAT4 texMul, texAdd, sphereMul, sphereAdd, toonMul, toonAdd;
-    uint8_t _reserve[256 - 176];
+    DirectX::XMFLOAT4 packHead;       // xyz = head bone bind position, w = 1 when there is a head bone
+    DirectX::XMFLOAT4 packParams[4];  // the pack's 16 parameters
 };
 static_assert(sizeof(MaterialConstants) == 256, "MaterialConstants layout");
 

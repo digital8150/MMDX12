@@ -6,6 +6,8 @@
 #include "render/RayTracing.h"
 #include "render/Upscaler.h"
 #include "render/ShaderInterop.h"
+#include "render/ShaderPack.h"
+#include "core/TextUtil.h"
 #include "core/Log.h"
 #include <directx/d3dx12.h>
 #include <algorithm>
@@ -172,7 +174,7 @@ bool ScenePass::CreatePipelines(Dx12Context& ctx, const std::filesystem::path& s
     CD3DX12_ROOT_PARAMETER params[12];
     params[0].InitAsConstantBufferView(0, 0, D3D12_SHADER_VISIBILITY_ALL);   // SceneConstants
     params[1].InitAsConstantBufferView(1, 0, D3D12_SHADER_VISIBILITY_ALL);   // MaterialConstants
-    params[2].InitAsShaderResourceView(0, 0, D3D12_SHADER_VISIBILITY_VERTEX); // bones
+    params[2].InitAsShaderResourceView(0, 0, D3D12_SHADER_VISIBILITY_ALL);    // bones (shader packs read the head)
     CD3DX12_DESCRIPTOR_RANGE matTable, shadowTable;
     matTable.Init(D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 3, 1);
     params[3].InitAsDescriptorTable(1, &matTable, D3D12_SHADER_VISIBILITY_PIXEL);
@@ -259,6 +261,12 @@ bool ScenePass::CreatePipelines(Dx12Context& ctx, const std::filesystem::path& s
     pso.VS = {vs->GetBufferPointer(), vs->GetBufferSize()};
     pso.PS = {ps->GetBufferPointer(), ps->GetBufferSize()};
     pso.RasterizerState.CullMode = D3D12_CULL_MODE_BACK;
+    shaderDir_ = shaderDir;
+    litDesc_ = pso;
+    vs_ = vs;
+    vsRt_.Reset();
+    vsDxc_.Reset();
+    packPsos_.clear();
     if (!CheckHr(device->CreateGraphicsPipelineState(&pso, IID_PPV_ARGS(&psoCullBack_)), "ScenePass: PSO back"))
         return false;
     pso.RasterizerState.CullMode = D3D12_CULL_MODE_NONE;
@@ -282,6 +290,7 @@ bool ScenePass::CreatePipelines(Dx12Context& ctx, const std::filesystem::path& s
         ComPtr<ID3DBlob> vsFloorRt = CompileShaderDxc(file, "VSFloor", "vs_6_5", rtDefines);
         ComPtr<ID3DBlob> psFloorRt = CompileShaderDxc(file, "PSFloor", "ps_6_5", rtDefines);
         if (vsRt && psRt && vsFloorRt && psFloorRt) {
+            vsRt_ = vsRt;
             D3D12_GRAPHICS_PIPELINE_STATE_DESC psoRt = rasterPso;
             psoRt.VS = {vsRt->GetBufferPointer(), vsRt->GetBufferSize()};
             psoRt.PS = {psRt->GetBufferPointer(), psRt->GetBufferSize()};
@@ -353,6 +362,70 @@ bool ScenePass::CreatePipelines(Dx12Context& ctx, const std::filesystem::path& s
     okFloor = okFloor &&
               CheckHr(device->CreateGraphicsPipelineState(&floor, IID_PPV_ARGS(&psoWireFloor_)), "ScenePass: PSO wire floor");
     return okFloor;
+}
+
+const ScenePass::PackPipelines* ScenePass::PackPsos(Dx12Context& ctx, const std::string& id, bool rt) {
+    ShaderPackRegistry& reg = ShaderPacks();
+    if (reg.Generation() != packGeneration_) {
+        // reload: the old PSOs may still be in flight
+        if (!packPsos_.empty()) ctx.WaitForGpu();
+        packPsos_.clear();
+        packGeneration_ = reg.Generation();
+    }
+    const ShaderPack* pack = reg.Find(id);
+    if (!pack || !pack->Selectable()) return nullptr;
+    PackPipelines& p = packPsos_[id];
+    if (p.failed) return nullptr;
+    const std::filesystem::path file = shaderDir_ / L"mmd.hlsl";
+    // the surface as an include path relative to mmd.hlsl (built-in packs/<id>, user ../shader_packs/<id>)
+    std::error_code ec;
+    std::filesystem::path rel = std::filesystem::relative(pack->dir / L"surface.hlsl", shaderDir_, ec);
+    if (ec || rel.empty()) rel = pack->dir / L"surface.hlsl";
+    std::string inc = PathToUtf8(rel);
+    std::replace(inc.begin(), inc.end(), '\\', '/');
+    const std::string incDefine = "\"" + inc + "\"";
+    const auto fail = [&](const char* what) -> const PackPipelines* {
+        LOG_ERROR("shader pack '%s': %s failed, the model uses the default shading", id.c_str(), what);
+        reg.ReportError(id, what);
+        p = {};
+        p.failed = true;
+        return nullptr;
+    };
+    ID3D12Device* device = ctx.Device();
+    if (!p.back) {
+        // DXC (FXC cannot #include a macro): shader model 6.0, so the VS is a DXC build of VSMain as well
+        if (!vsDxc_) vsDxc_ = CompileShaderDxc(file, "VSMain", "vs_6_0");
+        std::string errors;
+        ComPtr<ID3DBlob> ps =
+            vsDxc_ ? CompileShaderDxc(file, "PSPack", "ps_6_0", {{"MMDX_PACK", incDefine}}, &errors) : nullptr;
+        if (!ps) return fail(errors.empty() ? "shader compile" : errors.c_str());
+        D3D12_GRAPHICS_PIPELINE_STATE_DESC d = litDesc_;
+        d.VS = {vsDxc_->GetBufferPointer(), vsDxc_->GetBufferSize()};
+        d.PS = {ps->GetBufferPointer(), ps->GetBufferSize()};
+        d.RasterizerState.CullMode = D3D12_CULL_MODE_BACK;
+        if (FAILED(device->CreateGraphicsPipelineState(&d, IID_PPV_ARGS(&p.back)))) return fail("PSO");
+        d.RasterizerState.CullMode = D3D12_CULL_MODE_NONE;
+        if (FAILED(device->CreateGraphicsPipelineState(&d, IID_PPV_ARGS(&p.noCull)))) return fail("PSO");
+        reg.ReportCompiled(id);
+        LOG_INFO("shader pack '%s': compiled (%s)", id.c_str(), inc.c_str());
+    }
+    if (rt && !p.rtTried && vsRt_) {
+        // ray-traced sun shadows: DXC variant; without it the raster pack PSOs draw (shadow maps)
+        p.rtTried = true;
+        ComPtr<ID3DBlob> ps = CompileShaderDxc(file, "PSPack", "ps_6_5", {{"RT_SHADOWS", "1"}, {"MMDX_PACK", incDefine}});
+        if (ps) {
+            D3D12_GRAPHICS_PIPELINE_STATE_DESC d = litDesc_;
+            d.VS = {vsRt_->GetBufferPointer(), vsRt_->GetBufferSize()};
+            d.PS = {ps->GetBufferPointer(), ps->GetBufferSize()};
+            d.RasterizerState.CullMode = D3D12_CULL_MODE_BACK;
+            if (SUCCEEDED(device->CreateGraphicsPipelineState(&d, IID_PPV_ARGS(&p.backRt)))) {
+                d.RasterizerState.CullMode = D3D12_CULL_MODE_NONE;
+                if (FAILED(device->CreateGraphicsPipelineState(&d, IID_PPV_ARGS(&p.noCullRt)))) p.backRt.Reset();
+            }
+        }
+        if (!p.backRt) LOG_ERROR("shader pack '%s': ray-traced variant failed, using shadow maps", id.c_str());
+    }
+    return &p;
 }
 
 void ScenePass::Execute(PassContext& pc) {
@@ -432,11 +505,19 @@ void ScenePass::Execute(PassContext& pc) {
             cmd->SetGraphicsRootShaderResourceView(2, model->BoneBuffer(pc.frame));
             cmd->SetGraphicsRootShaderResourceView(4, model->PrevBoneBuffer(pc.frame));
 
+            // shader pack: lit camera view only (unlit / wireframe / the flat ortho views keep the default shading)
+            const PackPipelines* pack = nullptr;
+            if (!model->ShaderPackId().empty() && !wire && !vd.ortho && pc.settings.shading == ViewShading::Lit)
+                pack = PackPsos(ctx, model->ShaderPackId(), rt);
+            const bool packRt = pack && rt && pack->backRt;
             for (const GpuModel::Material& m : model->Materials()) {
                 if (m.indexCount == 0 || !m.visible) continue;   // MMD skips materials with alpha 0
                 ID3D12PipelineState* want;
                 if (wire)
                     want = m.doubleSided ? psoWireNoCull_.Get() : psoWireBack_.Get();
+                else if (pack)
+                    want = m.doubleSided ? (packRt ? pack->noCullRt.Get() : pack->noCull.Get())
+                                         : (packRt ? pack->backRt.Get() : pack->back.Get());
                 else
                     want = m.doubleSided ? (rt ? psoNoCullRt_.Get() : psoNoCull_.Get())
                                          : (rt ? psoCullBackRt_.Get() : psoCullBack_.Get());

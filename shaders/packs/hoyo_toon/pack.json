@@ -1,0 +1,48 @@
+{
+  "format": 1,
+  "id": "hoyo_toon",
+  "version": "1.0.0",
+  "name": {
+    "ko": "호요 툰",
+    "en": "HoYo Toon",
+    "ja": "HoYoトゥーン",
+    "zh": "HoYo卡通"
+  },
+  "description": {
+    "ko": "원신·스타레일·젠존제 공식 MMD 모델용 셀 셰이딩. 얼굴은 머리 방향으로만 그림자가 지고(SDF 근사), 몸은 2단 램프와 평평한 환경광을 씁니다.",
+    "en": "HoYoverse-style cel shading for the official Genshin / Star Rail / ZZZ MMD models. Faces are shadowed only by the head direction (an SDF stand-in); the body uses a two-tone ramp and a flat ambient.",
+    "ja": "原神・スターレイル・ゼンレスゾーンゼロ公式MMDモデル向けのセルシェーディング。顔は頭の方向だけで影が付き(SDF近似)、体は2段ランプとフラットな環境光を使います。",
+    "zh": "为原神·星穹铁道·绝区零官方MMD模型制作的卡通着色。脸部仅随头部方向产生阴影(SDF近似)，身体使用双段明暗与平坦环境光。"
+  },
+  "recommendedFor": {
+    "ko": "원신 / 붕괴: 스타레일 / 젠존제 공식 MMD 모델",
+    "en": "Genshin Impact / Honkai: Star Rail / ZZZ official MMD models",
+    "ja": "原神 / 崩壊:スターレイル / ゼンレスゾーンゼロ公式MMDモデル",
+    "zh": "原神 / 崩坏:星穹铁道 / 绝区零官方MMD模型"
+  },
+  "authors": [
+    { "name": "MMDX12", "role": "셰이더" }
+  ],
+  "license": "MIT",
+  "tags": ["toon", "anime", "hoyoverse"],
+  "classes": [
+    { "class": "eye",  "match": ["目", "眼", "瞳", "eye", "Eye", "白目", "ハイライト", "高光"] },
+    { "class": "face", "match": ["顔", "颜", "脸", "face", "Face", "表情", "眉", "brow", "口", "歯", "牙", "舌", "mouth"] },
+    { "class": "hair", "match": ["髪", "髮", "发", "頭髪", "hair", "Hair"] },
+    { "class": "skin", "match": ["肌", "皮肤", "skin", "Skin", "体", "body_skin"] }
+  ],
+  "params": [
+    { "key": "rampThreshold",  "label": { "ko": "그림자 경계",       "en": "Shadow threshold",  "ja": "影の境界",       "zh": "阴影边界" },       "default": 0.5,  "min": 0.0,  "max": 1.0 },
+    { "key": "rampSoftness",   "label": { "ko": "경계 부드러움",     "en": "Shadow softness",   "ja": "境界の柔らかさ", "zh": "边界柔和度" },     "default": 0.03, "min": 0.005, "max": 0.25 },
+    { "key": "shadowDarkness", "label": { "ko": "그림자 진하기",     "en": "Shadow darkness",   "ja": "影の濃さ",       "zh": "阴影浓度" },       "default": 0.85, "min": 0.0,  "max": 1.0 },
+    { "key": "shadowWarmth",   "label": { "ko": "그림자 따뜻함",     "en": "Shadow warmth",     "ja": "影の暖かさ",     "zh": "阴影暖色" },       "default": 0.3,  "min": 0.0,  "max": 1.0 },
+    { "key": "faceSoftness",   "label": { "ko": "얼굴 그림자 부드러움", "en": "Face shadow softness", "ja": "顔の影の柔らかさ", "zh": "脸部阴影柔和度" }, "default": 0.08, "min": 0.01, "max": 0.5 },
+    { "key": "faceWidth",      "label": { "ko": "얼굴 폭",           "en": "Face width",        "ja": "顔の幅",         "zh": "脸部宽度" },       "default": 0.8,  "min": 0.2,  "max": 2.0 },
+    { "key": "faceCast",       "label": { "ko": "얼굴에 지는 그림자", "en": "Face cast shadows", "ja": "顔に落ちる影",   "zh": "脸部投影" },       "default": 0.6,  "min": 0.0,  "max": 1.0 },
+    { "key": "rimWidth",       "label": { "ko": "림 라이트 폭",       "en": "Rim light width",   "ja": "リムライト幅",   "zh": "边缘光宽度" },     "default": 0.12, "min": 0.0,  "max": 0.5 },
+    { "key": "rimStrength",    "label": { "ko": "림 라이트 세기",     "en": "Rim light strength", "ja": "リムライト強度", "zh": "边缘光强度" },     "default": 0.35, "min": 0.0,  "max": 2.0 },
+    { "key": "hairHighlight",  "label": { "ko": "머리카락 하이라이트", "en": "Hair highlight",    "ja": "髪のハイライト", "zh": "头发高光" },       "default": 0.5,  "min": 0.0,  "max": 2.0 },
+    { "key": "ambient",        "label": { "ko": "환경광",            "en": "Ambient",           "ja": "環境光",         "zh": "环境光" },         "default": 1.0,  "min": 0.0,  "max": 2.0 },
+    { "key": "eyeBrightness",  "label": { "ko": "눈 밝기",           "en": "Eye brightness",    "ja": "目の明るさ",     "zh": "眼睛亮度" },       "default": 1.0,  "min": 0.5,  "max": 1.5 }
+  ]
+}

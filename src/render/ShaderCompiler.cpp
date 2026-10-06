@@ -11,7 +11,7 @@
 namespace mmdx {
 
 static ComPtr<ID3DBlob> CompileShaderDxcUncached(const std::filesystem::path& file, const char* entry, const char* target,
-                                                 const ShaderDefines& defines) {
+                                                 const ShaderDefines& defines, std::string* errors) {
     // dxcompiler.dll ships next to the exe; load it (and the compiler instances) once.
     static struct Dxc {
         ComPtr<IDxcUtils> utils;
@@ -33,10 +33,14 @@ static ComPtr<ID3DBlob> CompileShaderDxcUncached(const std::filesystem::path& fi
             ok = true;
         }
     } dxc;
-    if (!dxc.ok) return {};
+    if (!dxc.ok) {
+        if (errors) *errors = "dxcompiler.dll not found";
+        return {};
+    }
 
     ComPtr<IDxcBlobEncoding> source;
     if (FAILED(dxc.utils->LoadFile(file.c_str(), nullptr, &source))) {
+        if (errors) *errors = "cannot read " + PathToUtf8(file);
         LOG_ERROR("shader %s: cannot read", PathToUtf8(file).c_str());
         return {};
     }
@@ -83,6 +87,7 @@ static ComPtr<ID3DBlob> CompileShaderDxcUncached(const std::filesystem::path& fi
     }
     HRESULT status = E_FAIL;
     if (!result || FAILED(hr) || FAILED(result->GetStatus(&status)) || FAILED(status)) {
+        if (errors && len > 0) errors->assign(text, len);
         LOG_ERROR("shader %s:%s failed: %.*s", PathToUtf8(file).c_str(), entry, (int)len, text);
         return {};
     }
@@ -98,7 +103,7 @@ static ComPtr<ID3DBlob> CompileShaderDxcUncached(const std::filesystem::path& fi
 
 
 static ComPtr<ID3DBlob> CompileShaderUncached(const std::filesystem::path& file, const char* entry, const char* target,
-                                              const ShaderDefines& defines) {
+                                              const ShaderDefines& defines, std::string* errors) {
     UINT flags = D3DCOMPILE_ENABLE_STRICTNESS;
 #ifdef _DEBUG
     flags |= D3DCOMPILE_DEBUG | D3DCOMPILE_SKIP_OPTIMIZATION;
@@ -109,12 +114,13 @@ static ComPtr<ID3DBlob> CompileShaderUncached(const std::filesystem::path& file,
     for (const auto& d : defines) macros.push_back({d.first.c_str(), d.second.c_str()});
     macros.push_back({nullptr, nullptr});
     ComPtr<ID3DBlob> code;
-    ComPtr<ID3DBlob> errors;
+    ComPtr<ID3DBlob> errorBlob;
     HRESULT hr = D3DCompileFromFile(file.c_str(), macros.data(), D3D_COMPILE_STANDARD_FILE_INCLUDE, entry, target,
-                                    flags, 0, &code, &errors);
+                                    flags, 0, &code, &errorBlob);
     if (FAILED(hr)) {
-        const char* msg = errors ? (const char*)errors->GetBufferPointer() : "";
-        SIZE_T len = errors ? errors->GetBufferSize() : 0;
+        const char* msg = errorBlob ? (const char*)errorBlob->GetBufferPointer() : "";
+        const SIZE_T len = errorBlob ? errorBlob->GetBufferSize() : 0;
+        if (errors && len > 0) errors->assign(msg, len);
         LOG_ERROR("shader %s:%s failed: %.*s", PathToUtf8(file).c_str(), entry, (int)len, msg);
         return {};
     }
@@ -132,10 +138,11 @@ uint64_t Fnv(uint64_t h, const void* data, size_t n) {
     return h;
 }
 
+std::mutex hashMutex;
+std::map<std::filesystem::path, uint64_t> hashes;
+
 uint64_t SourceHash(const std::filesystem::path& dir) {
-    static std::mutex mutex;
-    static std::map<std::filesystem::path, uint64_t> hashes;
-    std::lock_guard<std::mutex> lock(mutex);
+    std::lock_guard<std::mutex> lock(hashMutex);
     auto it = hashes.find(dir);
     if (it != hashes.end()) return it->second;
     uint64_t h = 1469598103934665603ull;
@@ -167,6 +174,12 @@ std::filesystem::path CachePath(const std::filesystem::path& file, const char* e
     const std::string key = PathToUtf8(file.filename()) + "|" + entry + "|" + target + "|" + (dxc ? "dxc" : "fxc");
     h = Fnv(h, key.data(), key.size());
     for (const auto& d : defines) {
+        // a shader pack's surface (quoted include path relative to the shader): its folder's sources are inputs too
+        if (d.first == "MMDX_PACK" && d.second.size() > 2) {
+            const std::filesystem::path inc = file.parent_path() / Utf8ToPath(d.second.substr(1, d.second.size() - 2));
+            const uint64_t ph = SourceHash(inc.parent_path());
+            h = Fnv(h, &ph, sizeof(ph));
+        }
         h = Fnv(h, d.first.data(), d.first.size());
         h = Fnv(h, "=", 1);
         h = Fnv(h, d.second.data(), d.second.size());
@@ -209,24 +222,29 @@ void CacheStore(const std::filesystem::path& path, ID3DBlob* blob) {
 }
 
 ComPtr<ID3DBlob> Cached(bool dxc, const std::filesystem::path& file, const char* entry, const char* target,
-                        const ShaderDefines& defines) {
+                        const ShaderDefines& defines, std::string* errors) {
     const std::filesystem::path path = CachePath(file, entry, target, defines, dxc);
     if (ComPtr<ID3DBlob> hit = CacheLoad(path)) return hit;
-    ComPtr<ID3DBlob> blob = dxc ? CompileShaderDxcUncached(file, entry, target, defines)
-                                : CompileShaderUncached(file, entry, target, defines);
+    ComPtr<ID3DBlob> blob = dxc ? CompileShaderDxcUncached(file, entry, target, defines, errors)
+                                : CompileShaderUncached(file, entry, target, defines, errors);
     if (blob) CacheStore(path, blob.Get());
     return blob;
 }
 } // namespace
 
+void ResetShaderSourceHashes() {
+    std::lock_guard<std::mutex> lock(hashMutex);
+    hashes.clear();
+}
+
 ComPtr<ID3DBlob> CompileShaderDxc(const std::filesystem::path& file, const char* entry, const char* target,
-                                  const ShaderDefines& defines) {
-    return Cached(true, file, entry, target, defines);
+                                  const ShaderDefines& defines, std::string* errors) {
+    return Cached(true, file, entry, target, defines, errors);
 }
 
 ComPtr<ID3DBlob> CompileShader(const std::filesystem::path& file, const char* entry, const char* target,
-                               const ShaderDefines& defines) {
-    return Cached(false, file, entry, target, defines);
+                               const ShaderDefines& defines, std::string* errors) {
+    return Cached(false, file, entry, target, defines, errors);
 }
 
 } // namespace mmdx

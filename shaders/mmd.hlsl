@@ -10,9 +10,12 @@
 
 cbuffer MaterialCB : register(b1) {
     float4 gDiffuse; float3 gSpecular; float gSpecularPower; float3 gAmbient; float gEdgeSize;
-    float4 gEdgeColor; uint gFlags; float gReflectivity; uint2 _mp;
+    float4 gEdgeColor; uint gFlags; float gReflectivity;
+    uint gPackClass; uint gPackHeadBone;   // shader packs only (pack_api.hlsli); the default shading ignores them
     // material morph factors (ApplyTexFactor): texture, sphere, toon
     float4 gTexMul; float4 gTexAdd; float4 gSphereMul; float4 gSphereAdd; float4 gToonMul; float4 gToonAdd;
+    float4 gPackHead;        // xyz = head bone bind position (model space), w = 1 when the model has a head bone
+    float4 gPackParams[4];   // the pack's 16 parameters (pack.json order)
 };
 #ifndef MAT_HAS_TEXTURE
 #define MAT_HAS_TEXTURE 1u
@@ -311,6 +314,36 @@ PSOut PSMain(VSOut i, bool front : SV_IsFrontFace) {
     }
     return PackOutput(color, alpha, n, alpha > 0.9 ? reflectivity : 0.0, i.curClip, i.prevClip);
 }
+
+// ---- shader packs ---------------------------------------------------------------------
+// Compiled only for a pack's PSO: MMDX_PACK is the pack's surface.hlsl (a quoted include path), which implements
+// PackShade (contract: pack_api.hlsli). PSMain above is never affected.
+#ifdef MMDX_PACK
+#include "pack_api.hlsli"
+#include MMDX_PACK
+
+PSOut PSPack(VSOut i, bool front : SV_IsFrontFace) {
+    PackSurface s;
+    s.N = normalize(i.nrm);
+    if (!front) s.N = -s.N;
+    s.worldPos = i.worldPos;
+    s.V = normalize(gEyePos - i.worldPos);
+    s.L = -gLightDir;
+    s.uv = i.uv;
+    s.pixel = i.pos.xy;
+    s.viewZ = i.viewZ;
+    s.tex = (gFlags & MAT_HAS_TEXTURE) ? ApplyTexFactor(gTexture.Sample(gWrap, i.uv), gTexMul, gTexAdd) : float4(1, 1, 1, 1);
+    s.alpha = gDiffuse.a * s.tex.a;
+    if (s.alpha < 0.004) discard;
+    s.materialClass = gPackClass;
+    s.shadow = (gFlags & MAT_RECEIVE) ? SHADOW_TERM(i.worldPos, s.N, i.viewZ, i.pos.xy) : 1.0;
+    PackHeadFrame(s);
+    PackResult r = PackShade(s);
+    // negative reflectivity = "no ambient occlusion here" (composite.hlsl); SSR / RT reflections skip it as well
+    float refl = r.noAo ? -1.0 : (r.alpha > 0.9 ? r.reflectivity : 0.0);
+    return PackOutput(r.color, r.alpha, s.N, refl, i.curClip, i.prevClip);
+}
+#endif
 
 // ---- inverted-hull edges ------------------------------------------------------------
 

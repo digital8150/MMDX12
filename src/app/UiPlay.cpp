@@ -395,6 +395,30 @@ void App::DrawPlayOverlay() {
         ImGui::PopStyleVar();
         x += Dp(44.0f);
     }
+    // shader pack (saved per character; render/ShaderPack.h)
+    if (!s->characterId.empty()) {
+        ShaderChoice choice = settings_.CharacterShader(s->characterId);
+        ImGui::SetCursorScreenPos(ImVec2(x, cy - Dp(20.0f)));
+        const ImVec2 btn = ImGui::GetCursorScreenPos();
+        if (IconButton("##shader", icon::Diamond, Tr("셰이더"), !PlayShaderChoice().pack.empty(), 40.0f))
+            ImGui::OpenPopup("##shaderpopup");
+        ImGui::SetNextWindowPos(ImVec2(btn.x + Dp(20.0f), btn.y - Dp(10.0f)), ImGuiCond_Always, ImVec2(0.5f, 1.0f));
+        ImGui::SetNextWindowSize(ImVec2(Dp(300.0f), 0));
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(Dp(16.0f), Dp(14.0f)));
+        if (ImGui::BeginPopup("##shaderpopup")) {
+            SectionLabel(Tr("셰이더"));
+            bool changed = DrawShaderSelector("##playshader", choice, ImGui::GetContentRegionAvail().x);
+            Gap(8.0f);
+            changed |= DrawShaderPackParams(choice);
+            if (changed) {
+                settings_.SetCharacterShader(s->characterId, choice);
+                settings_.Save(settingsPath_);
+            }
+            ImGui::EndPopup();
+        }
+        ImGui::PopStyleVar();
+        x += Dp(44.0f);
+    }
     dl->AddLine(ImVec2(x, cy - Dp(14.0f)), ImVec2(x, cy + Dp(14.0f)), WithAlpha(p.ink, 0.12f));
     x += Dp(11.0f);
     ImGui::SetCursorScreenPos(ImVec2(x, cy - Dp(20.0f)));

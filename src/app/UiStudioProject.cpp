@@ -148,6 +148,7 @@ ProjectData App::StudioProjectData() const {
         pm.libraryId = m.libraryId;
         pm.visible = m.visible;
         pm.place = m.place;
+        pm.shader = m.shader;
         if (m.IsProp()) {
             pm.attach = m.attach;
             pm.attach.parent = m.attach.parent >= 0 ? d.IndexOfUid((uint32_t)m.attach.parent) : -1;  // uid -> index

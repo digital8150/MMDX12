@@ -19,7 +19,8 @@
 
 namespace mmdx {
 
-enum class ThumbnailKind : uint8_t { Character = 0, Stage = 1 };
+// Image: sources[0] is a picture file (shader pack previews), loaded as is (no render, no disk cache).
+enum class ThumbnailKind : uint8_t { Character = 0, Stage = 1, Image = 2 };
 
 class ThumbnailCache {
 public:

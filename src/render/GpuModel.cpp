@@ -263,6 +263,18 @@ bool GpuModel::Create(Dx12Context& ctx, UploadBatch& batch, const PmxModel& pmx,
     materialVersion_ = 0;
     materialConsts_ = consts;
     baseConsts_ = consts;
+    materialNames_.clear();
+    for (const PmxMaterial& m : pmx.materials) materialNames_.emplace_back(m.name, m.nameEn);
+    headBone_ = -1;
+    for (const char* name : {"\xE9\xA0\xAD", "\xE9\xA6\x96"}) {  // 頭, else 首
+        for (size_t b = 0; b < pmx.bones.size() && headBone_ < 0; ++b)
+            if (pmx.bones[b].name == name) {
+                headBone_ = (int32_t)b;
+                headPos_ = pmx.bones[b].position;
+            }
+        if (headBone_ >= 0) break;
+    }
+    packId_.clear();
     materialBase_.assign(pmx.materials.size(), {});
     std::vector<bool> morphable(pmx.materials.size(), false);
     for (const PmxMorph& mo : pmx.morphs) {
@@ -441,6 +453,29 @@ void GpuModel::UpdateMaterials(uint64_t frame, const std::vector<PmxMorph::Mater
     }
     const D3D12_GPU_VIRTUAL_ADDRESS base = materialCb_->GetGPUVirtualAddress() + r * stride;
     for (size_t i = 0; i < n; ++i) materials_[i].constants = base + i * sizeof(MaterialConstants);
+}
+
+void GpuModel::SetShaderPack(const ShaderPack* pack, const PackParamValues& params) {
+    if (role_ == ModelRole::Stage) pack = nullptr;   // packs shade characters only
+    const std::string id = pack ? pack->id : std::string();
+    const uint32_t generation = ShaderPacks().Generation();
+    if (id == packId_ && (!pack || (generation == packGeneration_ && params == packParams_))) return;
+    packId_ = id;
+    packGeneration_ = generation;
+    packParams_ = params;
+    if (!pack) return;   // the default PSOs ignore the pack fields
+    for (size_t i = 0; i < baseConsts_.size(); ++i) {
+        const auto& names = materialNames_[i];
+        const PackClass cls = pack->Classify(names.first, names.second);
+        for (MaterialConstants* c : {&baseConsts_[i], &materialConsts_[i]}) {
+            c->packClass = (uint32_t)cls;
+            c->packHeadBone = headBone_ >= 0 ? (uint32_t)headBone_ : 0u;
+            c->packHead = {headPos_.x, headPos_.y, headPos_.z, headBone_ >= 0 ? 1.0f : 0.0f};
+            for (uint32_t k = 0; k < kPackMaxParams; ++k) (&c->packParams[0].x)[k] = params[k];
+        }
+    }
+    // every ring entry is rewritten by the next UpdateMaterials calls
+    for (uint64_t& v : materialEntryVersion_) v = ~0ull;
 }
 
 D3D12_GPU_VIRTUAL_ADDRESS GpuModel::BoneBuffer(uint64_t frame) const {

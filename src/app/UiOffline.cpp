@@ -986,6 +986,7 @@ App::VideoEstimate App::EstimateVideoRender() const {
 
 void App::DrawToast() {
     using namespace ui;
+    CheckShaderPackErrors();
     if (toast_.title.empty()) return;
     const bool visible = timeSeconds_ < toast_.until;
     const float vis = Anim(ImGui::GetID("##toast"), visible, 8.0f);

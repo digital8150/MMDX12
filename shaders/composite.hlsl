@@ -39,7 +39,8 @@ float4 PSComposite(FsOut i) : SV_Target {
     const bool cam = gP1.z <= 0.0 ||
                      (i.uv.x >= gP1.x && i.uv.x < gP1.x + gP1.z && i.uv.y >= gP1.y && i.uv.y < gP1.y + gP1.w);
 
-    if (cam && gP0.x > 0.0) {
+    // nt.z < 0: a shader pack marked the pixel "no AO" (faces); the default shading never writes it
+    if (cam && gP0.x > 0.0 && nt.z >= 0.0) {
         float ao = UpsampleAo(i.uv, z);
         c.rgb *= lerp(1.0, ao, gP0.x);
     }

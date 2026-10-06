@@ -4,6 +4,7 @@
 #include "app/App.h"
 
 #include <ShlObj.h>
+#include <shellapi.h>
 #include <directx/d3dx12.h>
 
 #include <cmath>
@@ -122,6 +123,12 @@ AppOptions ParseCommandLine(int argc, wchar_t** argv) {
             opt.motionLighting = _wtoi(next().c_str()) != 0 ? 1 : 0;
         } else if (arg == L"--no-physics") {
             opt.noPhysics = true;
+        } else if (arg == L"--pack-index") {
+            opt.packIndex = WideToUtf8(next());
+        } else if (arg == L"--shader-pack") {
+            opt.shaderPack = WideToUtf8(next());
+            if (opt.shaderPack == "none") opt.shaderPack.clear();
+            opt.shaderPackSet = true;
         } else if (arg == L"--offline-still") {
             opt.offlineStill = next();
         } else if (arg == L"--offline-video") {
@@ -392,6 +399,16 @@ LRESULT App::HandleMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
             return 0;
         }
         return msg == WM_ERASEBKGND ? 1 : DefWindowProcW(hwnd, msg, wParam, lParam);
+    case WM_DROPFILES: {   // shader pack zips / folders (PollShaderPacks installs them)
+        HDROP drop = (HDROP)wParam;
+        const UINT count = DragQueryFileW(drop, 0xFFFFFFFF, nullptr, 0);
+        for (UINT i = 0; i < count; ++i) {
+            wchar_t buf[MAX_PATH * 2] = {};
+            if (DragQueryFileW(drop, i, buf, (UINT)std::size(buf))) droppedFiles_.emplace_back(buf);
+        }
+        DragFinish(drop);
+        return 0;
+    }
     case WM_GETMINMAXINFO: {
         MINMAXINFO* mmi = reinterpret_cast<MINMAXINFO*>(lParam);
         mmi->ptMinTrackSize.x = 640;
@@ -439,6 +456,7 @@ bool App::InitWindow(HINSTANCE instance, int width, int height) {
     hwnd_ = CreateWindowExW(0, wc.lpszClassName, title.c_str(), WS_OVERLAPPEDWINDOW,
                             CW_USEDEFAULT, CW_USEDEFAULT, w, h, nullptr, nullptr, instance, this);
     if (!hwnd_) return false;
+    DragAcceptFiles(hwnd_, TRUE);   // shader pack zips (WM_DROPFILES)
     ShowWindow(hwnd_, SW_SHOW);
     return true;
 }
@@ -539,7 +557,8 @@ void App::RenderFrame() {
         thumbs_.Clear();
         thumbsClearPending_ = false;
     }
-    if (screen_ == Screen::Select || screen_ == Screen::BenchLobby || screen_ == Screen::Loading) thumbs_.Pump();
+    if (screen_ == Screen::Select || screen_ == Screen::BenchLobby || screen_ == Screen::Loading || screen_ == Screen::Shaders)
+        thumbs_.Pump();
 
     ImGui_ImplDX12_NewFrame();
     ImGui_ImplWin32_NewFrame();
@@ -549,6 +568,7 @@ void App::RenderFrame() {
 
     PollScan();
     PollLoad();
+    PollShaderPacks();
     PollProbeScene();
     UpdateUpdate();
 
@@ -576,6 +596,7 @@ void App::RenderFrame() {
         DrawOfflineOverlay();
         break;
     case Screen::BenchLobby: DrawBenchLobby(); break;
+    case Screen::Shaders: DrawShaders(); break;
     case Screen::BenchRun: DrawBenchRunOverlay(); break;
     case Screen::BenchResult: DrawBenchResult(); break;
     case Screen::BenchRender: DrawRenderBenchOverlay(); break;
@@ -785,6 +806,9 @@ void App::PollScan() {
         libraryTab_ = 1;
     } else if (options_.startScreen == "songs") {
         libraryTab_ = 2;
+    } else if (options_.startScreen == "shaders" || options_.startScreen == "shaders-online") {
+        screen_ = Screen::Shaders;
+        shaderTab_ = options_.startScreen == "shaders-online" ? 1 : 0;
     } else if (options_.startScreen == "settings") {
         advancedOpen_ = true;
     } else if (options_.startScreen == "studio") {
@@ -1246,6 +1270,7 @@ void App::UpdateScene(float frame) {
     scene_->characterGpu->UpdateSkinning(slot, scene_->character->SkinMatrices());
     scene_->characterGpu->UpdateMorphs(slot, scene_->character->VertexMorphDeltas(),
                                        scene_->character->MorphVersion());
+    ApplyShaderChoice(*scene_->characterGpu, PlayShaderChoice());
     scene_->characterGpu->UpdateMaterials(slot, ch.MaterialMul(), ch.MaterialAdd(), ch.MaterialVersion());
     for (size_t i = 0; i < scene_->stages.size(); ++i) {
         scene_->stageGpu[i]->UpdateSkinning(slot, scene_->stages[i]->SkinMatrices());

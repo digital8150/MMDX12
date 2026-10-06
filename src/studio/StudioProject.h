@@ -5,6 +5,7 @@
 // ("<stem> - <model name>.vmd", "<stem> - camera.vmd"). Every file is written to a temp file and renamed over the
 // target, so a crash mid-save never leaves a half-written project.
 // Independent of the App and the renderer (unit-tested by tools/studio_project_test.cpp).
+#include "render/ShaderPack.h"
 #include "studio/StudioMotion.h"
 #include <DirectXMath.h>
 #include <cstdint>
@@ -49,6 +50,7 @@ struct ProjectModel {
     bool visible = true;
     PropAttach attach;                 // used for props only
     PropAttach place;                  // characters / stages: world placement (translation / rotationDeg / scale; parent unused)
+    ShaderChoice shader;               // characters: shader pack ("shader", absent = the default shading)
     MotionData motion;                 // its keys; motion.modelName is written as the VMD header model name
 };
 

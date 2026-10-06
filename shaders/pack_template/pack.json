@@ -1,0 +1,23 @@
+{
+  "format": 1,
+  "id": "my_pack",
+  "version": "0.1.0",
+  "apiVersion": 1,
+  "name": { "ko": "내 팩", "en": "My pack" },
+  "description": {
+    "ko": "새 팩의 설명입니다. 팩 선택 칩에 마우스를 올리면 보입니다.",
+    "en": "Your pack's description. It shows when you hover the pack's chip."
+  },
+  "authors": [
+    { "name": "your_name" }
+  ],
+  "license": "MIT",
+  "tags": ["toon"],
+  "classes": [
+    { "class": "face", "match": ["顔", "颜", "face", "Face"] },
+    { "class": "hair", "match": ["髪", "发", "hair", "Hair"] }
+  ],
+  "params": [
+    { "key": "myParam", "label": { "ko": "내 슬라이더", "en": "My slider" }, "default": 0.5, "min": 0.0, "max": 1.0 }
+  ]
+}

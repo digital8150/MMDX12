@@ -42,6 +42,7 @@ struct StudioModel {
     PropAttach place;              // characters / stages: world placement (translation, rotationDeg, scale)
     PropAttach placeApplied;       // the placement the instance was last posed with (physics resets when it changes)
     bool visible = true;
+    ShaderChoice shader;           // characters: shader pack (render/ShaderPack.h); empty = the default shading
     std::shared_ptr<const PmxModel> pmx;
     std::unique_ptr<ModelInstance> inst;
     std::unique_ptr<GpuModel> gpu;
@@ -294,6 +295,7 @@ struct StudioPackageModel {
     bool visible = true;
     PropAttach attach;                       // props: parent = index into StudioPackage::models (-1 world)
     PropAttach place;                        // characters / stages: world placement
+    ShaderChoice shader;                     // characters: shader pack
     MotionData motion;                       // names canonicalised to pmx
 };
 struct StudioPackage {

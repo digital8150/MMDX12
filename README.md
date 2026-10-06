@@ -87,6 +87,7 @@ Full songs rendered with MMDX12's video mode, uploaded as-is.
 - **Organise your files your way.** `characters`, `stages` and `songs` folders are the sure way; anything else is sorted by content, and you can correct it in the app.
 - **Real-time playback** with the classic MMD toon look, or switch on ray tracing and path tracing for realistic light and reflections.
 - **Hair and skirts move** with the model's own physics setup.
+- **Shader packs**: anyone can write a pack that changes how a character is shaded; browse, install and update them in the app's Shaders tab. The bundled `hoyo_toon` pack gives the official Genshin / Star Rail / ZZZ models their in-game flat faces ([gallery and docs](https://mmdx.codingbot.kr/en/docs/shader-packs/)).
 - **DLSS, FSR and XeSS** if you want more frames.
 - **Photo mode**: press P for a 4K picture.
 - **Video mode**: render a whole song to MP4, with the music, up to 4K. The app tells you how long it will take before you start.

@@ -740,4 +740,12 @@ void BeginScreen(const char* id) {
 
 void EndScreen() { ImGui::End(); }
 
+bool CardItem(const char* id, ImVec2 a, ImVec2 b, bool* hovered) {
+    ImGui::SetCursorScreenPos(a);
+    const bool pressed = ImGui::InvisibleButton(id, ImVec2(b.x - a.x, b.y - a.y));
+    *hovered = ImGui::IsItemHovered();
+    if (*hovered) ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+    return pressed;
+}
+
 } // namespace mmdx::ui

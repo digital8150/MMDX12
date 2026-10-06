@@ -22,6 +22,8 @@
 //   BackdropPass  blurred copy of ldr for frosted UI panels (on screen only)
 //   PresentPass   letterboxed stretch to the back buffer (on screen only)
 #pragma once
+#include <map>
+#include <string>
 #include "render/RenderPass.h"
 #include <wrl/client.h>
 
@@ -59,6 +61,20 @@ private:
     // RayTracing variants (DXC, ps_6_5, RT_SHADOWS=1); null when DXC/DXR is unavailable
     ComPtr<ID3D12PipelineState> psoCullBackRt_, psoNoCullRt_, psoFloorRt_;
     ComPtr<ID3D12RootSignature> rootSig_;
+
+    // Shader packs (render/ShaderPack.h): PSOs compiled on first use from mmd.hlsl's PSPack with the pack's surface,
+    // keyed by pack id, dropped when the registry generation changes (reload). failed = compile error: the model
+    // falls back to the default PSOs.
+    struct PackPipelines {
+        ComPtr<ID3D12PipelineState> back, noCull, backRt, noCullRt;
+        bool failed = false, rtTried = false;
+    };
+    const PackPipelines* PackPsos(Dx12Context& ctx, const std::string& id, bool rt);
+    std::map<std::string, PackPipelines> packPsos_;
+    uint32_t packGeneration_ = 0;
+    std::filesystem::path shaderDir_;
+    D3D12_GRAPHICS_PIPELINE_STATE_DESC litDesc_{};   // the lit PSO desc (PS replaced per pack)
+    ComPtr<ID3DBlob> vs_, vsRt_, vsDxc_;             // kept alive for litDesc_ / the pack PSOs
 };
 
 class ResolvePass final : public IRenderPass {

@@ -7,6 +7,7 @@
 #include "app/LeaderboardClient.h"
 #include "app/SceneLoader.h"
 #include "app/Settings.h"
+#include "app/ShaderPackStore.h"
 #include "app/ThumbnailCache.h"
 #include "app/Updater.h"
 #include "app/VideoEncoder.h"
@@ -122,6 +123,9 @@ struct AppOptions {
     int upscaler = -1;         // --upscaler <none|dlss|fsr|xess>: override settings for this run
     int upscalerQuality = -1;  // --upscale-quality <native|quality|balanced|performance|ultra>: override settings for this run
     bool noPhysics = false;    // --no-physics: override settings for this run
+    std::string shaderPack;    // --shader-pack <id|none>: the character's shader pack for this run (play and studio)
+    bool shaderPackSet = false;
+    std::string packIndex;     // --pack-index <url|path>: the online shader pack gallery index (testing)
     int dof = -1, volumetric = -1, bloomConv = -1;  // --dof/--volumetric/--bloom-conv <0|1>: override for this run
     int motionLighting = -1;   // --motion-lighting <0|1>: camera VMD light/self-shadow tracks in play mode, this run
     float volumetricDensity = -1.0f;                 // --volumetric-density (< 0 = settings)
@@ -152,7 +156,7 @@ public:
     LRESULT HandleMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
 
 private:
-    enum class Screen { Scanning, Select, Loading, Play, BenchLobby, BenchRun, BenchResult, Offline, BenchRender, Studio };
+    enum class Screen { Scanning, Select, Loading, Play, BenchLobby, BenchRun, BenchResult, Offline, BenchRender, Studio, Shaders };
     enum class LoadTarget { Play, Benchmark, RenderBench, OfflineVideo, Studio };
 
     struct SceneRuntime {
@@ -467,6 +471,34 @@ private:
     void DrawOfflineOverlay();  // progress panel over the preview (screen_ == Offline)
     void DrawVideoRenderDialog();  // video render settings + start (Select, UiVideoDialog.cpp)
     void DrawToast();           // completion / error toast (Select, Play)
+    // shader packs (UiShaderPack.cpp)
+    void ApplyShaderChoice(GpuModel& gpu, const ShaderChoice& choice);   // every frame, before UpdateMaterials
+    ShaderChoice PlayShaderChoice() const;                               // play character: settings + --shader-pack
+    // A row showing the chosen pack; click opens a searchable pack list (+ "셰이더 관리"). True = changed.
+    bool DrawShaderSelector(const char* id, ShaderChoice& choice, float width);
+    bool DrawShaderPackParams(ShaderChoice& choice);                     // the chosen pack's sliders + reset
+    uint64_t PackThumb(const ShaderPack& pack);                          // preview texture, 0 = none / loading
+    uint64_t RemotePackThumb(const RemotePack& pack);
+    void DrawPackImage(ImDrawList* dl, uint64_t tex, const std::string& key, ImVec2 a, ImVec2 b, float rounding,
+                       ImDrawFlags flags = 0);                           // cover-fit, placeholder when tex == 0
+    // shader pack manager (UiShaders.cpp)
+    void DrawShaders();
+    void DrawShaderPackDetail(float x0, float y0, float x1, float y1);
+    void DrawRemotePackDetail(float x0, float y0, float x1, float y1);
+    void DrawNewPackDialog();
+    void InstallPackPath(const std::filesystem::path& path);             // .zip or a pack folder (drop / dialog)
+    void PollShaderPacks();                                              // every frame: hot reload, store, drops
+    bool shaderParamsOpen_ = false;                                      // select screen: pack settings disclosure
+    ShaderPackStore shaderStore_;
+    int shaderTab_ = 0;                                                  // 0 installed, 1 online
+    char shaderFilter_[128] = {};
+    std::string shaderSelInstalled_, shaderSelRemote_;
+    bool newPackOpen_ = false;
+    char newPackId_[64] = {}, newPackName_[96] = {}, newPackAuthor_[96] = {};
+    std::vector<std::filesystem::path> droppedFiles_;
+    void DrawStudioShaderRow(float w);                                   // inspector: the selected character's pack
+    void CheckShaderPackErrors();                                        // compile failures -> error toast
+    uint32_t shaderPackErrorsSeen_ = 0;
     std::filesystem::path OfflineOutputDir(bool video) const;  // Pictures\MMDX12 or Videos\MMDX12
     DirectX::XMFLOAT3 CharacterCenter() const;  // world position of the character's center bone (teleport detection)
     void OfflinePose(float frame);              // UpdateScene, or StudioPoseForRender for a studio job
