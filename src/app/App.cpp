@@ -1,3 +1,5 @@
+#include <future>
+#include <chrono>
 #include "core/I18n.h"
 #include "app/App.h"
 
@@ -177,6 +179,17 @@ AppOptions ParseCommandLine(int argc, wchar_t** argv) {
 
 int App::Run(HINSTANCE instance, const AppOptions& options) {
     options_ = options;
+    // Startup phase timings logged at the end of Init (STARTUP lines, milliseconds per phase).
+    QueryPerformanceCounter(&startupRunBegan_);
+    QueryPerformanceFrequency(&startupFreq_);
+    LARGE_INTEGER startupPrev = startupRunBegan_;
+    const auto startupPhase = [&](const char* name) {
+        LARGE_INTEGER now;
+        QueryPerformanceCounter(&now);
+        LOG_INFO("STARTUP %s: %.0f ms", name,
+                 (double)(now.QuadPart - startupPrev.QuadPart) * 1000.0 / (double)startupFreq_.QuadPart);
+        startupPrev = now;
+    };
 
     // A leftover staged update (the applier never ran, e.g. the machine was switched off mid
     // swap) is completed before anything else opens; --apply-update runs the applier directly.
@@ -205,10 +218,14 @@ int App::Run(HINSTANCE instance, const AppOptions& options) {
     if (options_.motionLighting >= 0) settings_.motionLighting = options_.motionLighting != 0;
 
     ImGui_ImplWin32_EnableDpiAwareness();
+    startupPhase("settle");
 
     int w = options_.width > 0 ? options_.width : settings_.windowWidth;
     int h = options_.height > 0 ? options_.height : settings_.windowHeight;
+    loading_ = true;  // splash painting from the first message on
     if (!InitWindow(instance, w, h)) return 1;
+    UpdateWindow(hwnd_);
+    startupPhase("window");
 
     RECT rc;
     GetClientRect(hwnd_, &rc);
@@ -217,16 +234,37 @@ int App::Run(HINSTANCE instance, const AppOptions& options) {
         MessageBoxW(hwnd_, Utf8ToWide(Tr("Direct3D 12 초기화에 실패했습니다.")).c_str(), L"MMDX12", MB_ICONERROR);
         return 1;
     }
+    startupPhase("device");
 
     std::filesystem::path shaderDir = ExecutableDir() / L"shaders";
     if (!std::filesystem::exists(shaderDir / L"mmd.hlsl")) {
         std::filesystem::path found = FindUpward(ExecutableDir(), L"shaders/mmd.hlsl");
         if (!found.empty()) shaderDir = found / L"shaders";
     }
-    if (!renderer_.Initialize(ctx_, shaderDir)) {
+    // The renderer init (shader compile, upscaler SDKs) takes seconds: run it on a worker thread and keep pumping
+    // window messages here, so the window paints the splash instead of going white / "not responding".
+    loading_ = true;
+    auto rendererInit = std::async(std::launch::async, [&] { return renderer_.Initialize(ctx_, shaderDir); });
+    while (rendererInit.wait_for(std::chrono::milliseconds(8)) != std::future_status::ready) {
+        MSG m;
+        while (PeekMessageW(&m, nullptr, 0, 0, PM_REMOVE)) {
+            TranslateMessage(&m);
+            DispatchMessageW(&m);
+        }
+    }
+    const bool rendererOk = rendererInit.get();
+    loading_ = false;
+    if (!hwnd_) return 0;  // closed while loading
+    if (!rendererOk) {
         MessageBoxW(hwnd_, Utf8ToWide(Tr("렌더러 초기화에 실패했습니다.")).c_str(), L"MMDX12", MB_ICONERROR);
         return 1;
     }
+    {  // a resize during loading was deferred
+        RECT now;
+        GetClientRect(hwnd_, &now);
+        if (now.right > 0 && now.bottom > 0 && !IsIconic(hwnd_)) ctx_.Resize((uint32_t)now.right, (uint32_t)now.bottom);
+    }
+    startupPhase("shaders+upscalers");
 
     ApplyRenderSettings();
 
@@ -234,6 +272,7 @@ int App::Run(HINSTANCE instance, const AppOptions& options) {
     audio_.SetVolume(settings_.volume);
 
     if (!InitImGui()) return 1;
+    startupPhase("font atlas");
     thumbs_.Initialize(ctx_, ThumbnailCacheDir(),
                        [this](ThumbnailKind kind, std::vector<LoadedModelCpu>& models, ImageRGBA8& out) {
                            return RenderThumbnail(kind, models, out);
@@ -253,7 +292,9 @@ int App::Run(HINSTANCE instance, const AppOptions& options) {
     timeSeconds_ = (double)start.QuadPart / (double)freq.QuadPart;
 
     InitUpdater();
+    startupPhase("updater");
     StartScan();
+    startupPhase("scan start");
     MainLoop();
 
     // Studio work is never lost by closing the window: unsaved edits go to the recovery file, offered at the next
@@ -320,9 +361,37 @@ LRESULT App::HandleMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
             minimized_ = true;
         } else {
             minimized_ = false;
-            if (ctx_.Device()) ctx_.Resize(LOWORD(lParam), HIWORD(lParam));
+            if (ctx_.Device() && !loading_) ctx_.Resize(LOWORD(lParam), HIWORD(lParam));
         }
         return 0;
+    case WM_ERASEBKGND:
+    case WM_PAINT:
+        if (loading_) {  // splash while the renderer initialises (GDI: nothing else is ready yet)
+            PAINTSTRUCT ps;
+            HDC dc = BeginPaint(hwnd, &ps);
+            RECT r;
+            GetClientRect(hwnd, &r);
+            HBRUSH bg = CreateSolidBrush(RGB(243, 245, 248));
+            FillRect(dc, &r, bg);
+            DeleteObject(bg);
+            HFONT font = CreateFontW(-56, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE, DEFAULT_CHARSET, 0, 0, CLEARTYPE_QUALITY, 0,
+                                     L"Segoe UI");
+            HGDIOBJ old = SelectObject(dc, font);
+            SetBkMode(dc, TRANSPARENT);
+            SIZE a{}, b{};
+            GetTextExtentPoint32W(dc, L"MMDX", 4, &a);
+            GetTextExtentPoint32W(dc, L"12", 2, &b);
+            const int x = (r.right - (a.cx + b.cx)) / 2, y = r.bottom / 2 - a.cy;
+            SetTextColor(dc, RGB(17, 24, 32));
+            TextOutW(dc, x, y, L"MMDX", 4);
+            SetTextColor(dc, RGB(0, 128, 110));
+            TextOutW(dc, x + a.cx, y, L"12", 2);
+            SelectObject(dc, old);
+            DeleteObject(font);
+            EndPaint(hwnd, &ps);
+            return 0;
+        }
+        return msg == WM_ERASEBKGND ? 1 : DefWindowProcW(hwnd, msg, wParam, lParam);
     case WM_GETMINMAXINFO: {
         MINMAXINFO* mmi = reinterpret_cast<MINMAXINFO*>(lParam);
         mmi->ptMinTrackSize.x = 640;
@@ -366,7 +435,8 @@ bool App::InitWindow(HINSTANCE instance, int width, int height) {
     const int w = rc.right - rc.left;
     const int h = rc.bottom - rc.top;
 
-    hwnd_ = CreateWindowExW(0, wc.lpszClassName, L"MMDX12", WS_OVERLAPPEDWINDOW,
+    const std::wstring title = L"MMDX12 v" + Utf8ToWide(MMDX12_VERSION);
+    hwnd_ = CreateWindowExW(0, wc.lpszClassName, title.c_str(), WS_OVERLAPPEDWINDOW,
                             CW_USEDEFAULT, CW_USEDEFAULT, w, h, nullptr, nullptr, instance, this);
     if (!hwnd_) return false;
     ShowWindow(hwnd_, SW_SHOW);
@@ -553,6 +623,13 @@ void App::RenderFrame() {
                                 : inScene || screen_ == Screen::Offline || !options_.startScreen.empty();
     if (countFrame) {
         ++framesInScene_;
+        // launch-to-first-frame: the first counted frame's time since Run started (STARTUP total)
+        if (framesInScene_ == 1) {
+            LARGE_INTEGER now;
+            QueryPerformanceCounter(&now);
+            LOG_INFO("STARTUP first frame: %.0f ms (launch to first frame)",
+                     (double)(now.QuadPart - startupRunBegan_.QuadPart) * 1000.0 / (double)startupFreq_.QuadPart);
+        }
         // --frames runs: average GPU time over the second half (after loading hitches settle)
         if (inScene && options_.quitAfterFrames > 0 && framesInScene_ > options_.quitAfterFrames / 2) {
             gpuMsSum_ += renderer_.Stats().gpuFrameMs;

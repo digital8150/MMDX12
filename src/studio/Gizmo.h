@@ -43,9 +43,12 @@ void OrthoViewMatrix(int kind, const DirectX::XMFLOAT3& center, DirectX::XMFLOAT
 // ---- bone overlay -----------------------------------------------------------------------------------------------
 
 struct BoneOverlayStyle {
-    float jointRadius = 4.0f;    // screen px (caller scales by DPI)
-    float linkWidth = 1.5f;
-    float pickRadius = 9.0f;
+    float jointRadius = 4.0f;    // screen px at 40 world units from the camera (caller scales by DPI); joints scale with
+                                 // distance between minPixelRadius and maxPixelRadius
+    float linkWidth = 1.0f;      // link half-width in px (thin, like 3ds Max / Cinema 4D)
+    float pickRadius = 9.0f;     // screen px (caller scales by DPI)
+    float minPixelRadius = 2.0f; // joint marker clamp (px): never vanishes in the distance
+    float maxPixelRadius = 14.0f; // joint marker clamp (px): never blows up close to the camera
     ImU32 normal = IM_COL32(90, 170, 255, 235);     // rotatable bones
     ImU32 movable = IM_COL32(120, 220, 140, 235);   // movable (square joint)
     ImU32 ik = IM_COL32(255, 150, 40, 245);         // IK bones (orange)
@@ -66,12 +69,16 @@ bool BoneTailWorld(const PmxModel& model, const ModelInstance& inst, int bone, D
 
 // Draws links (joint -> tail, tapered: width linkWidth at the joint, 0.5 px at the tail, with the outline colour
 // drawn 1.5 px wider underneath) and joints (circle for rotate-only bones, square for movable bones; IK bones use the
-// ik colour; selected / active override the colour; `hovered` gets an extra ring). Bones behind the camera are skipped.
-// Draws into `dl` as-is (the caller sets the clip rect).
+// ik colour; selected / active override the colour; `hovered` gets an extra ring). Joint markers scale with distance
+// (3ds Max / Cinema 4D style): jointRadius px at 40 world units, smaller when farther, larger
+// when nearer, clamped to minPixelRadius / maxPixelRadius (in ortho views the depth is uniform, so the markers keep
+// a constant screen size). Bones behind the camera are skipped. Draws into `dl` as-is (the caller sets the clip rect).
 void DrawBoneOverlay(ImDrawList* dl, const ViewProj& vp, const PmxModel& model, const ModelInstance& inst,
                      const std::set<int>& selected, int active, int hovered, const BoneOverlayStyle& style);
-// The shown bone whose projected joint is nearest to `mouse` within style.pickRadius px; ties within 1 px go to
-// operable bones (PmxBone_Operable and listed in a display frame) first, then to the bone nearer the camera. -1 if none.
+// The shown bone whose projected joint is nearest to `mouse`; a joint counts when the mouse is within its drawn
+// marker (the same distance-scaled radius DrawBoneOverlay draws, at least pickRadius px so tiny far joints stay
+// pickable); ties within 1 px go to operable bones (PmxBone_Operable and listed in a display frame) first, then to
+// the bone nearer the camera. -1 if none.
 int PickBone(const ViewProj& vp, const PmxModel& model, const ModelInstance& inst, ImVec2 mouse,
              const BoneOverlayStyle& style);
 

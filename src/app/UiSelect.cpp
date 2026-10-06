@@ -76,13 +76,17 @@ void App::DrawAppBar(int activeNav) {
     dl->AddRectFilled(ImVec2(0, 0), ImVec2(W, h), p.surface);
     dl->AddLine(ImVec2(0, h - 0.5f), ImVec2(W, h - 0.5f), p.line);
 
-    // Wordmark: the product name in bold ink, the "12" in Miku teal.
+    // Wordmark: the product name in bold ink, the "12" in Miku teal, the version in a quiet caption.
     const float x0 = Dp(kPad);
     const ImVec2 ws = TextSize(Font::Bold, 20.0f, "MMDX");
     const float ty = (h - ws.y) * 0.5f;
     Text(dl, Font::Bold, 20.0f, ImVec2(x0, ty), p.ink, "MMDX");
     Text(dl, Font::Bold, 20.0f, ImVec2(x0 + ws.x, ty), p.accentInk, "12");
-    const float navX = x0 + TextSize(Font::Bold, 20.0f, "MMDX12").x + Dp(36.0f);
+    const std::string version = std::string("v") + MMDX12_VERSION;
+    const ImVec2 vs = TextSize(Font::Regular, size::Small, version.c_str());
+    Text(dl, Font::Regular, size::Small, ImVec2(x0 + TextSize(Font::Bold, 20.0f, "MMDX12").x + Dp(6.0f),
+                                                ty + ws.y - vs.y), p.ink3, version.c_str());
+    const float navX = x0 + TextSize(Font::Bold, 20.0f, "MMDX12").x + vs.x + Dp(42.0f);
 
     // Primary navigation.
     ImGui::SetCursorScreenPos(ImVec2(navX, (h - Dp(38.0f)) * 0.5f));
@@ -102,7 +106,7 @@ void App::DrawAppBar(int activeNav) {
     const std::string path = PathToUtf8(library_.root.empty() ? ResolveLibraryPath() : library_.root);
     const float pillW = Dp(300.0f);
     const float right = W - Dp(kPad);
-    const ImVec2 pa(right - pillW - Dp(86.0f), (h - Dp(36.0f)) * 0.5f);
+    const ImVec2 pa(right - pillW - Dp(126.0f), (h - Dp(36.0f)) * 0.5f);
     ImGui::SetCursorScreenPos(pa);
     bool hovered = false;
     const bool clicked = CardItem("##libpath", pa, ImVec2(pa.x + pillW, pa.y + Dp(36.0f)), &hovered);
@@ -141,7 +145,33 @@ void App::DrawAppBar(int activeNav) {
     ImGui::SetCursorScreenPos(ImVec2(right - Dp(36.0f), (h - Dp(36.0f)) * 0.5f));
     if (IconButton("##rescan", icon::Refresh, Tr("라이브러리 다시 검색"))) StartScan();
 
-    ImGui::SetNextWindowPos(ImVec2(pa.x + pillW + Dp(86.0f), h + Dp(6.0f)), ImGuiCond_Always, ImVec2(1.0f, 0.0f));
+    // About: name, version, license/credits one-liner.
+    ImGui::SetCursorScreenPos(ImVec2(right - Dp(116.0f), (h - Dp(36.0f)) * 0.5f));
+    if (IconButton("##about", icon::Info, Tr("정보"))) ImGui::OpenPopup("##aboutpopup");
+    ImGui::SetNextWindowPos(ImVec2(right - Dp(80.0f), h + Dp(6.0f)), ImGuiCond_Always, ImVec2(1.0f, 0.0f));
+    ImGui::SetNextWindowSize(ImVec2(Dp(320.0f), 0));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(Dp(18.0f), Dp(16.0f)));
+    if (ImGui::BeginPopup("##aboutpopup")) {
+        ImDrawList* pdl = ImGui::GetWindowDrawList();
+        TextEllipsis(pdl, Font::Bold, size::Title, ImGui::GetCursorScreenPos(), ImGui::GetCursorScreenPos().x + Dp(280.0f),
+                     p.ink, "MMDX12");
+        Gap(8.0f);
+        {
+            const std::string line = std::string(Tr("버전")) + " " + MMDX12_VERSION;
+            Text(pdl, Font::Regular, size::Small, ImGui::GetCursorScreenPos(), p.ink2, line.c_str());
+            ImGui::Dummy(ImVec2(0, Dp(20.0f)));
+        }
+        Gap(2.0f);
+        PushFont(Font::Regular, size::Caption);
+        ImGui::PushStyleColor(ImGuiCol_Text, ImGui::ColorConvertU32ToFloat4(p.ink3));
+        ImGui::TextWrapped("%s", Tr("MIT 라이선스. MikuMikuDance는 MikuMikuDance 개발팀의 저작물입니다."));
+        ImGui::PopStyleColor();
+        PopFont();
+        ImGui::EndPopup();
+    }
+    ImGui::PopStyleVar();
+
+    ImGui::SetNextWindowPos(ImVec2(pa.x + pillW + Dp(126.0f), h + Dp(6.0f)), ImGuiCond_Always, ImVec2(1.0f, 0.0f));
     ImGui::SetNextWindowSize(ImVec2(Dp(440.0f), 0));
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(Dp(18.0f), Dp(16.0f)));
     if (ImGui::BeginPopup("##libpopup")) {
@@ -300,6 +330,10 @@ void App::DrawScanning() {
                                         : Thousands((uint64_t)visited) + Tr(" 파일");
     const ImVec2 cs = TextSize(Font::Regular, size::Caption, count.c_str());
     Text(dl, Font::Regular, size::Caption, ImVec2(c.x - cs.x * 0.5f, by + Dp(16.0f)), p.ink3, count.c_str());
+    const std::string version = std::string("v") + MMDX12_VERSION;
+    const ImVec2 vs = TextSize(Font::Regular, size::Caption, version.c_str());
+    Text(dl, Font::Regular, size::Caption, ImVec2(c.x - vs.x * 0.5f, ImGui::GetMainViewport()->Size.y - Dp(28.0f)),
+         p.ink3, version.c_str());
     EndScreen();
 }
 

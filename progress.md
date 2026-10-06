@@ -555,3 +555,26 @@ Delegated to the opencode worker (smoke review).
 - Quad view was only built and read, not captured (no script command toggles `viewLayout`). Single view with `--render rt` was captured: raster, no `[E]`.
 - Behavior change: wireframe no longer shows wire floor / models in the ortho quadrants.
 - The tree also holds earlier uncommitted studio WIP (Gizmo / StudioProject / UiStudioPose / project test), committed together here.
+
+## 2026-10-07 (7) — version display, thinner distance-scaled studio bone overlay, faster startup
+
+Started with the opencode worker (full level); the worker was stopped midway and the rest was done directly.
+
+### Done
+- Version: window title `MMDX12 v<ver>`, a caption next to the wordmark in the app bar, the loading screen footer, and an About popup
+  (info button in the app bar: name, version, licence line). The library path pill got narrower to make room.
+- Studio bone overlay: links 1 px (was 1.5), joint markers are `jointRadius` px at 40 world units from the camera and scale with
+  distance (clamp 2..14 px, DPI scaled); ortho quad views keep a constant size; picking radius follows the drawn marker (floor `pickRadius`).
+  (The worker's version sized markers relative to the model's mean depth, which never shrank with distance; replaced.)
+- Startup: compiled shader cache in `<exe>/shader_cache` (`ShaderCompiler.cpp`, key = hash of every .hlsl/.hlsli in the shader dir +
+  entry/target/defines + dxcompiler.dll timestamp). Launch to first frame 5.9 s -> 2.0 s warm (6.7 s cold). Parallel compiling was tried and
+  was slower (8.0 s), so it was dropped.
+- No more white / "not responding" window while loading: `Renderer::Initialize` runs on a worker thread while `App::Run` pumps messages and
+  paints a GDI splash (`loading_`); resizes during loading are applied afterwards. Cold start stays responsive (checked via `Process.Responding`).
+- `STARTUP <phase>` timing lines in the log (App.cpp, Renderer upscaler timings).
+
+### Notes / not verified
+- The splash itself was not captured (window not capturable behind other windows); cold-start responsiveness was checked by process state only.
+- `tools/package_release.ps1` copies only exe, dlls, shaders, assets: `shader_cache` is not packaged. The updater applier was not read for
+  handling of extra folders.
+- Far-away joints show as 2 px dark dots (min clamp), readable but dense on hair bones.

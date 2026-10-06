@@ -3,11 +3,15 @@
 #include "core/TextUtil.h"
 #include <d3dcompiler.h>
 #include <dxcapi.h>
+#include <algorithm>
+#include <fstream>
+#include <map>
+#include <mutex>
 
 namespace mmdx {
 
-ComPtr<ID3DBlob> CompileShaderDxc(const std::filesystem::path& file, const char* entry, const char* target,
-                                  const ShaderDefines& defines) {
+static ComPtr<ID3DBlob> CompileShaderDxcUncached(const std::filesystem::path& file, const char* entry, const char* target,
+                                                 const ShaderDefines& defines) {
     // dxcompiler.dll ships next to the exe; load it (and the compiler instances) once.
     static struct Dxc {
         ComPtr<IDxcUtils> utils;
@@ -93,8 +97,8 @@ ComPtr<ID3DBlob> CompileShaderDxc(const std::filesystem::path& file, const char*
 }
 
 
-ComPtr<ID3DBlob> CompileShader(const std::filesystem::path& file, const char* entry, const char* target,
-                               const ShaderDefines& defines) {
+static ComPtr<ID3DBlob> CompileShaderUncached(const std::filesystem::path& file, const char* entry, const char* target,
+                                              const ShaderDefines& defines) {
     UINT flags = D3DCOMPILE_ENABLE_STRICTNESS;
 #ifdef _DEBUG
     flags |= D3DCOMPILE_DEBUG | D3DCOMPILE_SKIP_OPTIMIZATION;
@@ -115,6 +119,114 @@ ComPtr<ID3DBlob> CompileShader(const std::filesystem::path& file, const char* en
         return {};
     }
     return code;
+}
+
+// ---- compiled shader cache -----------------------------------------------------------------------------------------
+// Shaders compile at runtime (seconds at every start). The bytecode is cached in <exe>/shader_cache, keyed by a hash of
+// every .hlsl/.hlsli in the shader directory (includes included), the entry, target, defines and the compiler DLL's
+// timestamp, so any shader edit invalidates it. Failures are never cached.
+namespace {
+uint64_t Fnv(uint64_t h, const void* data, size_t n) {
+    const auto* p = (const unsigned char*)data;
+    for (size_t i = 0; i < n; ++i) h = (h ^ p[i]) * 1099511628211ull;
+    return h;
+}
+
+uint64_t SourceHash(const std::filesystem::path& dir) {
+    static std::mutex mutex;
+    static std::map<std::filesystem::path, uint64_t> hashes;
+    std::lock_guard<std::mutex> lock(mutex);
+    auto it = hashes.find(dir);
+    if (it != hashes.end()) return it->second;
+    uint64_t h = 1469598103934665603ull;
+    std::vector<std::filesystem::path> files;
+    std::error_code ec;
+    for (const auto& e : std::filesystem::directory_iterator(dir, ec)) {
+        const auto ext = e.path().extension();
+        if (e.is_regular_file(ec) && (ext == L".hlsl" || ext == L".hlsli")) files.push_back(e.path());
+    }
+    std::sort(files.begin(), files.end());
+    for (const auto& f : files) {
+        const std::string name = PathToUtf8(f.filename());
+        h = Fnv(h, name.data(), name.size());
+        std::ifstream in(f, std::ios::binary);
+        std::vector<char> buf((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+        h = Fnv(h, buf.data(), buf.size());
+    }
+    const auto dll = std::filesystem::last_write_time(ExecutableDir() / L"dxcompiler.dll", ec);
+    if (!ec) {
+        const auto t = dll.time_since_epoch().count();
+        h = Fnv(h, &t, sizeof(t));
+    }
+    return hashes[dir] = h;
+}
+
+std::filesystem::path CachePath(const std::filesystem::path& file, const char* entry, const char* target,
+                                const ShaderDefines& defines, bool dxc) {
+    uint64_t h = SourceHash(file.parent_path());
+    const std::string key = PathToUtf8(file.filename()) + "|" + entry + "|" + target + "|" + (dxc ? "dxc" : "fxc");
+    h = Fnv(h, key.data(), key.size());
+    for (const auto& d : defines) {
+        h = Fnv(h, d.first.data(), d.first.size());
+        h = Fnv(h, "=", 1);
+        h = Fnv(h, d.second.data(), d.second.size());
+        h = Fnv(h, ";", 1);
+    }
+#ifdef _DEBUG
+    h = Fnv(h, "D", 1);
+#endif
+    wchar_t name[40];
+    swprintf_s(name, L"%016llx.bin", (unsigned long long)h);
+    return ExecutableDir() / L"shader_cache" / name;
+}
+
+ComPtr<ID3DBlob> CacheLoad(const std::filesystem::path& path) {
+    std::ifstream in(path, std::ios::binary | std::ios::ate);
+    if (!in) return {};
+    const std::streamsize n = in.tellg();
+    if (n <= 0) return {};
+    ComPtr<ID3DBlob> blob;
+    if (FAILED(D3DCreateBlob((SIZE_T)n, &blob))) return {};
+    in.seekg(0);
+    if (!in.read((char*)blob->GetBufferPointer(), n)) return {};
+    return blob;
+}
+
+void CacheStore(const std::filesystem::path& path, ID3DBlob* blob) {
+    std::error_code ec;
+    std::filesystem::create_directories(path.parent_path(), ec);
+    // unique tmp name: shaders may compile on several threads
+    std::filesystem::path tmp = path;
+    tmp += L"." + std::to_wstring(GetCurrentThreadId()) + L".tmp";
+    {
+        std::ofstream out(tmp, std::ios::binary);
+        if (!out) return;
+        out.write((const char*)blob->GetBufferPointer(), (std::streamsize)blob->GetBufferSize());
+        if (!out) return;
+    }
+    std::filesystem::rename(tmp, path, ec);
+    if (ec) std::filesystem::remove(tmp, ec);
+}
+
+ComPtr<ID3DBlob> Cached(bool dxc, const std::filesystem::path& file, const char* entry, const char* target,
+                        const ShaderDefines& defines) {
+    const std::filesystem::path path = CachePath(file, entry, target, defines, dxc);
+    if (ComPtr<ID3DBlob> hit = CacheLoad(path)) return hit;
+    ComPtr<ID3DBlob> blob = dxc ? CompileShaderDxcUncached(file, entry, target, defines)
+                                : CompileShaderUncached(file, entry, target, defines);
+    if (blob) CacheStore(path, blob.Get());
+    return blob;
+}
+} // namespace
+
+ComPtr<ID3DBlob> CompileShaderDxc(const std::filesystem::path& file, const char* entry, const char* target,
+                                  const ShaderDefines& defines) {
+    return Cached(true, file, entry, target, defines);
+}
+
+ComPtr<ID3DBlob> CompileShader(const std::filesystem::path& file, const char* entry, const char* target,
+                               const ShaderDefines& defines) {
+    return Cached(false, file, entry, target, defines);
 }
 
 } // namespace mmdx

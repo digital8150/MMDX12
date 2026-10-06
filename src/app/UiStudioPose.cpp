@@ -346,6 +346,8 @@ BoneOverlayStyle MakeOverlayStyle() {
     s.jointRadius *= k;
     s.linkWidth *= k;
     s.pickRadius *= k;
+    s.minPixelRadius *= k;
+    s.maxPixelRadius *= k;
     return s;
 }
 } // namespace

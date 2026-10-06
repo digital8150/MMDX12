@@ -197,6 +197,15 @@ bool BoneTailWorld(const PmxModel& model, const ModelInstance& inst, int bone, X
     return true;
 }
 
+// Screen-pixel radius of a bone's joint marker. Markers scale with distance like 3ds Max / Cinema 4D: a joint is
+// jointRadius px at kJointRefDistance world units from the camera, shrinking when farther and growing when nearer,
+// clamped so markers never vanish or blow up. Ortho views have no perspective: constant screen size.
+constexpr float kJointRefDistance = 40.0f;
+float JointPixelRadius(const ViewProj& vp, float depth, const BoneOverlayStyle& style) {
+    if (vp.ortho || depth <= 0.0f) return style.jointRadius;
+    return std::clamp(style.jointRadius * kJointRefDistance / depth, style.minPixelRadius, style.maxPixelRadius);
+}
+
 void DrawBoneOverlay(ImDrawList* dl, const ViewProj& vp, const PmxModel& model, const ModelInstance& inst,
                      const std::set<int>& selected, int active, int hovered, const BoneOverlayStyle& style) {
     const auto& bones = model.bones;
@@ -215,8 +224,9 @@ void DrawBoneOverlay(ImDrawList* dl, const ViewProj& vp, const PmxModel& model, 
         if (!BoneShownInOverlay(model, b)) continue;
         XMFLOAT3 tail;
         if (!BoneTailWorld(model, inst, b, tail)) continue;
+        const XMFLOAT3 joint = BoneJointWorld(model, inst, b);
         ImVec2 j, t;
-        if (!vp.Project(BoneJointWorld(model, inst, b), j) || !vp.Project(tail, t)) continue;
+        if (!vp.Project(joint, j) || !vp.Project(tail, t)) continue;
         const ImVec2 d = t - j;
         if (LenV(d) < 2.0f) continue;
         const ImVec2 n = ImVec2(-d.y, d.x) / LenV(d);
@@ -228,9 +238,10 @@ void DrawBoneOverlay(ImDrawList* dl, const ViewProj& vp, const PmxModel& model, 
     }
     for (int b = 0; b < (int)bones.size(); ++b) {
         if (!BoneShownInOverlay(model, b)) continue;
+        const XMFLOAT3 joint = BoneJointWorld(model, inst, b);
         ImVec2 c;
-        if (!vp.Project(BoneJointWorld(model, inst, b), c)) continue;
-        const float r = style.jointRadius;
+        if (!vp.Project(joint, c)) continue;
+        const float r = JointPixelRadius(vp, std::max(XMVectorGetZ(XMVector3TransformCoord(Load(joint), XMLoadFloat4x4(&vp.view))), 0.0f), style);
         const bool movable = (bones[b].flags & PmxBone_Movable) != 0;
         const bool ik = (bones[b].flags & PmxBone_IK) != 0;
         const ImU32 colour = colorOf(b);
@@ -254,11 +265,14 @@ int PickBone(const ViewProj& vp, const PmxModel& model, const ModelInstance& ins
     std::vector<Candidate> candidates;
     for (int b = 0; b < (int)model.bones.size(); ++b) {
         if (!BoneShownInOverlay(model, b)) continue;
+        const XMFLOAT3 joint = BoneJointWorld(model, inst, b);
         ImVec2 c;
         float depth = 0.0f;
-        if (!vp.Project(BoneJointWorld(model, inst, b), c, &depth)) continue;
+        if (!vp.Project(joint, c, &depth)) continue;
         const float d = std::hypot(mouse.x - c.x, mouse.y - c.y);
-        if (d <= style.pickRadius) candidates.push_back({d, depth, b});
+        // the pick radius follows the drawn marker size, with the base pickRadius as the floor
+        const float r = std::max(style.pickRadius, JointPixelRadius(vp, depth, style));
+        if (d <= r) candidates.push_back({d, depth, b});
     }
     if (candidates.empty()) return -1;
     std::sort(candidates.begin(), candidates.end(),

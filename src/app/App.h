@@ -1,4 +1,5 @@
 #pragma once
+#include <atomic>
 #include "anim/ModelInstance.h"
 #include "anim/Motion.h"
 #include "app/Benchmark.h"
@@ -521,9 +522,12 @@ private:
     FreeCamera studioCamBase_;                       // the camera when a handle drag started
     POINT lastMouse_{};
     double timeSeconds_ = 0;      // wall clock since start (QPC)
+    std::atomic<bool> loading_{false};  // startup renderer init in flight: splash paint, resize deferred
     int framesInScene_ = 0;       // frames rendered in Play/BenchRun (for --frames)
     double gpuMsSum_ = 0.0;       // --frames: GPU time of the second half, logged at quit
     int gpuMsCount_ = 0;
+    LARGE_INTEGER startupRunBegan_{};  // Run() entry (STARTUP first-frame timing)
+    LARGE_INTEGER startupFreq_{};      // QPC frequency for the STARTUP timings
 
     // offline render
     struct OfflineJob {
