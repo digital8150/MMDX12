@@ -510,3 +510,17 @@ worked through the P0/P1 list and the follow-up requests.
   (restored intact) — keep workers away from git.
 - Not done: camera editing by dragging in the viewport while looking through it without possession, VMD distance sign
   convention in the inspector, quad / layout state in the project file, physics bake, snapping, markers, onion skin.
+
+## 2026-10-06 (4) — fix: video render stops when minimized, release 1.1.0
+
+Triggered by GitHub issue #1 (video rendering stops while the window is minimized).
+
+### Done
+- `App::MainLoop` skipped `RenderFrame()` while minimized, and offline renders advance one step per frame, so they froze.
+  Now the loop keeps rendering while `offline_.mode != OfflineMode::None`; normal play / UI still idles when minimized.
+  The swap chain is not resized on SIZE_MINIMIZED, so there is no 0x0 resize.
+- Version 1.1.0 (CMake). Release page cover image: `docs/media/studio-1.1.0.jpg` (Studio quad view). Release notes cover everything
+  since 1.0.0: automatic updates (1.0.1), the Studio 3D-tool work of entry (3), and this fix.
+
+### Not verified
+- The minimized case was only built, not exercised (headless runs cannot minimize); the issue reporter should confirm.

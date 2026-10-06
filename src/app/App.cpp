@@ -444,7 +444,8 @@ void App::MainLoop() {
             DispatchMessageW(&msg);
         }
         if (!running_) break;
-        if (minimized_) {
+        // An offline render (video/still) keeps going while minimized.
+        if (minimized_ && offline_.mode == OfflineMode::None) {
             Sleep(16);
             continue;
         }
