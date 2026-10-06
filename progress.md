@@ -620,6 +620,10 @@ Workers: antigravity (first attempt, 30 min timeout, no output), opencode (M1 pa
 - studio_project/edit/pose/gizmo tests pass.
 
 ### Not verified / notes
-- Website not deployed (needs the user's OK); until then the app's online tab shows "온라인 목록을 불러오지 못했습니다".
+- Released as 1.2.0 (GitHub release v1.2.0, zip SHA-256 matches the asset digest; the packaged exe compiled hoyo_toon in a
+  play run). The UI strings of this feature (and the About dialog) were added to the en / ja / zh tables before packaging.
+- Website deployed: /latest.json -> 1.2.0, /shader-packs/index.json + zip (SHA-256 checked live), docs and gallery in all
+  four languages; the app's online tab reads the live index. A pack zip changed with the same version must get a new version
+  (zips are served as immutable in the example nginx config).
 - New pack dialog, delete, drag & drop on a real window, play-bar popup and the studio row were built but not clicked through.
 - PT / offline GI ignore packs (by design for now). Face width is in model units (slider for other head sizes).
