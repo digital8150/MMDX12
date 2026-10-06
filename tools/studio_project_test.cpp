@@ -64,6 +64,9 @@ static void TestRoundTrip() {
         m.kind = ModelKind::Character;
         m.path = mikuPath;
         m.libraryId = "lib-1";
+        m.place.translation = {2.5f, 0.0f, -3.0f};  // world placement of a character
+        m.place.rotationDeg = {0.0f, 45.0f, 0.0f};
+        m.place.scale = 1.25f;
         b0 = BoneKf{};
         b0.frame = 0;
         b0.t = {1, 2, 3};
@@ -205,6 +208,7 @@ static void TestRoundTrip() {
                   b.motion.ik.at("\xE5\x8F\xB3\xE8\x85\x95")[1].enabled == false,
               "IK track kept");
 
+        Check(b.place == data.models[0].place, "character placement kept (t/r/s)");
         const ProjectModel& st = loaded.models[1];
         Check(st.name == data.models[1].name && st.kind == ModelKind::Stage && !st.visible &&
                   st.motion.Empty(),

@@ -38,6 +38,7 @@ struct RtGeometry {
     uint sphereSrv;
     uint toonSrv;
     uint _pad;
+    float4 texMul, texAdd, sphereMul, sphereAdd, toonMul, toonAdd;   // material morph factors
 };
 
 RaytracingAccelerationStructure gTlas : register(t0, space1);
@@ -97,7 +98,8 @@ RtSurface FetchSurface(RtGeometry g, uint prim, float2 bary) {
 
 float4 SampleBaseTexture(RtGeometry g, float2 uv, float lod) {
     if ((g.flags & MAT_HAS_TEXTURE) == 0) return float4(1, 1, 1, 1);
-    return gBindlessTex[NonUniformResourceIndex(g.textureSrv)].SampleLevel(gRtWrap, uv, lod);
+    return ApplyTexFactor(gBindlessTex[NonUniformResourceIndex(g.textureSrv)].SampleLevel(gRtWrap, uv, lod),
+                          g.texMul, g.texAdd);
 }
 
 // Coverage of a candidate (diffuse alpha * texture alpha), mip 0.

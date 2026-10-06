@@ -39,6 +39,8 @@ struct StudioModel {
     uint32_t uid = 0;              // stable id (prop parents, async loads); indices shift when a model is removed
     ModelKind kind = ModelKind::Character;  // stage: no physics, drawn first; prop: follows `attach`, no physics
     PropAttach attach;             // props: parent = uid of the parent model (-1 world)
+    PropAttach place;              // characters: world placement (translation, rotationDeg, scale multiplier)
+    PropAttach placeApplied;       // the placement the instance was last posed with (physics resets when it changes)
     bool visible = true;
     std::shared_ptr<const PmxModel> pmx;
     std::unique_ptr<ModelInstance> inst;
@@ -110,6 +112,16 @@ struct StudioDoc {
     bool useLightTrack = true;      // the light track drives the renderer's key light (else the lighting preset)
     bool useShadowTrack = true;     // the self-shadow track drives the shadows (else the render settings)
     bool showCameraPath = true;     // camera path overlay in the viewport (free camera only)
+    bool modelGizmo = false;        // viewport gizmo moves / rotates the selected character (no bone picked)
+    int viewLayout = 0;             // 0 single perspective view, 1 quad view (perspective + top / front / left, orthographic)
+    DirectX::XMFLOAT3 quadCenter{0, 10, 0};  // what the orthographic views look at
+    float quadHeight = 40.0f;                // world units across the height of an orthographic view
+    bool possessCamera = false;     // C4D style: viewport navigation edits the motion camera instead of the free view
+    int shading = 0;                // viewport shading (ViewShading): 0 lit, 1 unlit, 2 wireframe (raster path only)
+    bool frameMask = true;         // camera view: render the 16:9 frame only and dim the rest (WYSIWYG with the video)
+    bool showSafeFrames = false;    // title / action safe rectangles inside the frame
+    bool showThirds = false;        // rule-of-thirds guides inside the frame
+    bool autoKey = true;           // editing a value in the inspector keys it at the playhead (Adobe / Blender style)
 
     // editor
     int selectedModel = -1;     // index into models; -1 = camera
@@ -147,6 +159,7 @@ struct StudioDoc {
     int scrollToRow = 0;              // > 0: the timeline scrolls the row `scrollRowId` into view (frames left to try)
     uint64_t scrollRowId = 0;
     char morphFilter[64] = {};
+    char boneFilter[64] = {};       // narrows the timeline's bone / morph rows (inspector search field)
 
     int Frame() const { return (int)std::floor(time * kMmdFps + 1e-4); }
     bool HasRange() const { return view.rangeStart >= 0 && view.rangeEnd >= view.rangeStart; }
@@ -247,6 +260,31 @@ private:
     MotionData before_, after_;
 };
 
+// One IK bone's enable track (VMD IK on/off keys): small, unlike MotionSwapCommand.
+class IkEditCommand : public Command {
+public:
+    IkEditCommand(StudioDoc& doc, int model, std::string name, std::string ikName, std::vector<IkKf> before,
+                  std::vector<IkKf> after)
+        : doc_(doc), model_(model), name_(std::move(name)), ik_(std::move(ikName)), before_(std::move(before)), after_(std::move(after)) {}
+    void Do() override { Apply(after_); }
+    void Undo() override { Apply(before_); }
+    std::string Name() const override { return name_; }
+    size_t Bytes() const override { return sizeof(*this) + name_.size() + ik_.size() + (before_.size() + after_.size()) * sizeof(IkKf); }
+
+private:
+    void Apply(const std::vector<IkKf>& keys) {
+        if (model_ < 0 || model_ >= (int)doc_.models.size()) return;
+        auto& ik = doc_.models[model_]->motion.ik;
+        if (keys.empty()) ik.erase(ik_);
+        else ik[ik_] = keys;
+        doc_.TouchModel(model_);
+    }
+    StudioDoc& doc_;
+    int model_;
+    std::string name_, ik_;
+    std::vector<IkKf> before_, after_;
+};
+
 // CPU side of a studio scene (worker thread).
 struct StudioPackageModel {
     std::shared_ptr<PmxModel> pmx;
@@ -255,6 +293,7 @@ struct StudioPackageModel {
     ModelKind kind = ModelKind::Character;
     bool visible = true;
     PropAttach attach;                       // props: parent = index into StudioPackage::models (-1 world)
+    PropAttach place;                        // characters: world placement
     MotionData motion;                       // names canonicalised to pmx
 };
 struct StudioPackage {

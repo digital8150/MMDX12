@@ -111,6 +111,36 @@ ViewProj MakeViewProj(const XMFLOAT4X4& view, const XMFLOAT3& eye, float fovY, f
     return vp;
 }
 
+ViewProj MakeOrthoViewProj(const XMFLOAT4X4& view, const XMFLOAT3& eye, float orthoHeight, float nearZ, float farZ,
+                           float x0, float y0, float w, float h) {
+    ViewProj vp;
+    vp.view = view;
+    vp.eye = eye;
+    vp.nearZ = nearZ;
+    vp.farZ = farZ;
+    vp.x0 = x0;
+    vp.y0 = y0;
+    vp.w = w > 0.0f ? w : 1.0f;
+    vp.h = h > 0.0f ? h : 1.0f;
+    vp.ortho = true;
+    vp.orthoHeight = orthoHeight;
+    const XMMATRIX v = XMLoadFloat4x4(&vp.view);
+    const XMMATRIX proj = XMMatrixOrthographicLH(orthoHeight * vp.w / vp.h, orthoHeight, nearZ, farZ);
+    XMStoreFloat4x4(&vp.viewProj, XMMatrixMultiply(v, proj));
+    return vp;
+}
+
+void OrthoViewMatrix(int kind, const XMFLOAT3& center, XMFLOAT4X4* view, XMFLOAT3* eye) {
+    XMFLOAT3 dir{0, 0, -1};  // from the target to the eye
+    XMFLOAT3 up{0, 1, 0};
+    if (kind == 0) { dir = {0, 1, 0}; up = {0, 0, 1}; }
+    else if (kind == 2) { dir = {1, 0, 0}; }
+    const XMFLOAT3 e{center.x + dir.x * kOrthoEyeDistance, center.y + dir.y * kOrthoEyeDistance,
+                     center.z + dir.z * kOrthoEyeDistance};
+    if (eye != nullptr) *eye = e;
+    if (view != nullptr) XMStoreFloat4x4(view, XMMatrixLookAtLH(Load(e), Load(center), Load(up)));
+}
+
 bool ViewProj::Project(const XMFLOAT3& p, ImVec2& out, float* depth) const {
     const XMVECTOR clip =
         XMVector4Transform(XMVectorSetW(Load(p), 1.0f), XMLoadFloat4x4(&viewProj));
@@ -124,6 +154,7 @@ bool ViewProj::Project(const XMFLOAT3& p, ImVec2& out, float* depth) const {
 }
 
 float ViewProj::PixelWorldSize(const XMFLOAT3& p) const {
+    if (ortho) return orthoHeight / h;
     const float z = std::max(XMVectorGetZ(XMVector3TransformCoord(Load(p), XMLoadFloat4x4(&view))), nearZ);
     return 2.0f * z * std::tan(fovY * 0.5f) / h;
 }
@@ -616,6 +647,13 @@ void DrawCameraPath(ImDrawList* dl, const ViewProj& vp, const CameraPathPoint* p
         XMFLOAT3 cornersW[5];
         for (int i = 0; i < 5; ++i) {
             cornersW[i] = Store(XMVector3TransformCoord(Load(cornersV[i]), invView));
+        }
+        // the far plane is a translucent face: it shows what the lens covers (only when every corner is in front)
+        {
+            ImVec2 q[4];
+            bool all = true;
+            for (int i = 0; i < 4; ++i) all = all && vp.Project(cornersW[i + 1], q[i]);
+            if (all) dl->AddConvexPolyFilled(q, 4, (style.current & 0x00FFFFFFu) | (44u << 24));
         }
 
         for (int pass = 0; pass < 2; ++pass) {

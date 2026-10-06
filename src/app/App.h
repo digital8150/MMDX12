@@ -117,10 +117,12 @@ struct AppOptions {
     int lighting = -1;         // --lighting: override settings for this run
     int quality = -1;          // --quality: override settings for this run
     int renderPath = -1;       // --render <raster|rt|pt>: override settings for this run
+    int shading = -1;          // --shading <lit|unlit|wire>: raster ViewShading override for this run (hidden)
     int upscaler = -1;         // --upscaler <none|dlss|fsr|xess>: override settings for this run
     int upscalerQuality = -1;  // --upscale-quality <native|quality|balanced|performance|ultra>: override settings for this run
     bool noPhysics = false;    // --no-physics: override settings for this run
     int dof = -1, volumetric = -1, bloomConv = -1;  // --dof/--volumetric/--bloom-conv <0|1>: override for this run
+    int motionLighting = -1;   // --motion-lighting <0|1>: camera VMD light/self-shadow tracks in play mode, this run
     float volumetricDensity = -1.0f;                 // --volumetric-density (< 0 = settings)
     std::string lut;           // --lut <substr|none>: override for this run (resolved against the LUT list)
     std::filesystem::path offlineStill, offlineVideo;  // --offline-still / --offline-video
@@ -160,6 +162,10 @@ private:
         std::vector<std::unique_ptr<GpuModel>> stageGpu;
         std::shared_ptr<BoundMotion> motion;
         std::shared_ptr<CameraMotion> camera;
+        // The camera VMD's light / self-shadow tracks (empty when absent or only MMD's defaults); used when
+        // AppSettings::motionLighting is on.
+        std::vector<studio::LightKf> lightTrack;
+        std::vector<studio::ShadowKf> shadowTrack;
         float endFrame = 0;
         bool hasAudio = false;
         float physicsFrame = -1;  // motion frame of the last physics step (-1: reset on next update)
@@ -276,13 +282,50 @@ private:
     // --- camera / light / self-shadow (UiStudioCamera.cpp): inspector panel, key fields, camera path, render tracks
     bool StudioCameraPerspective(float frame) const;  // the camera key's perspective switch in effect at `frame`
     void StudioOrthoCamera(CameraPose& pose, CameraParams& camera) const;  // "perspective off" view (approximation)
-    void StudioApplyLightTracks(FrameView& view) const;  // light / self-shadow tracks -> the frame's light and shadows
+    void StudioApplyLightTracks(FrameView& view) const;
+    // A VMD light / self-shadow track at `frame` -> the frame's key light (direction, colour) and shadows; an empty
+    // track leaves the view as it is (UiStudioCamera.cpp). Studio tracks, and in play mode the camera VMD's tracks.
+    static void ApplyLightShadowTracks(const std::vector<studio::LightKf>& light,
+                                       const std::vector<studio::ShadowKf>& shadow, float frame, FrameView& view);  // light / self-shadow tracks -> the frame's light and shadows
     studio::LightKf StudioCurrentLight() const;      // the key light in effect now (track or preset)
     void StudioKeyCameraFromView();                  // camera key at the current frame from the view being shown
+    // The part of the viewport the 3D image fills: the whole rect, or its 16:9 fit when the motion camera is the view.
+    void StudioRenderRect(float x0, float y0, float x1, float y1, float out[4]) const;
+    void DrawStudioPlacePanel(float w);              // character transform (position / rotation / scale)
+    void StudioCommitPlace(uint32_t uid, const studio::PropAttach& before, const studio::PropAttach& after);  // one undo step
+    bool studioPlaceDragging_ = false;               // a transform field / gizmo drag is in progress ...
+    studio::PropAttach studioPlaceBefore_;                   // ... that started from this placement
+    void DrawStudioFrameMask(float x0, float y0, float x1, float y1);  // dims outside the render frame + guides
+    struct FreeCamera;                               // orbit camera (defined below)
+    void StudioViewportNavigate(bool hovered, bool active);  // viewport mouse / fly navigation (free or possessed camera)
+    static FreeCamera FreeFromKey(const studio::CameraKf& k);  // orbit form of a camera key
+    FreeCamera StudioViewedFree(int frame) const;    // the camera as shown now, in orbit form (target, yaw, pitch, distance)
+    // possession: store `cam` as the camera key at the playhead. base: the key to start from when none exists there
+    void StudioWriteCamera(const FreeCamera& cam, const studio::CameraKf* base = nullptr, bool takeView = true);
+    void StudioNavEditTick();                        // closes the undo step of a possession gesture when it went quiet
+    void StudioPossess(bool on);
+    void StudioViewportCameraHandles(bool hovered);  // eye / target handles of the camera (free view, camera selected)
+    std::string iniPath_;                            // ImGui ini (panel layout); must outlive the context
+    int studioActiveView_ = 0;                       // quad view: 0 perspective, 1 top, 2 front, 3 left (the view under the mouse)
+    void StudioDrawPoseOverlay(const studio::ViewProj& vp, float x0, float y0, float x1, float y1);  // bones + gizmo of another view
+    void StudioOrthoNavigate(const studio::ViewProj& vp, bool hovered, bool active);  // pan / zoom of the orthographic views
+    void StudioAddQuadViews(FrameView& view) const;  // the quad view's extra views for the live viewport frame
+    bool studioResetLayout_ = false;                 // rebuild the default panel arrangement next frame
+    int studioNavIdle_ = 0;                          // frames since the last possessed edit (undo grouping)
+    bool studioNavWrote_ = false;                    // a possessed edit was written this frame
+    int studioCamHandle_ = 0;                        // 0 none, 1 eye, 2 target
+    studio::GizmoDrag studioCamDrag_;
+    studio::GizmoFrame studioCamFrame_;
+    studio::GizmoPart studioCamHot_ = studio::GizmoPart::None;
+    void StudioTakeFreeCamera();                    // leave the motion camera at its current view (viewport navigation)
+    void StudioFocusSelection();                     // F: frame the picked bone / selected model
+    float studioFlyMul_ = 1.0f;                      // RMB + WASD fly speed multiplier (wheel while flying)
+    studio::CameraKf StudioViewedCamera(int frame) const;  // the camera as shown now (free view or motion camera) as a key at `frame`
     void StudioBeginKeyEdit(studio::RowKind kind);   // inspector key fields: one undo step per edit
     void StudioEndKeyEdit();
     void DrawStudioCameraPanel(float w);             // view / light / shadow sections of the camera inspector
-    bool DrawStudioCameraKeyFields(float w, studio::RowKind kind, int frame);  // true: no curve editor follows
+    // true: no curve editor follows. live (camera only): the playhead's fields, shown with or without a key
+    bool DrawStudioCameraKeyFields(float w, studio::RowKind kind, int frame, bool live = false);
     void StudioUpdateCameraPath();                   // samples the motion camera (cached per cameraVersion)
     void DrawStudioCameraPath(float x0, float y0, float x1, float y1);
     bool StudioPickCameraKey(ImVec2 mouse);          // click on a key dot of the path: select it and seek
@@ -292,7 +335,8 @@ private:
     void StudioSelectBone(int bone, bool toggle);    // viewport pick / bone row click: selection sync (-1 clears)
     std::vector<studio::PoseBone> StudioCurrentPose(const studio::StudioModel& m) const;  // effective anim values
     void StudioSetPose(const char* undoName, const studio::PoseLayer& before);  // push the selected model's layer edit
-    void StudioRegisterPose(bool allBones);          // keys for the edited bones/morphs (all: every listed bone)
+    // keys for the edited bones/morphs (all: every listed bone). layerBefore: the layer an undo restores (auto-key)
+    void StudioRegisterPose(bool allBones, const studio::PoseLayer* layerBefore = nullptr, const char* undoName = nullptr);
     void StudioResetPose();                          // drop the unregistered edits
     void StudioMirrorPose();                         // left/right mirror (scope: whole model or selected bones)
     void StudioImportVpd();
@@ -430,6 +474,7 @@ private:
     void UploadOfflinePrevPose(uint64_t slot);  // offline_.prevPose -> the models' bone/morph ring entry `slot`
 
     AppOptions options_;
+    int shadingOverride_ = -1;  // --shading (hidden): run-only raster ViewShading override, -1 = off
     AppSettings settings_;
     std::filesystem::path settingsPath_;
     HWND hwnd_ = nullptr;
@@ -472,6 +517,8 @@ private:
     bool overlayVisible_ = true;
     double lastMouseMoveTime_ = 0;
     struct FreeCamera { DirectX::XMFLOAT3 target{0, 10, 0}; float yaw = 0, pitch = 0.1f, distance = 45; float fovDeg = 30; } freeCam_;
+    studio::CameraKf studioCamKeyBase_;              // ... and its key (interpolation curves)
+    FreeCamera studioCamBase_;                       // the camera when a handle drag started
     POINT lastMouse_{};
     double timeSeconds_ = 0;      // wall clock since start (QPC)
     int framesInScene_ = 0;       // frames rendered in Play/BenchRun (for --frames)
@@ -607,6 +654,7 @@ private:
     // camera inspector / path
     bool studioKeyEdit_ = false;                     // a camera/light/shadow key field is being edited
     bool studioKeyChanged_ = false;                  // ... and its value changed (else no undo step)
+    bool studioKeyLive_ = false;                     // ... through the playhead fields (independent of the key selection)
     std::vector<studio::TrackState> studioKeyBefore_;
     std::vector<studio::CameraPathPoint> studioCamPath_;  // motion camera samples (per frame, strided when long)
     std::vector<DirectX::XMFLOAT3> studioCamKeys_;   // eye at each camera key

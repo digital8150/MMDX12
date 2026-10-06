@@ -249,6 +249,13 @@ bool SaveProject(const std::filesystem::path& file, const ProjectData& data, std
             jm["path"] = RelPath(m.path, dir);
             jm["libraryId"] = m.libraryId;
             jm["visible"] = m.visible;
+            if (m.kind == ModelKind::Character && !(m.place == PropAttach{})) {  // identity placement is not written
+                jm["place"] = {
+                    {"t", {m.place.translation.x, m.place.translation.y, m.place.translation.z}},
+                    {"r", {m.place.rotationDeg.x, m.place.rotationDeg.y, m.place.rotationDeg.z}},
+                    {"s", m.place.scale},
+                };
+            }
             if (m.kind == ModelKind::Prop) {  // "attach" is written for props only
                 const PropAttach& a = m.attach;
                 jm["attach"] = {
@@ -390,6 +397,12 @@ bool LoadProject(const std::filesystem::path& file, ProjectData& out, std::strin
                 pm.path = ResolvePath(ReadString(m, "path", ""), dir);
                 pm.libraryId = ReadString(m, "libraryId", "");
                 pm.visible = ReadBool(m, "visible", true);
+                if (kind == ModelKind::Character && m.contains("place") && m["place"].is_object()) {
+                    const nlohmann::json& pl = m["place"];  // older projects have none: identity
+                    pm.place.translation = ReadVec3(pl, "t", pm.place.translation);
+                    pm.place.rotationDeg = ReadVec3(pl, "r", pm.place.rotationDeg);
+                    pm.place.scale = (float)ReadDouble(pl, "s", pm.place.scale);
+                }
                 if (kind == ModelKind::Prop && m.contains("attach") && m["attach"].is_object()) {
                     const nlohmann::json& a = m["attach"];  // "attach" is read for props only
                     pm.attach.parent = ReadInt(a, "parent", -1);

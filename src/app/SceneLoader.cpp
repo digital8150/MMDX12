@@ -140,6 +140,8 @@ bool LoadScenePackage(const CharacterAsset& character, const StageAsset* stage, 
             std::string camErr;
             if (LoadVmd(song.cameraVmd, camVmd, &camErr)) {
                 out.camera = CameraMotion::Create(camVmd);
+                out.lightKeys = camVmd.lightKeys;
+                out.shadowKeys = camVmd.shadowKeys;
                 if (!out.camera) LOG_WARN("no camera keys in %s", PathToUtf8(song.cameraVmd).c_str());
             } else {
                 LOG_WARN("camera vmd load failed: %s: %s", PathToUtf8(song.cameraVmd).c_str(), camErr.c_str());

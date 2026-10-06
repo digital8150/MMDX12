@@ -4,7 +4,8 @@
 //                 characters for the first 8 spot lights (SpotShadowsWanted: raster/RT scene
 //                 shading and volumetrics)
 //   ScenePass     sky, studio floor, MMD materials + edges -> MSAA colour/normal/velocity/depth
-//                 (RayTraced: ray-query sun shadows instead of the shadow map)    not PathTraced
+//                 (RayTraced: ray-query sun shadows instead of the shadow map; Raster honours
+//                 ViewShading: Unlit = flat, Wireframe = D3D12_FILL_MODE_WIREFRAME)  not PathTraced
 //   ResolvePass   MSAA -> single sample (colour, normal, velocity, closest depth) not PathTraced
 //   PathTracePass path tracer + temporal/a-trous denoiser -> colour/normal/velocity/depth
 //                                                                                 PathTraced only
@@ -54,6 +55,7 @@ public:
 
 private:
     ComPtr<ID3D12PipelineState> psoCullBack_, psoNoCull_, psoEdge_, psoSky_, psoFloor_;
+    ComPtr<ID3D12PipelineState> psoWireBack_, psoWireNoCull_, psoWireFloor_, psoFlatBg_;
     // RayTracing variants (DXC, ps_6_5, RT_SHADOWS=1); null when DXC/DXR is unavailable
     ComPtr<ID3D12PipelineState> psoCullBackRt_, psoNoCullRt_, psoFloorRt_;
     ComPtr<ID3D12RootSignature> rootSig_;

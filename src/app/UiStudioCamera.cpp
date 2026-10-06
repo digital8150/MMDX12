@@ -13,6 +13,7 @@
 #include "app/Lighting.h"
 #include "app/UiKit.h"
 #include "core/I18n.h"
+#include "core/Log.h"
 #include "imgui.h"
 #include "imgui_internal.h"
 
@@ -21,16 +22,10 @@ namespace mmdx {
 using namespace studio;
 
 namespace {
+constexpr float kRenderAspect = 16.0f / 9.0f;  // every video size of the render dialog is 16:9
 constexpr float kOrthoFovDeg = 3.0f;  // "perspective off" is drawn as a long lens from far away (see StudioCamera)
 
 uint64_t RowOf(RowKind k) { return MakeRowId(k, 0, 0); }
-
-// MMD's self-shadow distance (VMD value) -> the cascade range in MMD units. MMD's default 8875 maps to the renderer's
-// default range (160); a lower UI value covers more of the scene, as in MMD.
-float ShadowRangeFromVmd(float vmd) {
-    const float ui = std::clamp(ShadowUiFromVmd(vmd), 0.0f, 9999.0f);
-    return std::clamp((10000.0f - ui) * (160.0f / 1125.0f), 20.0f, 2000.0f);
-}
 
 // Last key at or before `frame` (the first before it): MMD switches perspective per key, it does not interpolate it.
 bool PerspectiveAt(const std::vector<CameraKf>& keys, float frame) {
@@ -64,20 +59,27 @@ void App::StudioOrthoCamera(CameraPose& pose, CameraParams& camera) const {
     camera.farZ = dist + 3000.0f;
 }
 
-void App::StudioApplyLightTracks(FrameView& view) const {
-    const StudioDoc& d = *studio_;
-    const float frame = (float)(d.time * kMmdFps);
-    if (d.useLightTrack && !d.camera.light.empty()) {
-        const LightKf k = SampleLight(d.camera.light, frame);
+void App::ApplyLightShadowTracks(const std::vector<LightKf>& light, const std::vector<ShadowKf>& shadow, float frame,
+                                FrameView& view) {
+    if (!light.empty()) {
+        const LightKf k = SampleLight(light, frame);
         // a zero direction (broken file) keeps the preset's
         if (std::fabs(k.direction.x) + std::fabs(k.direction.y) + std::fabs(k.direction.z) > 1e-4f) view.light.direction = k.direction;
         view.light.color = k.color;
     }
-    if (d.useShadowTrack && !d.camera.shadow.empty()) {
-        const ShadowKf s = SampleShadow(d.camera.shadow, frame);
+    if (!shadow.empty()) {
+        const ShadowKf s = SampleShadow(shadow, frame);
         view.shadowsOff = s.mode == 0;
         view.shadowDistance = ShadowRangeFromVmd(s.distance);
     }
+}
+
+void App::StudioApplyLightTracks(FrameView& view) const {
+    const StudioDoc& d = *studio_;
+    static const std::vector<LightKf> kNoLight;
+    static const std::vector<ShadowKf> kNoShadow;
+    ApplyLightShadowTracks(d.useLightTrack ? d.camera.light : kNoLight, d.useShadowTrack ? d.camera.shadow : kNoShadow,
+                           (float)(d.time * kMmdFps), view);
 }
 
 LightKf App::StudioCurrentLight() const {
@@ -117,6 +119,7 @@ void App::StudioEndKeyEdit() {
     if (studioKeyChanged_) StudioPushTrackEdit(Tr("키 값 편집"), studioKeyBefore_);
     studioKeyBefore_.clear();
     studioKeyEdit_ = false;
+    studioKeyLive_ = false;
 }
 
 // ---------------------------------------------------------------------------
@@ -183,18 +186,58 @@ void App::DrawStudioCameraPanel(float w) {
         const char* modeIcons[] = {icon::VideoCamera, icon::Crosshair};
         int mode = d.useMotionCamera && d.cameraEval ? 0 : 1;
         ImGui::BeginDisabled(!d.cameraEval);
-        if (Segmented("##viewmode", modes, 2, &mode, w / Dpi(), 32.0f, modeIcons)) d.useMotionCamera = mode == 0;
+        if (Segmented("##viewmode", modes, 2, &mode, w / Dpi(), 32.0f, modeIcons)) {
+            d.useMotionCamera = mode == 0;
+            if (mode == 1) StudioPossess(false);  // a free view is not the possessed camera
+        }
         ImGui::EndDisabled();
         ImGui::Dummy(ImVec2(w, Dp(6.0f)));
-        if (Button("##camkey", Tr("현재 시점을 키로 등록"), icon::Plus, ButtonKind::Secondary, ImVec2((w - bw) / Dpi() - 6.0f, btn)))
+        if (Button("##camkey", Tr("현재 시점을 키로 등록"), icon::Plus, ButtonKind::Secondary, ImVec2((w - 2.0f * bw) / Dpi() - 12.0f, btn)))
             StudioKeyCameraFromView();
         Tooltip(d.useMotionCamera && d.cameraEval ? Tr("카메라 모션의 현재 값으로 키를 만들어요.")
                                                   : Tr("자유 카메라로 보고 있는 시점으로 키를 만들어요."));
+        ImGui::SameLine(0, Dp(6.0f));
+        if (IconButton("##campossess", icon::Crosshair, d.possessCamera ? Tr("카메라 빙의 해제  (Esc)") : Tr("카메라 빙의: 뷰포트 조작이 이 카메라를 움직여요"),
+                       d.possessCamera, btn))
+            StudioPossess(!d.possessCamera);
         ImGui::SameLine(0, Dp(6.0f));
         if (IconButton("##campath", d.showCameraPath ? icon::Eye : icon::EyeSlash, d.showCameraPath ? Tr("카메라 경로 숨기기 (자유 카메라로 볼 때 표시)")
                                                                  : Tr("카메라 경로 표시 (자유 카메라로 볼 때)"),
                        d.showCameraPath, btn))
             d.showCameraPath = !d.showCameraPath;
+        // render frame guides (shown when looking through the motion camera)
+        ImGui::Dummy(ImVec2(w, Dp(6.0f)));
+        const float gw = (w / Dpi() - 12.0f) / 3.0f;
+        if (Button("##fmask", Tr("16:9 프레임"), nullptr, d.frameMask ? ButtonKind::Primary : ButtonKind::Secondary, ImVec2(gw, 30.0f)))
+            d.frameMask = !d.frameMask;
+        Tooltip(Tr("카메라 모션으로 볼 때 렌더 영상과 같은 16:9 영역만 보여줘요."));
+        ImGui::SameLine(0, Dp(6.0f));
+        if (Button("##fthirds", Tr("3분할"), nullptr, d.showThirds ? ButtonKind::Primary : ButtonKind::Secondary, ImVec2(gw, 30.0f)))
+            d.showThirds = !d.showThirds;
+        ImGui::SameLine(0, Dp(6.0f));
+        if (Button("##fsafe", Tr("세이프"), nullptr, d.showSafeFrames ? ButtonKind::Primary : ButtonKind::Secondary, ImVec2(gw, 30.0f)))
+            d.showSafeFrames = !d.showSafeFrames;
+        Tooltip(Tr("액션 세이프 93 % · 타이틀 세이프 90 %"));
+    }
+
+    // --- the camera at the playhead: always editable (auto-key keys the edit), key state like an AE/Blender property
+    separator(8.0f);
+    {
+        const bool keyed = FindKey(d.camera.camera, d.Frame()) != nullptr;
+        const ImVec2 c = ImGui::GetCursorScreenPos();
+        Text(cdl, Font::Semibold, size::Small, c, p.ink2, Tr("카메라 값"));
+        // key state at the playhead: filled = key here, hollow = interpolated between keys
+        const ImVec2 dc(c.x + w - Dp(10.0f), c.y + Dp(8.0f));
+        const float dr = Dp(5.0f);
+        const ImU32 kc = keyed ? p.accent : p.ink3;
+        const ImVec2 pts[4] = {{dc.x, dc.y - dr}, {dc.x + dr, dc.y}, {dc.x, dc.y + dr}, {dc.x - dr, dc.y}};
+        if (keyed) cdl->AddConvexPolyFilled(pts, 4, kc);
+        else cdl->AddPolyline(pts, 4, kc, ImDrawFlags_Closed, 1.5f);
+        ImGui::SetCursorScreenPos(c);
+        ImGui::Dummy(ImVec2(w, Dp(22.0f)));
+        Switch("##autokey", Tr("자동 키"), &d.autoKey, Tr("값을 고치면 재생 헤드에 키가 생겨요"));
+        ImGui::Dummy(ImVec2(w, Dp(6.0f)));
+        DrawStudioCameraKeyFields(w, RowKind::Camera, d.Frame(), true);  // disabled without a key when auto-key is off
     }
 
     // --- light track: switch, preview ball + values, key button
@@ -252,7 +295,7 @@ void App::DrawStudioCameraPanel(float w) {
     ImGui::Dummy(ImVec2(w, Dp(2.0f)));
 }
 
-bool App::DrawStudioCameraKeyFields(float w, RowKind kind, int frame) {
+bool App::DrawStudioCameraKeyFields(float w, RowKind kind, int frame, bool live) {
     using namespace ui;
     StudioDoc& d = *studio_;
     const Palette& p = P();
@@ -271,24 +314,34 @@ bool App::DrawStudioCameraKeyFields(float w, RowKind kind, int frame) {
         changed |= widget();
         if (kind == RowKind::Camera) ImGui::PopStyleVar();
         PopFont();
-        if (ImGui::IsItemActivated()) StudioBeginKeyEdit(kind);
+        if (ImGui::IsItemActivated()) {
+            StudioBeginKeyEdit(kind);
+            studioKeyLive_ = live;
+        }
         ended |= ImGui::IsItemDeactivated();
         ImGui::Dummy(ImVec2(w, Dp(4.0f)));
     };
 
     if (kind == RowKind::Camera) {
         CameraKf* k = FindKey(d.camera.camera, frame);
-        if (!k) { StudioEndKeyEdit(); return false; }
-        float target[3] = {k->target.x, k->target.y, k->target.z};
-        float rot[3] = {DirectX::XMConvertToDegrees(k->rotation.x), DirectX::XMConvertToDegrees(k->rotation.y),
-                        DirectX::XMConvertToDegrees(k->rotation.z)};
-        float dist = k->distance;
-        int fov = (int)k->fovDeg;
+        // live: the fields of the playhead. They always show the camera in effect (a key or the interpolated / free
+        // view); editing one keys it here when auto-key is on (or the key already exists), like Adobe / Blender.
+        CameraKf cur;
+        if (live) cur = StudioViewedCamera(frame);
+        else if (k) cur = *k;
+        else { StudioEndKeyEdit(); return false; }
+        const bool editable = !live || k || d.autoKey;
+        ImGui::BeginDisabled(!editable);
+        float target[3] = {cur.target.x, cur.target.y, cur.target.z};
+        float rot[3] = {DirectX::XMConvertToDegrees(cur.rotation.x), DirectX::XMConvertToDegrees(cur.rotation.y),
+                        DirectX::XMConvertToDegrees(cur.rotation.z)};
+        float dist = cur.distance;
+        int fov = (int)cur.fovDeg;
         row(Tr("중심"), [&] { return ImGui::DragFloat3("##camtarget", target, 0.05f, 0.0f, 0.0f, "%.2f"); });
         row(Tr("회전"), [&] { return ImGui::DragFloat3("##camrot", rot, 0.25f, 0.0f, 0.0f, "%.1f°"); });
         row(Tr("거리"), [&] { return ImGui::DragFloat("##camdist", &dist, 0.1f, -5000.0f, 5000.0f, "%.2f"); });
         row(Tr("시야각"), [&] { return ImGui::DragInt("##camfov", &fov, 0.25f, 1, 125, "%d°"); });
-        bool persp = k->perspective;
+        bool persp = cur.perspective;
         {
             const bool before = persp;
             Switch("##campersp", Tr("원근"), &persp, Tr("끄면 정사영 (MMD 퍼스 OFF)"));
@@ -297,13 +350,27 @@ bool App::DrawStudioCameraKeyFields(float w, RowKind kind, int frame) {
                 changed = ended = true;
             }
         }
-        if (changed) {
-            k->target = {target[0], target[1], target[2]};
-            k->rotation = {DirectX::XMConvertToRadians(rot[0]), DirectX::XMConvertToRadians(rot[1]), DirectX::XMConvertToRadians(rot[2])};
-            k->distance = dist;
-            k->fovDeg = (uint32_t)std::clamp(fov, 1, 125);
-            k->perspective = persp;
+        ImGui::EndDisabled();
+        if (changed && editable) {
+            cur.target = {target[0], target[1], target[2]};
+            cur.rotation = {DirectX::XMConvertToRadians(rot[0]), DirectX::XMConvertToRadians(rot[1]), DirectX::XMConvertToRadians(rot[2])};
+            cur.distance = dist;
+            cur.fovDeg = (uint32_t)std::clamp(fov, 1, 125);
+            cur.perspective = persp;
+            if (k) {
+                // keep the key's interpolation curves: only the values change
+                k->target = cur.target;
+                k->rotation = cur.rotation;
+                k->distance = cur.distance;
+                k->fovDeg = cur.fovDeg;
+                k->perspective = cur.perspective;
+            } else {
+                cur.frame = frame;
+                UpsertKey(d.camera.camera, cur);  // auto-key: the edit creates the key under the playhead
+            }
+            if (live) d.useMotionCamera = true;  // show the effect of the edit (a free view becomes the keyed camera)
             ++d.cameraVersion;
+            d.rowsKey = ~0ull;
             studioKeyChanged_ = true;
         }
         if (ended) StudioEndKeyEdit();
@@ -403,6 +470,130 @@ void App::StudioUpdateCameraPath() {
     for (const CameraKf& k : d.camera.camera) studioCamKeys_.push_back(sample((float)k.frame).eye);
 }
 
+
+// ---------------------------------------------------------------------------
+// Possession (C4D style) and camera handles
+// ---------------------------------------------------------------------------
+
+App::FreeCamera App::StudioViewedFree(int frame) const {
+    return FreeFromKey(StudioViewedCamera(frame));
+}
+
+App::FreeCamera App::FreeFromKey(const CameraKf& k) {
+    FreeCamera c;
+    c.target = k.target;
+    c.yaw = k.rotation.y;
+    c.pitch = std::clamp(-k.rotation.x, -1.45f, 1.45f);
+    c.distance = std::clamp(std::fabs(k.distance), 0.1f, 600.0f);
+    c.fovDeg = (float)k.fovDeg;
+    return c;
+}
+
+void App::StudioPossess(bool on) {
+    StudioDoc& d = *studio_;
+    if (on == d.possessCamera) return;
+    if (studioKeyEdit_ && studioKeyLive_) StudioEndKeyEdit();
+    d.possessCamera = on;
+    if (on) {
+        d.selectedModel = -1;  // the camera row is the possessed object
+        if (d.cameraEval) d.useMotionCamera = true;  // look through the camera that is being edited
+        studioCamHandle_ = 0;
+    }
+}
+
+void App::StudioWriteCamera(const FreeCamera& cam, const CameraKf* base, bool takeView) {
+    StudioDoc& d = *studio_;
+    const int frame = d.Frame();
+    CameraKf* key = FindKey(d.camera.camera, frame);
+    if (!key && !d.autoKey) {
+        toast_ = {Tr("이 프레임에 카메라 키가 없어요"), Tr("자동 키를 켜거나 키를 먼저 등록하세요."), {}, false, timeSeconds_ + 3.0};
+        return;
+    }
+    if (!studioKeyEdit_) {
+        StudioBeginKeyEdit(RowKind::Camera);
+        studioKeyLive_ = true;
+    }
+    CameraKf k = key ? *key : base ? *base : StudioViewedCamera(frame);
+    k.target = cam.target;
+    k.rotation.x = -cam.pitch;  // rotation = (-pitch, yaw, roll): the roll of the key stays
+    k.rotation.y = cam.yaw;
+    k.distance = -cam.distance;
+    k.fovDeg = (uint32_t)std::clamp((int)std::lround(cam.fovDeg), 1, 125);
+    if (key) {
+        key->target = k.target;
+        key->rotation = k.rotation;
+        key->distance = k.distance;
+        key->fovDeg = k.fovDeg;  // the interpolation curves stay
+    } else {
+        k.frame = frame;
+        UpsertKey(d.camera.camera, k);
+    }
+    if (takeView) d.useMotionCamera = true;  // possession looks through the edited camera; handles keep the free view
+    ++d.cameraVersion;
+    d.rowsKey = ~0ull;
+    studioKeyChanged_ = true;
+    studioNavWrote_ = true;
+}
+
+void App::StudioNavEditTick() {
+    if (!studioKeyEdit_ || !studioKeyLive_ || !studio_->possessCamera) {
+        studioNavWrote_ = false;
+        studioNavIdle_ = 0;
+        return;
+    }
+    if (studioNavWrote_) {
+        studioNavIdle_ = 0;
+    } else if (++studioNavIdle_ >= 18 && !ImGui::IsMouseDown(ImGuiMouseButton_Left) &&
+               !ImGui::IsMouseDown(ImGuiMouseButton_Right) && !ImGui::IsMouseDown(ImGuiMouseButton_Middle)) {
+        StudioEndKeyEdit();  // one undo step per gesture (a burst of drags, fly keys or wheel notches)
+        studioNavIdle_ = 0;
+    }
+    studioNavWrote_ = false;
+}
+
+
+void App::StudioRenderRect(float x0, float y0, float x1, float y1, float out[4]) const {
+    const StudioDoc& d = *studio_;
+    out[0] = x0; out[1] = y0; out[2] = x1 - x0; out[3] = y1 - y0;
+    if (d.viewLayout != 0 || !d.frameMask || !d.useMotionCamera || !d.cameraEval) return;
+    const float area[4] = {x0, y0, x1 - x0, y1 - y0};
+    FitInArea(area, 16.0f, 9.0f, out);
+    for (int i = 0; i < 4; ++i) out[i] = std::floor(out[i]);  // whole pixels: the 3D image and the mask agree
+}
+
+void App::DrawStudioFrameMask(float x0, float y0, float x1, float y1) {
+    using namespace ui;
+    StudioDoc& d = *studio_;
+    float r[4];
+    StudioRenderRect(x0, y0, x1, y1, r);
+    const bool locked = d.viewLayout == 0 && d.frameMask && d.useMotionCamera && d.cameraEval;
+    if (!locked) return;
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    const ImU32 bar = IM_COL32(14, 17, 22, 255);
+    const float fx0 = r[0], fy0 = r[1], fx1 = r[0] + r[2], fy1 = r[1] + r[3];
+    dl->AddRectFilled(ImVec2(x0, y0), ImVec2(x1, fy0), bar);   // above
+    dl->AddRectFilled(ImVec2(x0, fy1), ImVec2(x1, y1), bar);   // below
+    dl->AddRectFilled(ImVec2(x0, fy0), ImVec2(fx0, fy1), bar); // left
+    dl->AddRectFilled(ImVec2(fx1, fy0), ImVec2(x1, fy1), bar); // right
+    dl->AddRect(ImVec2(fx0, fy0), ImVec2(fx1, fy1), IM_COL32(255, 255, 255, 90), 0.0f, 0, 1.0f);
+    const ImU32 guide = IM_COL32(255, 255, 255, 110);
+    if (d.showThirds) {
+        for (int i = 1; i <= 2; ++i) {
+            const float gx = fx0 + (fx1 - fx0) * i / 3.0f, gy = fy0 + (fy1 - fy0) * i / 3.0f;
+            dl->AddLine(ImVec2(gx, fy0), ImVec2(gx, fy1), guide, 1.0f);
+            dl->AddLine(ImVec2(fx0, gy), ImVec2(fx1, gy), guide, 1.0f);
+        }
+    }
+    if (d.showSafeFrames) {
+        // action safe 93 %, title safe 90 % (centred rectangles of the frame)
+        for (const float s : {0.93f, 0.90f}) {
+            const float mx = (fx1 - fx0) * (1.0f - s) * 0.5f, my = (fy1 - fy0) * (1.0f - s) * 0.5f;
+            dl->AddRect(ImVec2(fx0 + mx, fy0 + my), ImVec2(fx1 - mx, fy1 - my), guide, 0.0f, 0, 1.0f);
+        }
+    }
+    Text(dl, Font::Regular, size::Caption, ImVec2(fx0 + Dp(8.0f), fy1 - Dp(20.0f)), IM_COL32(255, 255, 255, 150), "16:9");
+}
+
 void App::DrawStudioCameraPath(float x0, float y0, float x1, float y1) {
     using namespace ui;
     StudioDoc& d = *studio_;
@@ -436,7 +627,16 @@ void App::DrawStudioCameraPath(float x0, float y0, float x1, float y1) {
     style.lineWidth = Dp(2.0f);
     style.keyRadius = Dp(4.0f);
     style.currentRadius = Dp(5.5f);
-    const float frustum = studioVp_.PixelWorldSize(cur.eye) * Dp(56.0f);
+    // The frustum is as deep as a fraction of the eye -> target distance: it scales with the scene, so the pyramid
+    // shows the real lens (a fixed screen-size icon could not). The render aspect is 16:9 (every video size).
+    const float toTarget = std::sqrt((cur.eye.x - cur.target.x) * (cur.eye.x - cur.target.x) +
+                                     (cur.eye.y - cur.target.y) * (cur.eye.y - cur.target.y) +
+                                     (cur.eye.z - cur.target.z) * (cur.eye.z - cur.target.z));
+    // MMD cameras often sit almost on their target (distance ~ 0), so the depth also follows how far the viewer is.
+    const float toViewer = std::sqrt((cur.eye.x - studioVp_.eye.x) * (cur.eye.x - studioVp_.eye.x) +
+                                     (cur.eye.y - studioVp_.eye.y) * (cur.eye.y - studioVp_.eye.y) +
+                                     (cur.eye.z - studioVp_.eye.z) * (cur.eye.z - studioVp_.eye.z));
+    const float frustum = std::clamp(std::max(toTarget * 0.45f, toViewer * 0.14f), 2.0f, std::max(2.0f, toViewer * 0.5f));
     // Camera cuts are jumps far longer than the neighbouring per-frame moves (MMD cuts are keys one frame apart, but
     // cameras keyed on every frame look the same): 8x the median step of the drawn stretch, at least 3 units.
     std::vector<float> steps;
@@ -452,7 +652,7 @@ void App::DrawStudioCameraPath(float x0, float y0, float x1, float y1) {
     }
     ImDrawList* dl = ImGui::GetWindowDrawList();
     dl->PushClipRect(ImVec2(x0, y0), ImVec2(x1, y1), true);
-    DrawCameraPath(dl, studioVp_, studioCamPath_.data() + p0, p1 - p0 + 1, studioCamKeys_.data() + k0, k1 - k0, selected, &cur, (x1 - x0) / std::max(1.0f, y1 - y0), frustum, cut, style);
+    DrawCameraPath(dl, studioVp_, studioCamPath_.data() + p0, p1 - p0 + 1, studioCamKeys_.data() + k0, k1 - k0, selected, &cur, kRenderAspect, frustum, cut, style);
     dl->PopClipRect();
 }
 

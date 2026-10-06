@@ -23,6 +23,8 @@ struct ScenePackage {
     std::vector<LoadedModelCpu> stageParts;   // empty when no stage selected
     std::shared_ptr<BoundMotion> motion;      // bound to character
     std::shared_ptr<CameraMotion> camera;     // null if the song has no camera vmd
+    std::vector<VmdLightKey> lightKeys;       // the camera vmd's light / self-shadow keys (may be empty)
+    std::vector<VmdShadowKey> shadowKeys;
     std::filesystem::path audioPath;          // may be empty
     float endFrame = 0;                       // max(motion end, camera end)
     // Render benchmark only: performers after `character`, each with its own bound dance

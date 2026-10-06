@@ -21,6 +21,8 @@ struct ViewProj {
     DirectX::XMFLOAT3 eye{};
     float fovY = 0.5f, nearZ = 0.5f, farZ = 3000.0f;
     float x0 = 0, y0 = 0, w = 1, h = 1;  // viewport rectangle in screen pixels
+    bool ortho = false;              // orthographic view (Studio quad view): orthoHeight world units across the height
+    float orthoHeight = 1.0f;
 
     // Screen position of `p`. False when p is behind the camera (clip w <= nearZ * 0.5). `depth` = view-space z.
     bool Project(const DirectX::XMFLOAT3& p, ImVec2& out, float* depth = nullptr) const;
@@ -30,6 +32,13 @@ struct ViewProj {
 };
 ViewProj MakeViewProj(const DirectX::XMFLOAT4X4& view, const DirectX::XMFLOAT3& eye, float fovY, float nearZ, float farZ,
                       float x0, float y0, float w, float h);
+// Orthographic counterpart for the quad view's top / front / left views (orthoHeight world units across the height).
+ViewProj MakeOrthoViewProj(const DirectX::XMFLOAT4X4& view, const DirectX::XMFLOAT3& eye, float orthoHeight, float nearZ,
+                           float farZ, float x0, float y0, float w, float h);
+// The quad view's orthographic cameras: kind 0 top (looking down, the model's front at the bottom), 1 front (looking
+// along +Z at a model that faces -Z), 2 left (from +X, the model's left side). The eye sits kOrthoEyeDistance away.
+inline constexpr float kOrthoEyeDistance = 1000.0f;
+void OrthoViewMatrix(int kind, const DirectX::XMFLOAT3& center, DirectX::XMFLOAT4X4* view, DirectX::XMFLOAT3* eye);
 
 // ---- bone overlay -----------------------------------------------------------------------------------------------
 

@@ -3,6 +3,7 @@
 // Writes MRT: 0 = linear HDR colour (alpha = coverage), 1 = oct view normal / reflectivity /
 // coverage, 2 = velocity (uv current - uv previous).
 #include "common.hlsli"
+#include "skinning.hlsli"
 #ifdef RT_SHADOWS
 #include "rt_common.hlsli"
 #endif
@@ -10,6 +11,8 @@
 cbuffer MaterialCB : register(b1) {
     float4 gDiffuse; float3 gSpecular; float gSpecularPower; float3 gAmbient; float gEdgeSize;
     float4 gEdgeColor; uint gFlags; float gReflectivity; uint2 _mp;
+    // material morph factors (ApplyTexFactor): texture, sphere, toon
+    float4 gTexMul; float4 gTexAdd; float4 gSphereMul; float4 gSphereAdd; float4 gToonMul; float4 gToonAdd;
 };
 #ifndef MAT_HAS_TEXTURE
 #define MAT_HAS_TEXTURE 1u
@@ -41,6 +44,7 @@ struct VSIn {
     float3 pos : POSITION; float3 nrm : NORMAL; float2 uv : TEXCOORD0;
     uint4 bones : BLENDINDICES; float4 weights : BLENDWEIGHT; float edge : TEXCOORD1;
     float3 morph : TEXCOORD2; float3 prevMorph : TEXCOORD3;
+    float3 sdefC : TEXCOORD4; float3 sdefR0 : TEXCOORD5; float3 sdefR1 : TEXCOORD6; float sdef : TEXCOORD7;
 };
 struct VSOut {
     float4 pos : SV_Position;
@@ -57,13 +61,16 @@ struct PSOut {
     float2 velocity : SV_Target2;
 };
 
-float4x4 SkinMatrix(VSIn v) {
-    return gBones[v.bones.x].m * v.weights.x + gBones[v.bones.y].m * v.weights.y
-         + gBones[v.bones.z].m * v.weights.z + gBones[v.bones.w].m * v.weights.w;
+// Current / previous frame skinning (skinning.hlsli: linear blend or SDEF).
+void Skin(VSIn v, out float3 wp, out float3 wn) {
+    SkinVertex(gBones[v.bones.x].m, gBones[v.bones.y].m, gBones[v.bones.z].m, gBones[v.bones.w].m, v.weights,
+               v.pos + v.morph, v.nrm, v.sdef, v.sdefC, v.sdefR0, v.sdefR1, wp, wn);
 }
-float4x4 PrevSkinMatrix(VSIn v) {
-    return gPrevBones[v.bones.x].m * v.weights.x + gPrevBones[v.bones.y].m * v.weights.y
-         + gPrevBones[v.bones.z].m * v.weights.z + gPrevBones[v.bones.w].m * v.weights.w;
+float3 PrevSkinPosition(VSIn v) {
+    float3 wp, wn;
+    SkinVertex(gPrevBones[v.bones.x].m, gPrevBones[v.bones.y].m, gPrevBones[v.bones.z].m, gPrevBones[v.bones.w].m,
+               v.weights, v.pos + v.prevMorph, v.nrm, v.sdef, v.sdefC, v.sdefR0, v.sdefR1, wp, wn);
+    return wp;
 }
 
 float2 Velocity(float4 curClip, float4 prevClip) {
@@ -74,12 +81,13 @@ float2 Velocity(float4 curClip, float4 prevClip) {
 
 VSOut VSMain(VSIn v) {
     VSOut o;
-    float4x4 m = SkinMatrix(v);
-    float4 wp = mul(float4(v.pos + v.morph, 1.0), m);
-    float4 pwp = mul(float4(v.pos + v.prevMorph, 1.0), PrevSkinMatrix(v));
+    float3 wp3, wn;
+    Skin(v, wp3, wn);
+    float4 wp = float4(wp3, 1.0);
+    float4 pwp = float4(PrevSkinPosition(v), 1.0);
     o.pos = mul(wp, gViewProj);
     o.worldPos = wp.xyz;
-    o.nrm = mul(v.nrm, (float3x3)m);
+    o.nrm = wn;
     o.uv = v.uv;
     o.curClip = mul(wp, gViewProjNoJitter);
     o.prevClip = mul(pwp, gPrevViewProjNoJitter);
@@ -225,9 +233,16 @@ PSOut PSMain(VSOut i, bool front : SV_IsFrontFace) {
     float3 L = -gLightDir;
     float3 V = normalize(gEyePos - i.worldPos);
 
-    float4 tex = (gFlags & MAT_HAS_TEXTURE) ? gTexture.Sample(gWrap, i.uv) : float4(1, 1, 1, 1);
+    float4 tex = (gFlags & MAT_HAS_TEXTURE) ? ApplyTexFactor(gTexture.Sample(gWrap, i.uv), gTexMul, gTexAdd)
+                                            : float4(1, 1, 1, 1);
     float alpha = gDiffuse.a * tex.a;
     if (alpha < 0.004) discard;
+
+    // Unlit (gShading 1): texture * material diffuse colour only, still alpha-tested/blended.
+    // The lit path below is untouched when gShading == 0.
+    if (gShading > 0.5 && gShading < 1.5)
+        return PackOutput(SrgbToLinear(saturate(gDiffuse.rgb * tex.rgb)), alpha, n, gReflectivity,
+                          i.curClip, i.prevClip);
 
     // MMD colour model (gamma space): saturate(ambient + diffuse * light) * texture * sphere.
     float3 lit = saturate(gAmbient + gDiffuse.rgb * gLightColor) * tex.rgb;
@@ -239,7 +254,7 @@ PSOut PSMain(VSOut i, bool front : SV_IsFrontFace) {
     if (gFlags & (MAT_SPHERE_MUL | MAT_SPHERE_ADD)) {
         float3 nv = normalize(mul(n, (float3x3)gView));
         float2 suv = nv.xy * float2(0.5, -0.5) + 0.5;
-        float3 s = gSphere.Sample(gClamp, suv).rgb;
+        float3 s = ApplyTexFactor3(gSphere.Sample(gClamp, suv).rgb, gSphereMul, gSphereAdd, (gFlags & MAT_SPHERE_MUL) ? 1.0 : 0.0);
         if (gFlags & MAT_SPHERE_MUL) { lit *= s; albedo *= s; } else { lit += s; }
     }
 
@@ -250,14 +265,14 @@ PSOut PSMain(VSOut i, bool front : SV_IsFrontFace) {
     if (gFlags & MAT_TOON_MAP) {
         // Project Sekai layout: the "toon" is the painted shadow colour at the same UV.
         // Hard terminator around N.L = 0 (their _SekaiShadowThreshold 0.5 on half-Lambert).
-        float3 shadowTex = gToon.Sample(gWrap, i.uv).rgb;
+        float3 shadowTex = ApplyTexFactor3(gToon.Sample(gWrap, i.uv).rgb, gToonMul, gToonAdd, 1.0);
         float term = sh * lerp(smoothstep(-0.03, 0.06, ndl), 1.0, flat);
         float3 light = saturate(gAmbient + gDiffuse.rgb * gLightColor);
         c = lerp(light * shadowTex, lit, term);
     } else if (gFlags & MAT_HAS_TOON) {
         // The cast shadow pushes the lookup toward the dark end of the material's own ramp.
         float v = lerp(1.0, saturate(0.5 - 0.5 * ndl), sh);
-        c = lit * gToon.Sample(gClamp, float2(0.5, v)).rgb;
+        c = lit * ApplyTexFactor3(gToon.Sample(gClamp, float2(0.5, v)).rgb, gToonMul, gToonAdd, 1.0);
     } else if (gFlags & MAT_STAGE) {
         c = lerp(lit * 0.62, lit, sh);
     } else {
@@ -311,10 +326,11 @@ float4 ExpandEdge(float4 clip, float3 wn, float px) {
 
 EdgeOut VSEdge(VSIn v) {
     EdgeOut o;
-    float4x4 m = SkinMatrix(v);
-    float4 wp = mul(float4(v.pos + v.morph, 1.0), m);
-    float4 pwp = mul(float4(v.pos + v.prevMorph, 1.0), PrevSkinMatrix(v));
-    float3 wn = normalize(mul(v.nrm, (float3x3)m));
+    float3 wp3, wn;
+    Skin(v, wp3, wn);
+    wn = normalize(wn);
+    float4 wp = float4(wp3, 1.0);
+    float4 pwp = float4(PrevSkinPosition(v), 1.0);
     float px = gEdgeSize * v.edge * gEdgeScale;                           // outline width in pixels
     o.pos = ExpandEdge(mul(wp, gViewProj), wn, px);
     o.curClip = ExpandEdge(mul(wp, gViewProjNoJitter), wn, px);
@@ -379,6 +395,14 @@ PSOut PSFloor(VSOut i) {
     float3 L = -gLightDir;
     float sh = SHADOW_TERM(i.worldPos, n, i.viewZ, i.pos.xy);
     float r = length(i.worldPos.xz);
+    // Unlit (gShading 1): flat albedo, no sun / hemispheric / punctual lighting; the fade into
+    // the sky at the edge stays so there is no visible horizon seam.
+    if (gShading > 0.5 && gShading < 1.5) {
+        float3 unlit = lerp(float3(0.80, 0.83, 0.86), gSkyHorizon * 0.95, smoothstep(40.0, 420.0, r));
+        float3 viewDir = normalize(i.worldPos - gEyePos);
+        unlit = lerp(unlit, SkyColor(float3(viewDir.x, 0.0, viewDir.z)), smoothstep(260.0, 820.0, r));
+        return PackOutput(SrgbToLinear(unlit), 1.0, n, 0.0, i.curClip, i.prevClip);
+    }
     // cyclorama: brightest under the performer, easing into the horizon colour
     float3 albedo = lerp(float3(0.80, 0.83, 0.86), gSkyHorizon * 0.95, smoothstep(40.0, 420.0, r));
     float3 sunLin = SrgbToLinear(gLightColor) * 1.65;
@@ -394,6 +418,32 @@ PSOut PSFloor(VSOut i) {
     return PackOutput(color, 1.0, n, reflectivity, i.curClip, i.prevClip);
 }
 
+// ---- wireframe shading mode (ViewShading::Wireframe, raster only) ------------------
+
+// The wireframe PSOs reuse the lit MRT layout (PSOut) and VSM's VSMain so the resolve /
+// composite passes run unchanged; the fill mode draws the triangle edges instead. Lines are
+// flat so nothing lights them, and alpha-tested/blended materials keep their coverage.
+
+PSOut PSWire(VSOut i) {
+    // dark grey on light, light grey on dark backgrounds read equally; HDR linear value < 1
+    // so the composite/post passes pass it through without blooming.
+    return PackOutput(float3(0.09, 0.10, 0.12), 1.0, float3(0, 1, 0), 0.0, i.curClip, i.prevClip);
+}
+
+// Flat background over a wireframe scene: same fullscreen far-plane draw as the sky, one colour.
+PSOut PSWireBg(SkyOut i) {
+    PSOut o;
+    // mid grey (linear); the post pass tonemaps it to a neutral paper-like value
+    o.color = float4(0.72, 0.74, 0.76, gTransparentBg > 0.5 ? 0.0 : 1.0);
+    o.normal = float4(0, 0, 0, 0);
+    o.velocity = float2(0, 0);   // uniform colour: no visible parallax, keep it temporally stable
+    return o;
+}
+
+PSOut PSWireFloor(VSOut i) {
+    return PackOutput(float3(0.16, 0.17, 0.19), 1.0, float3(0, 1, 0), 0.0, i.curClip, i.prevClip);
+}
+
 // ---- shadow map ------------------------------------------------------------------
 
 cbuffer ShadowCB : register(b2) { uint gCascade; };
@@ -401,7 +451,9 @@ struct ShadowOut { float4 pos : SV_Position; float2 uv : TEXCOORD0; };
 
 ShadowOut VSShadow(VSIn v) {
     ShadowOut o;
-    float4 wp = mul(float4(v.pos + v.morph, 1.0), SkinMatrix(v));
+    float3 wp3, wn;
+    Skin(v, wp3, wn);
+    float4 wp = float4(wp3, 1.0);
     o.pos = mul(wp, gCascade < 3 ? gShadowViewProj[gCascade] : gSpotViewProj[gCascade - 3]);
     o.uv = v.uv;
     return o;

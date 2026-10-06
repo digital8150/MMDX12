@@ -78,6 +78,12 @@ ModelInstance::ModelInstance(std::shared_ptr<const PmxModel> model) : model_(std
     morphWeight_.assign(model_->morphs.size(), 0.0f);
     appliedMorphWeight_.assign(model_->morphs.size(), 0.0f);
     morphDelta_.assign(model_->vertices.size(), XMFLOAT3{0, 0, 0});
+    for (const PmxMorph& m : model_->morphs)
+        if (m.type == PmxMorphType::Material && !m.materialOffsets.empty()) {
+            appliedMaterialWeight_.assign(model_->morphs.size(), 0.0f);
+            RebuildMaterialFactors();
+            break;
+        }
     skin_.resize(std::max<size_t>(n, 1));
     XMFLOAT4X4 identity;
     XMStoreFloat4x4(&identity, XMMatrixIdentity());
@@ -159,8 +165,74 @@ void ModelInstance::AddMorph(int morph, float weight, int depth) {
             XMStoreFloat4(&s.morphR, XMQuaternionMultiply(XMLoadFloat4(&s.morphR), q));
         }
         break;
+    case PmxMorphType::Material:
+        // Accumulated like vertex morphs; the factors are rebuilt in ApplyMorphs when they change.
+        if (!pendingMaterialWeight_.empty()) pendingMaterialWeight_[morph] += weight;
+        break;
     default:
-        break;  // material / UV / flip / impulse morphs: not supported in the MVP
+        break;  // UV / flip / impulse morphs: not supported
+    }
+}
+
+void ModelInstance::RebuildMaterialFactors() {
+    const size_t n = model_->materials.size();
+    PmxMorph::MaterialOffset one{}, zero{};
+    one.diffuse = {1, 1, 1, 1};
+    one.specular = {1, 1, 1};
+    one.specularPower = 1;
+    one.ambient = {1, 1, 1};
+    one.edgeColor = {1, 1, 1, 1};
+    one.edgeSize = 1;
+    one.textureFactor = one.sphereFactor = one.toonFactor = {1, 1, 1, 1};
+    materialMul_.assign(n, one);
+    materialAdd_.assign(n, zero);
+    const auto mul4 = [](XMFLOAT4& a, const XMFLOAT4& o, float w) {
+        a.x *= 1.0f + (o.x - 1.0f) * w; a.y *= 1.0f + (o.y - 1.0f) * w;
+        a.z *= 1.0f + (o.z - 1.0f) * w; a.w *= 1.0f + (o.w - 1.0f) * w;
+    };
+    const auto mul3 = [](XMFLOAT3& a, const XMFLOAT3& o, float w) {
+        a.x *= 1.0f + (o.x - 1.0f) * w; a.y *= 1.0f + (o.y - 1.0f) * w; a.z *= 1.0f + (o.z - 1.0f) * w;
+    };
+    const auto add4 = [](XMFLOAT4& a, const XMFLOAT4& o, float w) {
+        a.x += o.x * w; a.y += o.y * w; a.z += o.z * w; a.w += o.w * w;
+    };
+    const auto add3 = [](XMFLOAT3& a, const XMFLOAT3& o, float w) { a.x += o.x * w; a.y += o.y * w; a.z += o.z * w; };
+    for (size_t i = 0; i < appliedMaterialWeight_.size(); ++i) {
+        const float w = appliedMaterialWeight_[i];
+        if (w == 0.0f) continue;
+        for (const PmxMorph::MaterialOffset& o : model_->morphs[i].materialOffsets) {
+            size_t first = 0, last = n;  // -1: every material
+            if (o.material >= 0) {
+                if ((size_t)o.material >= n) continue;
+                first = (size_t)o.material;
+                last = first + 1;
+            }
+            for (size_t m = first; m < last; ++m) {
+                if (o.operation == 0) {
+                    PmxMorph::MaterialOffset& a = materialMul_[m];
+                    mul4(a.diffuse, o.diffuse, w);
+                    mul3(a.specular, o.specular, w);
+                    a.specularPower *= 1.0f + (o.specularPower - 1.0f) * w;
+                    mul3(a.ambient, o.ambient, w);
+                    mul4(a.edgeColor, o.edgeColor, w);
+                    a.edgeSize *= 1.0f + (o.edgeSize - 1.0f) * w;
+                    mul4(a.textureFactor, o.textureFactor, w);
+                    mul4(a.sphereFactor, o.sphereFactor, w);
+                    mul4(a.toonFactor, o.toonFactor, w);
+                } else {
+                    PmxMorph::MaterialOffset& a = materialAdd_[m];
+                    add4(a.diffuse, o.diffuse, w);
+                    add3(a.specular, o.specular, w);
+                    a.specularPower += o.specularPower * w;
+                    add3(a.ambient, o.ambient, w);
+                    add4(a.edgeColor, o.edgeColor, w);
+                    a.edgeSize += o.edgeSize * w;
+                    add4(a.textureFactor, o.textureFactor, w);
+                    add4(a.sphereFactor, o.sphereFactor, w);
+                    add4(a.toonFactor, o.toonFactor, w);
+                }
+            }
+        }
     }
 }
 
@@ -170,8 +242,14 @@ void ModelInstance::ApplyMorphs() {
         b.morphR = QuatIdentity();
     }
     pendingVertexWeight_.assign(morphWeight_.size(), 0.0f);
+    if (!appliedMaterialWeight_.empty()) pendingMaterialWeight_.assign(morphWeight_.size(), 0.0f);
     for (size_t i = 0; i < morphWeight_.size(); ++i)
         if (morphWeight_[i] != 0.0f) AddMorph((int)i, morphWeight_[i], 0);
+    if (!appliedMaterialWeight_.empty() && pendingMaterialWeight_ != appliedMaterialWeight_) {
+        appliedMaterialWeight_.swap(pendingMaterialWeight_);
+        RebuildMaterialFactors();
+        ++materialVersion_;
+    }
 
     if (pendingVertexWeight_ == appliedMorphWeight_) return;
     const auto& morphs = model_->morphs;

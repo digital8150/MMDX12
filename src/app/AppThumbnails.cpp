@@ -45,6 +45,7 @@ bool App::RenderThumbnail(ThumbnailKind kind, std::vector<LoadedModelCpu>& model
     for (size_t i = 0; i < gpus.size(); ++i) {
         gpus[i]->UpdateSkinning(0, instances[i]->SkinMatrices());
         gpus[i]->UpdateMorphs(0, instances[i]->VertexMorphDeltas(), instances[i]->MorphVersion());
+        gpus[i]->UpdateMaterials(0, instances[i]->MaterialMul(), instances[i]->MaterialAdd(), instances[i]->MaterialVersion());
         view.models.push_back(gpus[i].get());
         const XMFLOAT3 a = gpus[i]->BoundsMin(), b = gpus[i]->BoundsMax();
         lo = {std::min(lo.x, a.x), std::min(lo.y, a.y), std::min(lo.z, a.z)};

@@ -195,4 +195,13 @@ struct PmxProbe {
 };
 bool ProbePmx(const std::filesystem::path& path, PmxProbe& out, std::string* error = nullptr);
 
+// PMD (MikuMikuDance 1.x) converted to the PMX representation (asset/PmdLoader.cpp). The probe
+// loads the whole file (PMD files are small).
+bool LoadPmd(const std::filesystem::path& path, PmxModel& out, std::string* error = nullptr);
+bool ProbePmd(const std::filesystem::path& path, PmxProbe& out, std::string* error = nullptr);
+
+// DirectX .x mesh (MMD accessory; text or binary, 32/64-bit floats) as a static model with one root
+// bone (asset/XLoader.cpp). Positions are in the file's units, which MMD uses as MMD units.
+bool LoadXFile(const std::filesystem::path& path, PmxModel& out, std::string* error = nullptr);
+
 } // namespace mmdx

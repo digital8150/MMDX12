@@ -13,16 +13,19 @@
 
 namespace mmdx {
 
-enum class ModelFormat { Unknown, Pmx, Gltf, Vrm, Fbx, Obj };
+enum class ModelFormat { Unknown, Pmx, Gltf, Vrm, Fbx, Obj, Pmd, X };
 
 ModelFormat ModelFormatFromPath(const std::filesystem::path& p);
-const char* ModelFormatName(ModelFormat f);  // "PMX", "glTF", "VRM", "FBX", "OBJ"
+const char* ModelFormatName(ModelFormat f);  // "PMX", "glTF", "VRM", "FBX", "OBJ", "PMD", "X"
+// MMD's own model formats (PMX, PMD): full rigs read natively, classified by their bone names.
+inline bool IsMmdModelFormat(ModelFormat f) { return f == ModelFormat::Pmx || f == ModelFormat::Pmd; }
 inline bool IsModelFile(const std::filesystem::path& p) { return ModelFormatFromPath(p) != ModelFormat::Unknown; }
 
 // Prop: baked like a stage but kept where the file puts it (no move onto a floor): accessories in the Studio.
 enum class ModelRole { Character, Stage, Prop };
 
-// Full load. For PMX the role is ignored.
+// Full load. For PMX and PMD the role is ignored. DirectX .x (MMD accessories) loads as a static
+// model with one root bone, placed where the file puts it, whatever the role.
 bool LoadModelFile(const std::filesystem::path& path, ModelRole role, PmxModel& out, std::string* error = nullptr);
 
 // What the library scanner needs to classify a non-PMX file. Loads the file (geometry

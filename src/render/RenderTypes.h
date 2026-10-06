@@ -17,6 +17,11 @@ enum class UpscalerQuality : uint8_t { NativeAA = 0, Quality, Balanced, Performa
 // shadows, ambient occlusion and reflections. PathTraced: compute path tracer + denoiser
 // (no MMD outlines). Both DXR paths need raytracing tier 1.1; otherwise Raster is used.
 enum class RenderPath : uint8_t { Raster = 0, RayTraced, PathTraced };
+inline constexpr uint32_t kMaxExtraViews = 3;
+
+// Shading mode of the real-time raster path (Studio editing views). RayTraced / PathTraced
+// ignore the setting and always render Lit.
+enum class ViewShading : uint8_t { Lit = 0, Unlit, Wireframe };
 
 struct RenderSettings {
     uint32_t msaaSamples = 4;      // 1/2/4/8, clamped to what the device supports (1 with an upscaler or PathTraced)
@@ -25,6 +30,7 @@ struct RenderSettings {
     uint32_t fixedWidth = 1920, fixedHeight = 1080;
     bool vsync = true;
     bool drawEdges = true;
+    ViewShading shading = ViewShading::Lit;  // Raster path only; RayTraced/PathTraced stay Lit
     UpscalerKind upscaler = UpscalerKind::None;
     UpscalerQuality upscalerQuality = UpscalerQuality::Quality;
     RenderPath renderPath = RenderPath::Raster;
@@ -139,8 +145,20 @@ struct OfflineSceneProps {
     float floorReflectivity = 0.42f;
 };
 
+// An extra view of the same scene drawn into a rectangle of the render target (Studio quad view). Raster only, and
+// always drawn flat (Unlit / Wireframe): the view is orthographic, `height` world units from bottom to top.
+struct ExtraView {
+    float rect[4] = {0, 0, 0.5f, 0.5f};  // x, y, w, h as fractions of the render target (origin top left)
+    DirectX::XMFLOAT4X4 view{};          // LH view matrix
+    float height = 40.0f;
+    float nearZ = 0.1f, farZ = 4000.0f;
+};
+
 struct FrameView {
     CameraParams camera;
+    // Where `camera` is drawn (fractions of the render target). With extraViews it is one quadrant of the target.
+    float mainRect[4] = {0, 0, 1, 1};
+    std::vector<ExtraView> extraViews;  // at most kMaxExtraViews; non-empty: flat shading, no TAA / upscaler
     LightParams light;
     std::vector<GpuModel*> models;  // drawn in this order (stage parts first, then characters)
     bool studioFloor = false;       // draw the procedural studio floor at y = 0

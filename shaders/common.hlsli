@@ -3,6 +3,17 @@
 #define MMDX_COMMON_HLSLI
 #pragma pack_matrix(row_major)
 
+// PMX material morph texture factors, as MMD's default shader (full.fx) applies them:
+// rgb = lerp(neutral, rgb * mul + add, mul.a + add.a); the factor alphas weight the effect and the
+// texture alpha is not changed. Identity: mul 1, add 0. neutral = 1 (texture, toon, multiply
+// sphere) or 0 (additive sphere), so a factor alpha of 0 turns the map off.
+float3 ApplyTexFactor3(float3 c, float4 mulF, float4 addF, float neutral) {
+    return saturate(lerp(neutral.xxx, c * mulF.rgb + addF.rgb, mulF.a + addF.a));
+}
+float4 ApplyTexFactor(float4 c, float4 mulF, float4 addF) {
+    return float4(ApplyTexFactor3(c.rgb, mulF, addF, 1.0), c.a);
+}
+
 cbuffer SceneCB : register(b0) {
     float4x4 gView;
     float4x4 gProj;
@@ -24,7 +35,7 @@ cbuffer SceneCB : register(b0) {
     float3 gRimColor;    float gFog;
     float2 gViewportSize; float gEdgeScale; float gTransparentBg;
     float2 gJitterUv;    float2 gInvViewportSize;
-    float gNearZ; float gFarZ; float gFrameIndex; float _cpad;
+    float gNearZ; float gFarZ; float gFrameIndex; float gShading;   // shading: 0 Lit, 1 Unlit, 2 Wireframe
     float4x4 gPrevInvView;   // offline renderer: camera-to-world at shutter open
     // offline renderer scene extras (render benchmark): glass box, softboxes, floor
     float4 gGlassCenter;     // xyz, w = enabled

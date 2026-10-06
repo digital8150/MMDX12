@@ -472,21 +472,21 @@ float3 ToonSun(Surf s, float3 V, float3 sh, float skin) {
     if (g.flags & (MAT_SPHERE_MUL | MAT_SPHERE_ADD)) {
         float3 nv = normalize(mul(n, (float3x3)gView));
         float2 suv = nv.xy * float2(0.5, -0.5) + 0.5;
-        float3 sp = gBindlessTex[NonUniformResourceIndex(g.sphereSrv)].SampleLevel(gLinear, suv, 0).rgb;
+        float3 sp = ApplyTexFactor3(gBindlessTex[NonUniformResourceIndex(g.sphereSrv)].SampleLevel(gLinear, suv, 0).rgb, g.sphereMul, g.sphereAdd, (g.flags & MAT_SPHERE_MUL) ? 1.0 : 0.0);
         if (g.flags & MAT_SPHERE_MUL) lit *= sp; else lit += sp;
     }
     float ndl = dot(n, L);
     float flat = s.flat ? 1.0 : 0.0;
     float3 c;
     if (g.flags & MAT_TOON_MAP) {
-        float3 shadowTex = gBindlessTex[NonUniformResourceIndex(g.toonSrv)].SampleLevel(gRtWrap, s.uv, 0).rgb;
+        float3 shadowTex = ApplyTexFactor3(gBindlessTex[NonUniformResourceIndex(g.toonSrv)].SampleLevel(gRtWrap, s.uv, 0).rgb, g.toonMul, g.toonAdd, 1.0);
         float3 term = sh * lerp(smoothstep(-0.03, 0.06, ndl), 1.0, flat);
         c = lerp(saturate(g.ambient + g.diffuse.rgb * gLightColor) * shadowTex, lit, term);
     } else if (g.flags & MAT_HAS_TOON) {
         // cast shadows push the lookup to the dark end of the ramp (per channel for skin)
         Texture2D toon = gBindlessTex[NonUniformResourceIndex(g.toonSrv)];
-        float3 rampLit = toon.SampleLevel(gLinear, float2(0.5, saturate(0.5 - 0.5 * ndl)), 0).rgb;
-        float3 rampShadow = toon.SampleLevel(gLinear, float2(0.5, 1.0), 0).rgb;
+        float3 rampLit = ApplyTexFactor3(toon.SampleLevel(gLinear, float2(0.5, saturate(0.5 - 0.5 * ndl)), 0).rgb, g.toonMul, g.toonAdd, 1.0);
+        float3 rampShadow = ApplyTexFactor3(toon.SampleLevel(gLinear, float2(0.5, 1.0), 0).rgb, g.toonMul, g.toonAdd, 1.0);
         c = lit * lerp(rampShadow, rampLit, sh);
     } else {
         c = lit;

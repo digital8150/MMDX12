@@ -23,6 +23,10 @@ const D3D12_INPUT_ELEMENT_DESC kMmdLayout[] = {
     {"TEXCOORD", 1, DXGI_FORMAT_R32_FLOAT, 0, 56, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
     {"TEXCOORD", 2, DXGI_FORMAT_R32G32B32_FLOAT, 1, 0, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
     {"TEXCOORD", 3, DXGI_FORMAT_R32G32B32_FLOAT, 2, 0, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
+    {"TEXCOORD", 4, DXGI_FORMAT_R32G32B32_FLOAT, 3, 0, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},   // GpuSdef
+    {"TEXCOORD", 5, DXGI_FORMAT_R32G32B32_FLOAT, 3, 12, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
+    {"TEXCOORD", 6, DXGI_FORMAT_R32G32B32_FLOAT, 3, 24, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
+    {"TEXCOORD", 7, DXGI_FORMAT_R32_FLOAT, 3, 36, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
 };
 
 bool CreateRootSignature(ID3D12Device* device, const CD3DX12_ROOT_SIGNATURE_DESC& desc,
@@ -39,9 +43,9 @@ bool CreateRootSignature(ID3D12Device* device, const CD3DX12_ROOT_SIGNATURE_DESC
 }
 
 void BindModelBuffers(ID3D12GraphicsCommandList* cmd, const GpuModel& model, uint64_t frame) {
-    D3D12_VERTEX_BUFFER_VIEW vbs[3] = {model.VertexBufferView(), model.MorphBufferView(frame),
-                                       model.PrevMorphBufferView(frame)};
-    cmd->IASetVertexBuffers(0, 3, vbs);
+    D3D12_VERTEX_BUFFER_VIEW vbs[4] = {model.VertexBufferView(), model.MorphBufferView(frame),
+                                       model.PrevMorphBufferView(frame), model.SdefBufferView()};
+    cmd->IASetVertexBuffers(0, 4, vbs);
     cmd->IASetIndexBuffer(&model.IndexBufferView());
 }
 
@@ -217,7 +221,12 @@ bool ScenePass::CreatePipelines(Dx12Context& ctx, const std::filesystem::path& s
     ComPtr<ID3DBlob> psSky = CompileShader(file, "PSSky", "ps_5_1");
     ComPtr<ID3DBlob> vsFloor = CompileShader(file, "VSFloor", "vs_5_1");
     ComPtr<ID3DBlob> psFloor = CompileShader(file, "PSFloor", "ps_5_1");
-    if (!vs || !ps || !vsEdge || !psEdge || !vsSky || !psSky || !vsFloor || !psFloor) return false;
+    ComPtr<ID3DBlob> psWire = CompileShader(file, "PSWire", "ps_5_1");
+    ComPtr<ID3DBlob> psWireBg = CompileShader(file, "PSWireBg", "ps_5_1");
+    ComPtr<ID3DBlob> psWireFloor = CompileShader(file, "PSWireFloor", "ps_5_1");
+    if (!vs || !ps || !vsEdge || !psEdge || !vsSky || !psSky || !vsFloor || !psFloor || !psWire ||
+        !psWireBg || !psWireFloor)
+        return false;
 
     D3D12_GRAPHICS_PIPELINE_STATE_DESC pso{};
     pso.InputLayout = {kMmdLayout, (UINT)std::size(kMmdLayout)};
@@ -303,21 +312,47 @@ bool ScenePass::CreatePipelines(Dx12Context& ctx, const std::filesystem::path& s
     if (!CheckHr(device->CreateGraphicsPipelineState(&pso, IID_PPV_ARGS(&psoEdge_)), "ScenePass: PSO edge"))
         return false;
 
+    // Wireframe model variants (D3D12_FILL_MODE_WIREFRAME, flat PSWire): same MRT layout and
+    // blend as the lit PSO so the resolve / composite passes run unchanged. Line width is fixed
+    // at 1 px (the rasterizer cannot draw wider lines); the vertex stage is VSMain (same skinning).
+    // Built after the edge PSOs, from the same `pso` desc (the RT block above already copied it).
+    pso.VS = {vs->GetBufferPointer(), vs->GetBufferSize()};
+    pso.PS = {psWire->GetBufferPointer(), psWire->GetBufferSize()};
+    pso.RasterizerState.FillMode = D3D12_FILL_MODE_WIREFRAME;
+    pso.RasterizerState.CullMode = D3D12_CULL_MODE_BACK;
+    if (!CheckHr(device->CreateGraphicsPipelineState(&pso, IID_PPV_ARGS(&psoWireBack_)), "ScenePass: PSO wire back"))
+        return false;
+    pso.RasterizerState.CullMode = D3D12_CULL_MODE_NONE;
+    if (!CheckHr(device->CreateGraphicsPipelineState(&pso, IID_PPV_ARGS(&psoWireNoCull_)), "ScenePass: PSO wire no cull"))
+        return false;
+
     // Sky: fullscreen at the far plane, drawn first, no depth test/write, opaque.
+    // SOLID: the desc inherits the wireframe fill mode from the wire block above.
     D3D12_GRAPHICS_PIPELINE_STATE_DESC sky = pso;
     sky.InputLayout = {nullptr, 0};
     sky.VS = {vsSky->GetBufferPointer(), vsSky->GetBufferSize()};
     sky.PS = {psSky->GetBufferPointer(), psSky->GetBufferSize()};
     sky.RasterizerState.CullMode = D3D12_CULL_MODE_NONE;
+    sky.RasterizerState.FillMode = D3D12_FILL_MODE_SOLID;
     sky.BlendState = CD3DX12_BLEND_DESC(D3D12_DEFAULT);
     sky.DepthStencilState.DepthEnable = FALSE;
     sky.DepthStencilState.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ZERO;
     if (!CheckHr(device->CreateGraphicsPipelineState(&sky, IID_PPV_ARGS(&psoSky_)), "ScenePass: PSO sky"))
         return false;
+    // Flat background (wireframe): the same draw with one flat colour.
+    sky.PS = {psWireBg->GetBufferPointer(), psWireBg->GetBufferSize()};
+    if (!CheckHr(device->CreateGraphicsPipelineState(&sky, IID_PPV_ARGS(&psoFlatBg_)), "ScenePass: PSO flat bg"))
+        return false;
 
     floor.VS = {vsFloor->GetBufferPointer(), vsFloor->GetBufferSize()};
     floor.PS = {psFloor->GetBufferPointer(), psFloor->GetBufferSize()};
-    return CheckHr(device->CreateGraphicsPipelineState(&floor, IID_PPV_ARGS(&psoFloor_)), "ScenePass: PSO floor");
+    bool okFloor = CheckHr(device->CreateGraphicsPipelineState(&floor, IID_PPV_ARGS(&psoFloor_)), "ScenePass: PSO floor");
+    // Wireframe floor: the two-triangle quad as its 5 edges, flat colour.
+    floor.PS = {psWireFloor->GetBufferPointer(), psWireFloor->GetBufferSize()};
+    floor.RasterizerState.FillMode = D3D12_FILL_MODE_WIREFRAME;
+    okFloor = okFloor &&
+              CheckHr(device->CreateGraphicsPipelineState(&floor, IID_PPV_ARGS(&psoWireFloor_)), "ScenePass: PSO wire floor");
+    return okFloor;
 }
 
 void ScenePass::Execute(PassContext& pc) {
@@ -338,14 +373,9 @@ void ScenePass::Execute(PassContext& pc) {
     cmd->ClearDepthStencilView(dsv, D3D12_CLEAR_FLAG_DEPTH, 1.0f, 0, 0, nullptr);
     cmd->OMSetRenderTargets(3, rtvs, FALSE, &dsv);
 
-    D3D12_VIEWPORT viewport{0.0f, 0.0f, (float)t.width, (float)t.height, 0.0f, 1.0f};
-    D3D12_RECT scissor{0, 0, (LONG)t.width, (LONG)t.height};
-    cmd->RSSetViewports(1, &viewport);
-    cmd->RSSetScissorRects(1, &scissor);
-
     const bool rt = pc.path == RenderPath::RayTraced && pc.rt && psoCullBackRt_;
+    const bool wire = pc.path == RenderPath::Raster && pc.settings.shading == ViewShading::Wireframe;
     cmd->SetGraphicsRootSignature(rootSig_.Get());
-    cmd->SetGraphicsRootConstantBufferView(0, pc.sceneConstants);
     cmd->SetGraphicsRootDescriptorTable(5, pc.transient.SrvTable(ctx, {&t.shadowMap}));
     cmd->SetGraphicsRootDescriptorTable(11, pc.transient.SrvTable(ctx, {&t.spotShadowMap}));
     cmd->SetGraphicsRootShaderResourceView(6, pc.lights);
@@ -357,40 +387,76 @@ void ScenePass::Execute(PassContext& pc) {
     }
     cmd->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
 
-    if (!pc.settings.transparentBackground) {
-        cmd->SetPipelineState(psoSky_.Get());
-        cmd->DrawInstanced(3, 1, 0, 0);
-    }
-    if (pc.view.studioFloor) {
-        cmd->SetPipelineState(rt ? psoFloorRt_.Get() : psoFloor_.Get());
-        cmd->DrawInstanced(6, 1, 0, 0);
+    // The camera view, plus (Studio quad view) the orthographic extra views: the same scene drawn again into other
+    // rectangles of the target, each with its own SceneConstants. Extra views are flat and have a flat background.
+    struct ViewDraw {
+        float rect[4];
+        D3D12_GPU_VIRTUAL_ADDRESS constants;
+        bool ortho;
+    };
+    ViewDraw draws[1 + kMaxExtraViews];
+    uint32_t drawCount = 0;
+    draws[drawCount++] = {{pc.view.mainRect[0], pc.view.mainRect[1], pc.view.mainRect[2], pc.view.mainRect[3]}, pc.sceneConstants, false};
+    const uint32_t extras = pc.path == RenderPath::Raster ? (uint32_t)std::min<size_t>(pc.view.extraViews.size(), kMaxExtraViews) : 0u;
+    for (uint32_t e = 0; e < extras; ++e) {
+        const ExtraView& ev = pc.view.extraViews[e];
+        draws[drawCount++] = {{ev.rect[0], ev.rect[1], ev.rect[2], ev.rect[3]}, pc.extraSceneConstants[e], true};
     }
 
-    for (GpuModel* model : pc.view.models) {
-        if (!model) continue;
-        BindModelBuffers(cmd, *model, pc.frame);
-        cmd->SetGraphicsRootShaderResourceView(2, model->BoneBuffer(pc.frame));
-        cmd->SetGraphicsRootShaderResourceView(4, model->PrevBoneBuffer(pc.frame));
+    for (uint32_t v = 0; v < drawCount; ++v) {
+        const ViewDraw& vd = draws[v];
+        const float px = std::floor(vd.rect[0] * (float)t.width), py = std::floor(vd.rect[1] * (float)t.height);
+        const float pw = std::floor((vd.rect[0] + vd.rect[2]) * (float)t.width) - px;
+        const float ph = std::floor((vd.rect[1] + vd.rect[3]) * (float)t.height) - py;
+        D3D12_VIEWPORT viewport{px, py, pw, ph, 0.0f, 1.0f};
+        D3D12_RECT scissor{(LONG)px, (LONG)py, (LONG)(px + pw), (LONG)(py + ph)};
+        cmd->RSSetViewports(1, &viewport);
+        cmd->RSSetScissorRects(1, &scissor);
+        cmd->SetGraphicsRootConstantBufferView(0, vd.constants);
 
-        for (const GpuModel::Material& m : model->Materials()) {
-            if (m.indexCount == 0) continue;
-            cmd->SetPipelineState(m.doubleSided ? (rt ? psoNoCullRt_.Get() : psoNoCull_.Get())
-                                                : (rt ? psoCullBackRt_.Get() : psoCullBack_.Get()));
-            cmd->SetGraphicsRootConstantBufferView(1, m.constants);
-            cmd->SetGraphicsRootDescriptorTable(3, ctx.SrvHeap().Gpu(m.srvTable));
-            cmd->DrawIndexedInstanced(m.indexCount, 1, m.indexStart, 0, 0);
-            pc.stats.drawCalls++;
-            pc.stats.triangles += m.indexCount / 3;
+        if (!pc.settings.transparentBackground) {
+            // Wireframe / ortho views: one flat colour instead of the sky gradient (which needs a perspective camera)
+            cmd->SetPipelineState((wire || vd.ortho) ? psoFlatBg_.Get() : psoSky_.Get());
+            cmd->DrawInstanced(3, 1, 0, 0);
+        }
+        // the procedural floor: lit / wire in the camera view; an ortho view shows it as lines only when wireframe
+        // (a solid plane would hide everything in the top view)
+        if (pc.view.studioFloor && (!vd.ortho || wire)) {
+            cmd->SetPipelineState(wire ? psoWireFloor_.Get() : (rt ? psoFloorRt_.Get() : psoFloor_.Get()));
+            cmd->DrawInstanced(6, 1, 0, 0);
         }
 
-        if (pc.settings.drawEdges) {
-            cmd->SetPipelineState(psoEdge_.Get());
+        for (GpuModel* model : pc.view.models) {
+            if (!model) continue;
+            BindModelBuffers(cmd, *model, pc.frame);
+            cmd->SetGraphicsRootShaderResourceView(2, model->BoneBuffer(pc.frame));
+            cmd->SetGraphicsRootShaderResourceView(4, model->PrevBoneBuffer(pc.frame));
+
             for (const GpuModel::Material& m : model->Materials()) {
-                if (!m.drawEdge || m.indexCount == 0) continue;
+                if (m.indexCount == 0 || !m.visible) continue;   // MMD skips materials with alpha 0
+                ID3D12PipelineState* want;
+                if (wire)
+                    want = m.doubleSided ? psoWireNoCull_.Get() : psoWireBack_.Get();
+                else
+                    want = m.doubleSided ? (rt ? psoNoCullRt_.Get() : psoNoCull_.Get())
+                                         : (rt ? psoCullBackRt_.Get() : psoCullBack_.Get());
+                cmd->SetPipelineState(want);
                 cmd->SetGraphicsRootConstantBufferView(1, m.constants);
                 cmd->SetGraphicsRootDescriptorTable(3, ctx.SrvHeap().Gpu(m.srvTable));
                 cmd->DrawIndexedInstanced(m.indexCount, 1, m.indexStart, 0, 0);
                 pc.stats.drawCalls++;
+                pc.stats.triangles += m.indexCount / 3;
+            }
+
+            if (pc.settings.drawEdges && !wire) {   // wireframe: the model is drawn as edges already
+                cmd->SetPipelineState(psoEdge_.Get());
+                for (const GpuModel::Material& m : model->Materials()) {
+                    if (!m.drawEdge || m.indexCount == 0) continue;
+                    cmd->SetGraphicsRootConstantBufferView(1, m.constants);
+                    cmd->SetGraphicsRootDescriptorTable(3, ctx.SrvHeap().Gpu(m.srvTable));
+                    cmd->DrawIndexedInstanced(m.indexCount, 1, m.indexStart, 0, 0);
+                    pc.stats.drawCalls++;
+                }
             }
         }
     }

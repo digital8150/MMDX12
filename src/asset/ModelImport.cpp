@@ -775,6 +775,8 @@ ModelFormat ModelFormatFromPath(const std::filesystem::path& p) {
     if (ext == ".vrm") return ModelFormat::Vrm;
     if (ext == ".fbx") return ModelFormat::Fbx;
     if (ext == ".obj") return ModelFormat::Obj;
+    if (ext == ".pmd") return ModelFormat::Pmd;
+    if (ext == ".x") return ModelFormat::X;
     return ModelFormat::Unknown;
 }
 
@@ -785,12 +787,23 @@ const char* ModelFormatName(ModelFormat f) {
     case ModelFormat::Vrm: return "VRM";
     case ModelFormat::Fbx: return "FBX";
     case ModelFormat::Obj: return "OBJ";
+    case ModelFormat::Pmd: return "PMD";
+    case ModelFormat::X: return "X";
     default: return "?";
     }
 }
 
 bool LoadModelFile(const std::filesystem::path& path, ModelRole role, PmxModel& out, std::string* error) {
-    if (ModelFormatFromPath(path) == ModelFormat::Pmx) return LoadPmx(path, out, error);
+    switch (ModelFormatFromPath(path)) {
+    case ModelFormat::Pmx: return LoadPmx(path, out, error);
+    case ModelFormat::Pmd: return LoadPmd(path, out, error);
+    case ModelFormat::X:
+        if (!LoadXFile(path, out, error)) return false;
+        LOG_INFO("loaded %s: %zu vertices, %zu materials", PathToUtf8(path.filename()).c_str(), out.vertices.size(),
+                 out.materials.size());
+        return true;
+    default: break;
+    }
     try {
         out = PmxModel{};
         ImpScene scene;
@@ -823,6 +836,30 @@ bool LoadModelFile(const std::filesystem::path& path, ModelRole role, PmxModel& 
 }
 
 bool ProbeModelFile(const std::filesystem::path& path, ModelProbe& out, std::string* error) {
+    const ModelFormat format = ModelFormatFromPath(path);
+    if (format == ModelFormat::Pmx || format == ModelFormat::Pmd || format == ModelFormat::X) {
+        // native formats: load the file (the library scanner reads PMX/PMD bone names with ProbePmx/ProbePmd)
+        out = ModelProbe{};
+        PmxModel m;
+        if (!LoadModelFile(path, ModelRole::Prop, m, error)) return false;
+        out.name = format == ModelFormat::X ? std::string() : m.name;
+        out.vertexCount = (uint32_t)m.vertices.size();
+        out.materialCount = (uint32_t)m.materials.size();
+        out.boneCount = (uint32_t)m.bones.size();
+        out.skinned = format != ModelFormat::X;
+        out.morphed = !m.morphs.empty();
+        XMFLOAT3 lo{1e30f, 1e30f, 1e30f}, hi{-1e30f, -1e30f, -1e30f};
+        for (const PmxVertex& v : m.vertices) {
+            lo = {std::min(lo.x, v.position.x), std::min(lo.y, v.position.y), std::min(lo.z, v.position.z)};
+            hi = {std::max(hi.x, v.position.x), std::max(hi.y, v.position.y), std::max(hi.z, v.position.z)};
+        }
+        if (!m.vertices.empty()) {
+            out.heightMeters = (hi.y - lo.y) / kUnitsPerMeter;
+            out.extentMeters = std::max({hi.x - lo.x, hi.y - lo.y, hi.z - lo.z}) / kUnitsPerMeter;
+        }
+        out.humanoidNote = format == ModelFormat::X ? "static accessory (.x)" : "MMD model";
+        return true;
+    }
     try {
         out = ModelProbe{};
         ImpScene scene;

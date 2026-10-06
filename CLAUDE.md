@@ -113,6 +113,25 @@ progress.md is the session log. Read its latest entry first.
     viewport rect is cleared for the render and `StudioRestoreAfterRender` puts time, camera mode and physics back.
     Videos skip unregistered pose edits. Audio: `VideoEncoder::Desc::audioStartSeconds` = start - audioOffset (negative:
     leading silence). Shortcut overlay: `DrawStudioHelp` (? / F1); `StudioModal()` blocks the studio's shortcuts.
+  - Panels (`App::DrawStudio`): ImGui docking (the vendored imgui is the docking branch). A fixed top-bar window, a transparent
+    dock-space host and one dockable window per panel (`###studio_outliner/inspector/timeline/viewport`); each panel function
+    still draws in screen coordinates and gets its window's content rect. The viewport window is transparent and its content
+    rect is `RenderSettings::viewport*`. Default arrangement = `BuildDefaultStudioDock` (DockBuilder); the layout persists in
+    `mmdx12_layout.ini` next to the exe, except in scripted / `--frames` runs (default layout every time; tab bars add ~32 px
+    to the panels, so old `--ui-script` coordinates shifted). Panels float / dock inside the main window only (no OS-level
+    viewports: one swap chain).
+  - Editing model: auto-key (`StudioDoc::autoKey`, transport bar button): a finished pose / morph / camera edit keys itself at the
+    playhead (`StudioSetPose` -> `StudioRegisterPose(…, layerBefore)`; camera fields live in `DrawStudioCameraKeyFields(live)`).
+    Camera possession (`StudioPossess`, C4D style): viewport navigation edits the motion camera key (`StudioWriteCamera`, one
+    undo step per gesture via `StudioNavEditTick`); without it the free view shows eye / target handles
+    (`StudioViewportCameraHandles`). Characters have a world placement (`StudioModel::place`, a `PropAttach` used as
+    translation / rotationDeg / scale; applied as root transform + display scale in `StudioUpdateModel`).
+  - Viewports: `StudioViewportNavigate` (RMB look + WASDQE fly, Alt+LMB orbit, MMB pan, F focus, numpad views). Shading
+    (`ViewShading`: Lit / Unlit / Wireframe, raster only) and the quad view (`StudioDoc::viewLayout`): the renderer draws
+    `FrameView::extraViews` (orthographic top / front / left, `ExtraView`) as extra viewports of the same target inside
+    `ScenePass::Execute`, each with its own SceneConstants (`PassContext::extraSceneConstants`); quad forces flat shading, no
+    TAA / upscaler. `ViewProj::ortho` makes the overlays / gizmos work in those views; the active view is the one under the
+    mouse (`studioActiveView_`).
 - `OfflineRenderer` (render/OfflineRenderer.h) is independent of `RenderSettings`: `Renderer::BeginOffline` builds the TLAS,
   then `Renderer::RenderOffline` replaces `Render` each frame (GPU-time-budgeted iterations, preview present) until Done.
   Motion blur: each iteration re-skins the character at its shutter time (`RtScene::Build(..., time)`) from the models'
@@ -136,7 +155,7 @@ progress.md is the session log. Read its latest entry first.
 - Runtime shader compile errors only appear in `build/bin/mmdx12.log` as `[E]` lines (warnings `[W]`); a failed optional pipeline silently falls back, so grep the log after every capture. `line` is a reserved word in HLSL (DXC rejects it as a variable name).
 - Shaders under `build/bin/shaders` compile at runtime, so a shader can be debugged by editing that copy and rerunning (restore it afterwards).
 - `library/` (MMD assets, about 1.4 GB) and `captures/` are git-ignored test data. Never modify `library/`.
-- `external/` is vendored third-party code (imgui, stb, miniaudio, DirectX-Headers, nlohmann json, Bullet 3.25 subset, cgltf 1.15, ufbx 0.23.1). Don't edit it.
+- `external/` is vendored third-party code (imgui, stb, miniaudio, DirectX-Headers, nlohmann json, Bullet 3.25 subset, cgltf 1.15, ufbx 0.23.1). Don't edit it. imgui is the `docking` branch (same version number as master 1.93 WIP).
   - miniaudio's implementation lives in `core/AudioProbe.cpp` (the scanner measures audio lengths).
   - Bullet is built per file, not from its `*All.cpp` unity files (`btVector3.cpp` defines `BT_USE_SSE_IN_API`, which breaks later files).
 

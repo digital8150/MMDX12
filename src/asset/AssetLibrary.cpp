@@ -265,7 +265,6 @@ LibraryScanResult ScanLibrary(const std::filesystem::path& rootIn, ScanProgress*
     // ---- 1. walk ----
     std::vector<ModelEntry> models;
     std::vector<std::filesystem::path> vmdFiles, audioFiles, sidecarFiles;
-    int pmdCount = 0;
     {
         std::error_code walkEc;
         std::filesystem::recursive_directory_iterator it(root, std::filesystem::directory_options::skip_permission_denied, walkEc);
@@ -285,7 +284,6 @@ LibraryScanResult ScanLibrary(const std::filesystem::path& rootIn, ScanProgress*
                     models.push_back(std::move(m));
                 } else if (ext == ".vmd") vmdFiles.push_back(p);
                 else if (ext == ".wav" || ext == ".mp3" || ext == ".flac" || ext == ".ogg") audioFiles.push_back(p);
-                else if (ext == ".pmd") ++pmdCount;
                 else if (ToLowerAscii(FileNameUtf8(p)) == "mmdx.json") sidecarFiles.push_back(p);
             }
             std::error_code incEc;
@@ -296,8 +294,6 @@ LibraryScanResult ScanLibrary(const std::filesystem::path& rootIn, ScanProgress*
             }
         }
     }
-    if (pmdCount > 0)
-        result.warnings.push_back("PMD is not supported yet (" + std::to_string(pmdCount) + " files ignored)");
 
     // ---- 2. sidecars and overrides ----
     std::vector<SidecarEntry> sidecars;
@@ -363,9 +359,9 @@ LibraryScanResult ScanLibrary(const std::filesystem::path& rootIn, ScanProgress*
     // ---- 3. probe models, vmds and audio in parallel ----
     std::for_each(std::execution::par, models.begin(), models.end(), [&](ModelEntry& m) {
         std::string err;
-        if (m.format == ModelFormat::Pmx) {
+        if (IsMmdModelFormat(m.format)) {
             PmxProbe probe;
-            if (ProbePmx(m.path, probe, &err)) {
+            if (m.format == ModelFormat::Pmx ? ProbePmx(m.path, probe, &err) : ProbePmd(m.path, probe, &err)) {
                 m.humanoid = IsHumanoid(probe.boneNames);
                 m.vertexCount = probe.vertexCount;
                 m.boneCount = probe.boneCount;
@@ -486,7 +482,7 @@ LibraryScanResult ScanLibrary(const std::filesystem::path& rootIn, ScanProgress*
     // 5b. app overrides, then folder hints and content
     std::set<std::filesystem::path> humanoidDirs;
     for (const auto& m : models)
-        if (m.humanoid && m.format == ModelFormat::Pmx) humanoidDirs.insert(m.path.parent_path());
+        if (m.humanoid && IsMmdModelFormat(m.format)) humanoidDirs.insert(m.path.parent_path());
     for (const auto& m : models) {
         if (used.count(&m)) continue;
         const AssetKind ov = overrideOf(m.rel);
@@ -499,7 +495,7 @@ LibraryScanResult ScanLibrary(const std::filesystem::path& rootIn, ScanProgress*
             continue;
         }
         const Kind hint = hintOf(m.path);
-        if (m.format == ModelFormat::Pmx) {
+        if (IsMmdModelFormat(m.format)) {
             if (m.humanoid && hint != Kind::Stage) {
                 characterModels.push_back(&m);
                 continue;
@@ -517,8 +513,18 @@ LibraryScanResult ScanLibrary(const std::filesystem::path& rootIn, ScanProgress*
             pmxStageGroups[m.path.parent_path()].push_back(&m);
             continue;
         }
-        // glTF / VRM / FBX / OBJ
+        // glTF / VRM / FBX / OBJ / X
         const ModelProbe& p = *m.other;
+        if (m.format == ModelFormat::X && hint != Kind::Stage) {
+            // MMD accessories (.x) are props: a stage only when a stages folder says so
+            bool nearCharacter = hint == Kind::Character;
+            for (auto d = m.path.parent_path(); IsUnder(d, root) && d != root && d != d.parent_path(); d = d.parent_path())
+                if (humanoidDirs.count(d)) nearCharacter = true;
+            if (nearCharacter || p.extentMeters < 4.0f) {
+                result.notes.push_back("skipped " + m.rel + ": accessory (.x), add it in the Studio as a prop");
+                continue;
+            }
+        }
         if (hint == Kind::Stage) {
             namedStages.push_back({FileStemUtf8(m.path), {&m}});
         } else if (m.humanoid) {

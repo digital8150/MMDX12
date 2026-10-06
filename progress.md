@@ -466,3 +466,47 @@ every frame and encodes an MP4, 3) GI with a Pixar/Disney-like look while keepin
 - The real https feed (the server does not serve latest.json yet); the not-writable path was
   exercised only through the code path (Phase::NotWritable logic), not a read-only folder.
 - The update button + notice were clicked headlessly; a human should also see them once.
+
+## 2026-10-06 (3) — Studio as a 3D tool: auto-key, camera possession, docking, quad view
+
+Started from an audit of what Studio lacks next to MMD / Blender / C4D / Unity (opencode, read-only, spot-checked), then
+worked through the P0/P1 list and the follow-up requests.
+
+### Done
+- **Auto-key** (`StudioDoc::autoKey`, transport-bar button): a finished pose / morph / camera edit keys itself at the playhead
+  (`StudioSetPose` -> `StudioRegisterPose(allBones, layerBefore, name)`, one undo step restoring the pre-edit layer). The camera
+  inspector ("카메라 값") always shows the camera at the playhead and edits it live (`DrawStudioCameraKeyFields(..., live)`).
+  Off: the old MMD behaviour (I registers, leaving the frame discards).
+- **Camera**: frustum scaled with the scene (16:9, translucent face), 16:9 render-frame mask (the 3D image itself is fitted to
+  16:9 while looking through the motion camera), thirds / safe-frame guides. C4D-style **possession** (outliner / camera panel
+  button, Esc): viewport navigation edits the motion camera key (`StudioWriteCamera`, one undo step per gesture). Free view:
+  eye / target handles (translate gizmo) swing / turn the camera.
+- **Navigation**: RMB look + WASDQE fly (wheel = speed), Alt+LMB orbit, MMB pan, F focus, numpad 1/3/7 views.
+- **Placement**: characters get a world transform (`StudioModel::place`, saved in `.mmdxproj`, undoable, inspector fields + T
+  toolbar gizmo). Stages are not movable (static BLAS).
+- **IK on/off** list per IK bone in the bone tab (VMD IK keys, `IkEditCommand`); bone / morph search filters the timeline rows.
+- **Shading**: Lit / Unlit / Wireframe (raster path; `ViewShading`, `--shading` CLI flag) via the viewport's top-right control.
+- **Docking**: imgui replaced by the docking branch (same version number); `App::DrawStudio` is now a top-bar window + dock-space
+  host + dockable panel windows, default layout via DockBuilder, `mmdx12_layout.ini` persistence (not in scripted / `--frames`
+  runs), reset button in the top bar.
+- **Quad view**: perspective + orthographic top / front / left in one render target (`FrameView::extraViews`, per-view
+  SceneConstants, `ScenePass` draws the scene once per view; flat shading, no TAA / upscaler). Overlays / gizmos work in the
+  ortho views (`ViewProj::ortho`); pan / zoom shared via `StudioDoc::quadCenter/quadHeight`.
+- i18n entries (en / ja / zh) for every new string; CLAUDE.md Studio section updated.
+
+### Checked
+- `build_dev` builds clean; `studio_edit_test` 15, `studio_gizmo_test` 15, `studio_pose_test` 38, `studio_project_test` 67
+  (placement round trip added) all pass; no `[E]` lines in the log after the captures.
+- `render_smoke` PNG hash is identical before and after the shading / multi-view changes (lit single view unchanged).
+- Headless scripted captures: auto-key keys + undo name, possession gesture, eye-handle drag, F focus, numpad view, model
+  gizmo move, IK switches, wire / unlit toggle, quad view with pan / zoom, layout reset.
+
+### Not verified / notes
+- Layout persistence across runs and tab dragging (interactive only); fly keys / Alt gestures (the script cannot hold keys);
+  thirds / safe-frame guides were not looked at; bone search was only compiled; IK toggle undo not exercised.
+- Panels cannot become OS windows (no ImGui viewports with one swap chain). Tab bars shift old `--ui-script` coordinates.
+- Delegation: opencode workers finished the shading task (reviewed, verified); two others (camera visual, model transform)
+  produced no changes in over an hour and were stopped; both were done directly. One worker used `git stash` on the whole tree
+  (restored intact) — keep workers away from git.
+- Not done: camera editing by dragging in the viewport while looking through it without possession, VMD distance sign
+  convention in the inspector, quad / layout state in the project file, physics bake, snapping, markers, onion skin.

@@ -144,6 +144,39 @@ bool GpuModel::Create(Dx12Context& ctx, UploadBatch& batch, const PmxModel& pmx,
     ibv_.SizeInBytes = (UINT)(pmx.indices.size() * sizeof(uint32_t));
     ibv_.BufferLocation = ib_->GetGPUVirtualAddress();
 
+    // SDEF parameters (slot 3), precomputed like saba / MMD: with w1 = 1 - w0 and rw = R0 w0 + R1 w1,
+    // R0' = C + R0 - rw, R1' = C + R1 - rw, stored as (C + R0') / 2 and (C + R1') / 2.
+    std::vector<GpuSdef> sdef;
+    for (uint32_t v = 0; v < vertexCount_ && boneCount_ > 0; ++v) {
+        const PmxVertex& src = pmx.vertices[v];
+        if (src.deform != PmxDeform::SDEF || src.boneIndex[0] < 0 || src.boneIndex[1] < 0) continue;
+        if (sdef.empty()) sdef.assign(vertexCount_, GpuSdef{});
+        const float w0 = src.boneWeight[0], w1 = 1.0f - w0;
+        const DirectX::XMFLOAT3 &c = src.sdefC, &r0 = src.sdefR0, &r1 = src.sdefR1;
+        const float rw[3] = {r0.x * w0 + r1.x * w1, r0.y * w0 + r1.y * w1, r0.z * w0 + r1.z * w1};
+        const float cc[3] = {c.x, c.y, c.z}, a0[3] = {r0.x, r0.y, r0.z}, a1[3] = {r1.x, r1.y, r1.z};
+        GpuSdef& d = sdef[v];
+        for (int k = 0; k < 3; ++k) {
+            d.c[k] = cc[k];
+            d.cr0[k] = (cc[k] + (cc[k] + a0[k] - rw[k])) * 0.5f;
+            d.cr1[k] = (cc[k] + (cc[k] + a1[k] - rw[k])) * 0.5f;
+        }
+        d.sdef = 1.0f;
+    }
+    hasSdef_ = !sdef.empty();
+    if (!hasSdef_) sdef.assign(1, GpuSdef{});
+    sdef_ = batch.CreateBuffer(sdef.data(), sdef.size() * sizeof(GpuSdef),
+                               D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER |
+                                   D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+                               L"model.sdef");
+    if (!sdef_) {
+        LOG_ERROR("model '%s': SDEF buffer creation failed", name_.c_str());
+        return false;
+    }
+    sdefVbv_.BufferLocation = sdef_->GetGPUVirtualAddress();
+    sdefVbv_.SizeInBytes = (UINT)(sdef.size() * sizeof(GpuSdef));
+    sdefVbv_.StrideInBytes = hasSdef_ ? sizeof(GpuSdef) : 0;
+
     // Referenced texture indices.
     auto CollectTextureIndex = [&](std::vector<int32_t>& out, int32_t i) {
         if (i < 0 || (size_t)i >= textures.size()) return;
@@ -209,13 +242,36 @@ bool GpuModel::Create(Dx12Context& ctx, UploadBatch& batch, const PmxModel& pmx,
         const float tightness = std::clamp((m.specularPower - 5.0f) / 60.0f, 0.0f, 1.0f);
         c.reflectivity = std::clamp(specLum * tightness, 0.0f, 1.0f) * (role == ModelRole::Stage ? 0.5f : 0.12f);
     }
-    materialCb_ = batch.CreateBuffer(consts.data(), consts.size() * sizeof(MaterialConstants),
-                                     D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER, L"model.materialCb");
-    if (!materialCb_) {
+    for (MaterialConstants& c : consts) {
+        c.texMul = c.sphereMul = c.toonMul = {1, 1, 1, 1};
+        c.texAdd = c.sphereAdd = c.toonAdd = {0, 0, 0, 0};
+    }
+    // Per-frame ring (material morphs rewrite the constants at run time), every entry starts at the base.
+    const size_t matCount = std::max<size_t>(consts.size(), 1);
+    materialCb_ = CreateUploadBuffer(ctx.Device(), (uint32_t)(matCount * sizeof(MaterialConstants) * kRing),
+                                     L"model.materialCb");
+    if (!materialCb_ || FAILED(materialCb_->Map(0, nullptr, (void**)&materialMapped_))) {
         LOG_ERROR("model '%s': material constant buffer creation failed", name_.c_str());
         return false;
     }
+    for (uint32_t r = 0; r < kRing; ++r) {
+        if (!consts.empty())
+            memcpy(materialMapped_ + r * matCount * sizeof(MaterialConstants), consts.data(),
+                   consts.size() * sizeof(MaterialConstants));
+        materialEntryVersion_[r] = 0;
+    }
+    materialVersion_ = 0;
     materialConsts_ = consts;
+    baseConsts_ = consts;
+    materialBase_.assign(pmx.materials.size(), {});
+    std::vector<bool> morphable(pmx.materials.size(), false);
+    for (const PmxMorph& mo : pmx.morphs) {
+        if (mo.type != PmxMorphType::Material) continue;
+        for (const auto& o : mo.materialOffsets) {
+            if (o.material < 0) morphable.assign(morphable.size(), true);
+            else if ((size_t)o.material < morphable.size()) morphable[(size_t)o.material] = true;
+        }
+    }
 
     // Per material: descriptor table and Material struct.
     materials_.clear();
@@ -227,12 +283,16 @@ bool GpuModel::Create(Dx12Context& ctx, UploadBatch& batch, const PmxModel& pmx,
         mat.indexCount = m.indexCount;
         indexStart += m.indexCount;
         mat.doubleSided = (m.flags & PmxMat_DoubleSided) != 0;
-        mat.drawEdge = (m.flags & PmxMat_Edge) && m.edgeSize > 0 && m.edgeColor.w > 0;
-        mat.castShadow = (m.flags & (PmxMat_CastShadow | PmxMat_GroundShadow)) != 0 && m.diffuse.w > 0.01f;
+        materialBase_[mIdx].edgeFlag = (m.flags & PmxMat_Edge) != 0;
+        materialBase_[mIdx].castFlag = (m.flags & (PmxMat_CastShadow | PmxMat_GroundShadow)) != 0;
+        mat.visible = m.diffuse.w > 0.0f;
+        mat.morphable = morphable[mIdx];
+        mat.drawEdge = materialBase_[mIdx].edgeFlag && m.edgeSize > 0 && m.edgeColor.w > 0 && mat.visible;
+        mat.castShadow = materialBase_[mIdx].castFlag && m.diffuse.w > 0.01f;
         mat.alphaTested = m.textureIndex >= 0 && (size_t)m.textureIndex < textures.size() &&
                           textures[m.textureIndex].hasAlpha;
         mat.edgeSize = m.edgeSize;
-        mat.constants = materialCb_->GetGPUVirtualAddress() + mIdx * 256;
+        mat.constants = materialCb_->GetGPUVirtualAddress() + mIdx * sizeof(MaterialConstants);
 
         uint32_t alloc = ctx.SrvHeap().Allocate(3);
         if (alloc == DescriptorHeap::kInvalid) {
@@ -331,6 +391,58 @@ void GpuModel::UpdateMorphs(uint64_t frame, const std::vector<DirectX::XMFLOAT3>
     morphInitialized_ = true;
 }
 
+void GpuModel::UpdateMaterials(uint64_t frame, const std::vector<PmxMorph::MaterialOffset>& mul,
+                               const std::vector<PmxMorph::MaterialOffset>& add, uint64_t version) {
+    if (!materialMapped_ || materials_.empty()) return;
+    const size_t n = materials_.size();
+    const bool identity = mul.size() != n || add.size() != n;
+    if (identity) version = 0;
+    if (version != materialVersion_) {
+        // final = base * mul + add (PMX material morph); the texture factors go to the shaders as is
+        for (size_t i = 0; i < n; ++i) {
+            const MaterialConstants& b = baseConsts_[i];
+            MaterialConstants& c = materialConsts_[i];
+            c = b;
+            if (!identity) {
+                const PmxMorph::MaterialOffset& m = mul[i];
+                const PmxMorph::MaterialOffset& a = add[i];
+                c.diffuse = {b.diffuse.x * m.diffuse.x + a.diffuse.x, b.diffuse.y * m.diffuse.y + a.diffuse.y,
+                             b.diffuse.z * m.diffuse.z + a.diffuse.z,
+                             std::clamp(b.diffuse.w * m.diffuse.w + a.diffuse.w, 0.0f, 1.0f)};
+                c.specular = {b.specular.x * m.specular.x + a.specular.x, b.specular.y * m.specular.y + a.specular.y,
+                              b.specular.z * m.specular.z + a.specular.z};
+                c.specularPower = std::max(0.0f, b.specularPower * m.specularPower + a.specularPower);
+                c.ambient = {b.ambient.x * m.ambient.x + a.ambient.x, b.ambient.y * m.ambient.y + a.ambient.y,
+                             b.ambient.z * m.ambient.z + a.ambient.z};
+                c.edgeColor = {b.edgeColor.x * m.edgeColor.x + a.edgeColor.x, b.edgeColor.y * m.edgeColor.y + a.edgeColor.y,
+                               b.edgeColor.z * m.edgeColor.z + a.edgeColor.z,
+                               std::clamp(b.edgeColor.w * m.edgeColor.w + a.edgeColor.w, 0.0f, 1.0f)};
+                c.edgeSize = std::max(0.0f, b.edgeSize * m.edgeSize + a.edgeSize);
+                c.texMul = m.textureFactor;
+                c.texAdd = a.textureFactor;
+                c.sphereMul = m.sphereFactor;
+                c.sphereAdd = a.sphereFactor;
+                c.toonMul = m.toonFactor;
+                c.toonAdd = a.toonFactor;
+            }
+            Material& mat = materials_[i];
+            mat.visible = c.diffuse.w > 0.0f;
+            mat.drawEdge = materialBase_[i].edgeFlag && c.edgeSize > 0 && c.edgeColor.w > 0 && mat.visible;
+            mat.castShadow = materialBase_[i].castFlag && c.diffuse.w > 0.01f;
+            mat.edgeSize = c.edgeSize;
+        }
+        materialVersion_ = version;
+    }
+    const uint32_t r = (uint32_t)(frame % kRing);
+    const size_t stride = n * sizeof(MaterialConstants);
+    if (materialEntryVersion_[r] != materialVersion_) {
+        memcpy(materialMapped_ + r * stride, materialConsts_.data(), stride);
+        materialEntryVersion_[r] = materialVersion_;
+    }
+    const D3D12_GPU_VIRTUAL_ADDRESS base = materialCb_->GetGPUVirtualAddress() + r * stride;
+    for (size_t i = 0; i < n; ++i) materials_[i].constants = base + i * sizeof(MaterialConstants);
+}
+
 D3D12_GPU_VIRTUAL_ADDRESS GpuModel::BoneBuffer(uint64_t frame) const {
     const ComPtr<ID3D12Resource>& b = boneBuf_[frame % kRing];
     return b ? b->GetGPUVirtualAddress() : 0;
@@ -346,6 +458,10 @@ void GpuModel::Destroy() {
     if (rt_.srv != DescriptorHeap::kInvalid) ctx_->SrvHeap().Free(rt_.srv, 2);
     rt_ = RtResources{};
     materialConsts_.clear();
+    baseConsts_.clear();
+    materialBase_.clear();
+    if (materialCb_ && materialMapped_) materialCb_->Unmap(0, nullptr);
+    materialMapped_ = nullptr;
     for (uint32_t a : srvAllocations_) ctx_->SrvHeap().Free(a, 3);
     srvAllocations_.clear();
     for (uint32_t s = 0; s < kRing; ++s) {
@@ -363,6 +479,9 @@ void GpuModel::Destroy() {
     }
     vb_.Reset();
     ib_.Reset();
+    sdef_.Reset();
+    sdefVbv_ = {};
+    hasSdef_ = false;
     materialCb_.Reset();
     textures_.clear();
     materials_.clear();

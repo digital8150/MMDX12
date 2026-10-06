@@ -32,7 +32,7 @@ struct SceneConstants {               // b0, kSceneCbSize-byte slot per frame
     DirectX::XMFLOAT3 rimColor;    float fog;
     DirectX::XMFLOAT2 viewportSize; float edgeScale; float transparentBg;  // edgeScale = viewportHeight / 1080
     DirectX::XMFLOAT2 jitterUv;    DirectX::XMFLOAT2 invViewportSize;      // jitter in uv units
-    float nearZ, farZ, frameIndex, _pad;
+    float nearZ, farZ, frameIndex, shading;  // shading: 0 Lit, 1 Unlit, 2 Wireframe (raster scene shading)
     DirectX::XMFLOAT4X4 prevInvView;   // offline renderer: camera-to-world at shutter open (motion blur)
     // Offline renderer scene extras (OfflineSceneProps, zero = none). See shaders/offline_gi.hlsl.
     DirectX::XMFLOAT4 glassCenter;     // xyz centre, w = enabled (0/1)
@@ -66,7 +66,10 @@ struct MaterialConstants {            // b1, one 256-byte slot per material
     uint32_t flags;              // MaterialShaderFlags
     float reflectivity;          // base SSR reflectivity derived from the MMD specular
     uint32_t _pad[2];
-    uint8_t _reserve[256 - 80];
+    // Material morph texture factors (PMX): sampled colour = saturate(colour * mul + add) for the
+    // texture, sphere and toon maps that the material has. Identity: mul 1, add 0.
+    DirectX::XMFLOAT4 texMul, texAdd, sphereMul, sphereAdd, toonMul, toonAdd;
+    uint8_t _reserve[256 - 176];
 };
 static_assert(sizeof(MaterialConstants) == 256, "MaterialConstants layout");
 
@@ -93,6 +96,16 @@ static_assert(sizeof(GpuVertex) == 60, "GpuVertex layout");
 // Vertex buffer slot 1 (per frame ring, UPLOAD heap): float3 morph position delta, TEXCOORD2.
 // Vertex buffer slot 2 (previous frame's morph deltas, same layout): TEXCOORD3.
 
+// Vertex buffer slot 3 (static): SDEF parameters per vertex (shaders/skinning.hlsli). Models without
+// SDEF vertices bind one zero element with stride 0. Also read raw by shaders/skin.hlsl (t5).
+struct GpuSdef {
+    float c[3];          // TEXCOORD4  SDEF centre C
+    float cr0[3];        // TEXCOORD5  (C + R0') / 2, R0' = C + R0 - (R0 w0 + R1 w1) (as saba/MMD)
+    float cr1[3];        // TEXCOORD6  (C + R1') / 2
+    float sdef;          // TEXCOORD7  1 = SDEF vertex (bones[0], bones[1], weights.x), 0 = linear blend
+};
+static_assert(sizeof(GpuSdef) == 40, "GpuSdef layout");
+
 // ---- ray tracing (mirror of shaders/rt_common.hlsli) -------------------------------------
 
 // Skinned world-space vertex written by shaders/skin.hlsl, read by BLAS builds and ray
@@ -114,7 +127,7 @@ enum RtGeometryFlags : uint32_t {
 };
 
 // One entry per BLAS geometry. TLAS InstanceID = index of the model's first entry, so a hit's
-// entry is gGeometries[CommittedInstanceID() + CommittedGeometryIndex()]. 80 bytes.
+// entry is gGeometries[CommittedInstanceID() + CommittedGeometryIndex()]. 176 bytes.
 struct RtGeometry {
     uint32_t vertexSrv;    // SrvHeap index of a raw SRV over the model's RtVertex buffer
     uint32_t indexSrv;     // SrvHeap index of a raw SRV over the model's uint32 index buffer
@@ -127,7 +140,9 @@ struct RtGeometry {
     uint32_t sphereSrv;    // srvTable + 1
     uint32_t toonSrv;      // srvTable + 2
     uint32_t _pad;
+    // material morph texture factors, as MaterialConstants::texMul..toonAdd
+    DirectX::XMFLOAT4 texMul, texAdd, sphereMul, sphereAdd, toonMul, toonAdd;
 };
-static_assert(sizeof(RtGeometry) == 80, "RtGeometry layout");
+static_assert(sizeof(RtGeometry) == 176, "RtGeometry layout");
 
 } // namespace mmdx

@@ -175,6 +175,13 @@ LightKf SampleLight(const std::vector<LightKf>& keys, float frame);
 ShadowKf SampleShadow(const std::vector<ShadowKf>& keys, float frame);
 // MMD's self-shadow distance UI value (0..9999) <-> the VMD value.
 inline float ShadowUiFromVmd(float d) { return (0.1f - d) * 100000.0f; }
+// The VMD self-shadow distance -> the renderer's cascade range in MMD units. MMD's default 8875 maps to the
+// renderer's default range (160); a lower UI value covers more of the scene, as in MMD.
+float ShadowRangeFromVmd(float vmd);
+// A camera VMD's light / self-shadow keys that only repeat MMD's defaults (light colour 154/255, direction
+// (-0.5, -1, 0.5); shadow mode 1 at distance 8875): most camera files carry them, and they say nothing.
+bool IsDefaultLightTrack(const std::vector<LightKf>& keys);
+bool IsDefaultShadowTrack(const std::vector<ShadowKf>& keys);
 inline float ShadowVmdFromUi(float ui) { return 0.1f - ui * 0.00001f; }
 
 } // namespace mmdx::studio

@@ -26,6 +26,49 @@ int wmain(int argc, wchar_t** argv) {
            pmx->name.c_str(), pmx->bones.size(), pmx->morphs.size(), vmd.boneKeys.size(),
            motion->BoundBoneCount(), motion->BoundMorphCount(), motion->EndFrame());
 
+    {   // material morphs / SDEF: counts, and each material morph alone at weight 1 must give the
+        // PMX result (multiply: factor = offset, add: factor = offset) on the materials it targets
+        size_t matMorphs = 0, sdef = 0, bad = 0;
+        for (const PmxVertex& v : pmx->vertices) sdef += v.deform == PmxDeform::SDEF;
+        ModelInstance probe(pmx);
+        for (size_t i = 0; i < pmx->morphs.size(); ++i) {
+            const PmxMorph& mo = pmx->morphs[i];
+            if (mo.type != PmxMorphType::Material) continue;
+            ++matMorphs;
+            probe.ResetPose();
+            probe.SetMorphWeight((int)i, 1.0f);
+            probe.UpdatePose();
+            for (const auto& o : mo.materialOffsets) {
+                const size_t first = o.material < 0 ? 0 : (size_t)o.material;
+                const size_t last = o.material < 0 ? pmx->materials.size() : first + 1;
+                for (size_t m = first; m < last && m < probe.MaterialMul().size(); ++m) {
+                    // a morph may list one material twice: only check the single-entry case
+                    size_t entries = 0;
+                    for (const auto& o2 : mo.materialOffsets)
+                        entries += (o2.material < 0 || (size_t)o2.material == m) ? 1 : 0;
+                    if (entries != 1) continue;
+                    const auto& f = o.operation == 0 ? probe.MaterialMul()[m] : probe.MaterialAdd()[m];
+                    if (std::fabs(f.diffuse.w - o.diffuse.w) > 1e-5f || std::fabs(f.edgeSize - o.edgeSize) > 1e-5f ||
+                        std::fabs(f.textureFactor.x - o.textureFactor.x) > 1e-5f)
+                        ++bad;
+                }
+            }
+            if (getenv("MATMORPH_DUMP"))
+                printf("MATMORPH %zu '%s' offsets=%zu first: mat=%d op=%d diffuse.a=%.2f\n", i, mo.name.c_str(),
+                       mo.materialOffsets.size(), mo.materialOffsets.empty() ? -2 : mo.materialOffsets[0].material,
+                       mo.materialOffsets.empty() ? -1 : mo.materialOffsets[0].operation,
+                       mo.materialOffsets.empty() ? 0.f : mo.materialOffsets[0].diffuse.w);
+        }
+        probe.ResetPose();
+        probe.UpdatePose();
+        bool identity = true;
+        for (size_t m = 0; m < probe.MaterialMul().size(); ++m)
+            identity &= probe.MaterialMul()[m].diffuse.x == 1.0f && probe.MaterialAdd()[m].diffuse.w == 0.0f;
+        printf("material morphs=%zu (factor mismatches=%zu, reset to identity: %s) | SDEF vertices=%zu\n", matMorphs, bad,
+               identity ? "ok" : "FAIL", sdef);
+        if (bad || !identity) return 1;
+    }
+
     if (getenv("PHYS_DUMP")) {  // list rigid bodies and joints, then exit
         for (size_t i = 0; i < pmx->rigidBodies.size(); ++i) {
             const auto& r = pmx->rigidBodies[i];

@@ -3,6 +3,7 @@
 /library/
 *.log
 mmdx12.ini
+mmdx12_layout.ini
 /captures/
 # upscaler runtime DLLs (tools/fetch_sdks.ps1)
 /external/dlss/bin/

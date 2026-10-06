@@ -2,6 +2,7 @@
 #include "anim/Motion.h"
 #include "core/TextUtil.h"
 #include <algorithm>
+#include <cmath>
 #include <cstring>
 #include <set>
 #include <unordered_map>
@@ -334,6 +335,26 @@ VmdMotion MotionData::ToVmd() const {
     for (const auto& k : v.ikKeys) maxFrame = std::max(maxFrame, k.frame);
     v.maxFrame = maxFrame;
     return v;
+}
+
+float ShadowRangeFromVmd(float vmd) {
+    const float ui = std::clamp(ShadowUiFromVmd(vmd), 0.0f, 9999.0f);
+    return std::clamp((10000.0f - ui) * (160.0f / 1125.0f), 20.0f, 2000.0f);
+}
+
+bool IsDefaultLightTrack(const std::vector<LightKf>& keys) {
+    const auto near = [](float a, float b) { return std::fabs(a - b) < 0.01f; };
+    for (const LightKf& k : keys)
+        if (!near(k.color.x, 154.0f / 255.0f) || !near(k.color.y, 154.0f / 255.0f) || !near(k.color.z, 154.0f / 255.0f) ||
+            !near(k.direction.x, -0.5f) || !near(k.direction.y, -1.0f) || !near(k.direction.z, 0.5f))
+            return false;
+    return true;
+}
+
+bool IsDefaultShadowTrack(const std::vector<ShadowKf>& keys) {
+    for (const ShadowKf& k : keys)
+        if (k.mode == 0 || std::fabs(ShadowUiFromVmd(k.distance) - 8875.0f) > 1.0f) return false;
+    return true;
 }
 
 } // namespace mmdx::studio

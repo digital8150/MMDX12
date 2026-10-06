@@ -59,6 +59,15 @@ public:
     const std::vector<XMFLOAT3>& VertexMorphDeltas() const { return morphDelta_; }
     // Incremented every time VertexMorphDeltas() content changes.
     uint64_t MorphVersion() const { return morphVersion_; }
+    // Material morphs (PMX semantics): per material, final = base * mul + add, where multiply
+    // offsets accumulate as mul *= lerp(1, offset, weight) and add offsets as add += offset * weight
+    // (material index -1 = every material). Texture/sphere/toon factors stay separate (the shaders
+    // apply them to the sampled colour). Both vectors are empty while the model has no material
+    // morph; else they have one entry per material. `operation` is unused here.
+    const std::vector<PmxMorph::MaterialOffset>& MaterialMul() const { return materialMul_; }
+    const std::vector<PmxMorph::MaterialOffset>& MaterialAdd() const { return materialAdd_; }
+    // Incremented every time MaterialMul()/MaterialAdd() change (0: identity factors).
+    uint64_t MaterialVersion() const { return materialVersion_; }
 
     XMFLOAT3 BoneWorldPosition(int bone) const;
     const XMFLOAT4X4& BoneWorld(int bone) const { return bones_[bone].world; }
@@ -92,6 +101,11 @@ private:
     std::vector<float> morphWeight_;
     std::vector<float> appliedMorphWeight_; // last weights used to build morphDelta_
     std::vector<float> pendingVertexWeight_;// scratch: effective vertex-morph weights this frame
+    std::vector<float> pendingMaterialWeight_;  // effective material-morph weights this frame (empty: none in model)
+    std::vector<float> appliedMaterialWeight_;  // weights materialMul_/materialAdd_ were built from
+    std::vector<PmxMorph::MaterialOffset> materialMul_, materialAdd_;
+    uint64_t materialVersion_ = 0;
+    void RebuildMaterialFactors();
     std::vector<int> dfsStack_;             // scratch for UpdateWorldRecursive
     std::vector<XMFLOAT3> morphDelta_;
     uint64_t morphVersion_ = 0;

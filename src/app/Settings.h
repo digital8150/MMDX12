@@ -19,6 +19,7 @@ struct AppSettings {
     float renderScale = 1.0f;  // 0.5 .. 2.0
     float volume = 0.8f;       // 0 .. 1
     bool drawEdges = true;
+    bool motionLighting = true;   // play mode: the camera VMD's light / self-shadow tracks (when not just defaults)
     bool physics = true;       // rigid-body physics (hair, skirts) on the character
     // Graphics quality: 0 low, 1 medium, 2 high, 3 ultra, 4 custom (toggles below as set).
     int graphicsPreset = 2;

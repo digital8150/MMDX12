@@ -176,6 +176,19 @@ void ApplyStyle(float dpi) {
     c[ImGuiCol_Header] = v4(p.accentSoft);
     c[ImGuiCol_HeaderHovered] = v4(Mix(p.accentSoft, p.accent, 0.15f));
     c[ImGuiCol_HeaderActive] = v4(Mix(p.accentSoft, p.accent, 0.3f));
+    // dockable studio panels: tabs in the surface tones, accent for the active one and the drop preview
+    c[ImGuiCol_Tab] = v4(p.sunken);
+    c[ImGuiCol_TabHovered] = v4(p.accentSoft);
+    c[ImGuiCol_TabSelected] = v4(p.surface);
+    c[ImGuiCol_TabSelectedOverline] = v4(p.accent);
+    c[ImGuiCol_TabDimmed] = v4(p.sunken);
+    c[ImGuiCol_TabDimmedSelected] = v4(p.surface);
+    c[ImGuiCol_TabDimmedSelectedOverline] = v4(p.lineStrong);
+    c[ImGuiCol_DockingPreview] = v4(WithAlpha(p.accent, 0.35f));
+    c[ImGuiCol_DockingEmptyBg] = v4(p.bg);
+    c[ImGuiCol_Separator] = v4(p.line);
+    c[ImGuiCol_SeparatorHovered] = v4(p.accent);
+    c[ImGuiCol_SeparatorActive] = v4(p.accentPress);
     c[ImGuiCol_TableHeaderBg] = ImVec4(0, 0, 0, 0);
     c[ImGuiCol_TableRowBg] = ImVec4(0, 0, 0, 0);
     c[ImGuiCol_TableRowBgAlt] = v4(WithAlpha(p.sunken, 0.5f));

@@ -680,6 +680,8 @@ void App::DrawSelect() {
                 changed |= Switch("##bloom", Tr("블룸"), &settings_.bloom);
                 changed |= Switch("##taa", "TAA", &settings_.taa, Tr("시간 누적 안티에일리어싱"));
                 changed |= Switch("##edges", Tr("외곽선"), &settings_.drawEdges);
+                changed |= Switch("##motionlight", Tr("모션 조명·그림자"), &settings_.motionLighting,
+                                  Tr("카메라 VMD의 조명과 셀프 섀도 키를 따릅니다"));
                 changed |= Switch("##vsync", Tr("수직 동기화"), &settings_.vsync);
                 Gap(6.0f);
                 SectionLabel("MSAA");

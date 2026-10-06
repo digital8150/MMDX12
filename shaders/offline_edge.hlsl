@@ -8,10 +8,13 @@
 // constants), t0 bones, t4 previous bones (root SRVs), t1..t3 material table, s0 anisotropic wrap.
 #include "common.hlsli"
 #include "offline_common.hlsli"
+#include "skinning.hlsli"
 
 cbuffer MaterialCB : register(b1) {
     float4 gDiffuse; float3 gSpecular; float gSpecularPower; float3 gAmbient; float gEdgeSize;
     float4 gEdgeColor; uint gFlags; float gReflectivity; uint2 _mp;
+    // material morph factors (ApplyTexFactor): texture, sphere, toon
+    float4 gTexMul; float4 gTexAdd; float4 gSphereMul; float4 gSphereAdd; float4 gToonMul; float4 gToonAdd;
 };
 // time: shutter time 0..1 (0 = previous pose / camera); lens: view-space lens offset; focus: view z
 cbuffer EdgeCB : register(b2) { float gShutter; float2 gLens; float gFocus; };
@@ -27,21 +30,22 @@ struct VSIn {
     float3 pos : POSITION; float3 nrm : NORMAL; float2 uv : TEXCOORD0;
     uint4 bones : BLENDINDICES; float4 weights : BLENDWEIGHT; float edge : TEXCOORD1;
     float3 morph : TEXCOORD2; float3 prevMorph : TEXCOORD3;
+    float3 sdefC : TEXCOORD4; float3 sdefR0 : TEXCOORD5; float3 sdefR1 : TEXCOORD6; float sdef : TEXCOORD7;
 };
 
-// Skinning at the shutter time: blended bone matrices and morphs (as skin.hlsl does for the BLAS).
+// Skinning at the shutter time: per-bone blended matrices and morphs (as skin.hlsl does for the BLAS).
 void SkinAt(VSIn v, out float3 wp, out float3 wn) {
-    float4x4 m = gBones[v.bones.x].m * v.weights.x + gBones[v.bones.y].m * v.weights.y
-               + gBones[v.bones.z].m * v.weights.z + gBones[v.bones.w].m * v.weights.w;
-    float4x4 pm = gPrevBones[v.bones.x].m * v.weights.x + gPrevBones[v.bones.y].m * v.weights.y
-                + gPrevBones[v.bones.z].m * v.weights.z + gPrevBones[v.bones.w].m * v.weights.w;
+    float4x4 b0 = gBones[v.bones.x].m, b1 = gBones[v.bones.y].m, b2 = gBones[v.bones.z].m, b3 = gBones[v.bones.w].m;
     float3 morph = v.morph;
     if (gShutter < 1.0) {
-        m = lerp(pm, m, gShutter);
+        b0 = lerp(gPrevBones[v.bones.x].m, b0, gShutter);
+        b1 = lerp(gPrevBones[v.bones.y].m, b1, gShutter);
+        b2 = lerp(gPrevBones[v.bones.z].m, b2, gShutter);
+        b3 = lerp(gPrevBones[v.bones.w].m, b3, gShutter);
         morph = lerp(v.prevMorph, v.morph, gShutter);
     }
-    wp = mul(float4(v.pos + morph, 1.0), m).xyz;
-    wn = normalize(mul(v.nrm, (float3x3)m));
+    SkinVertex(b0, b1, b2, b3, v.weights, v.pos + morph, v.nrm, v.sdef, v.sdefC, v.sdefR0, v.sdefR1, wp, wn);
+    wn = normalize(wn);
 }
 
 float4 ToClip(float3 wp) {

@@ -83,6 +83,7 @@ void App::StartStudioRender(bool video) {
     offline_.beginPending = true;
     RenderSettings rs = renderer_.Settings();
     rs.viewportX = rs.viewportY = rs.viewportW = rs.viewportH = 0;
+    rs.shading = ViewShading::Lit;  // the studio shading mode is an editing view only
     renderer_.SetSettings(rs);
     screen_ = Screen::Offline;
     LOG_INFO("studio render: still at frame %d -> %s", d.Frame(), PathToUtf8(offline_.output).c_str());

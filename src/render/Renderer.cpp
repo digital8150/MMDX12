@@ -160,7 +160,7 @@ bool Renderer::Initialize(Dx12Context& ctx, const std::filesystem::path& shaderD
     }
     pipelineMsaa_ = msaa;
 
-    sceneCb_ = CreateMappedUpload(ctx.Device(), (uint64_t)kSceneCbSize * kCbSlots, &sceneCbMapped_, L"scene.cb");
+    sceneCb_ = CreateMappedUpload(ctx.Device(), (uint64_t)kSceneCbSize * kCbSlots * (1 + kMaxExtraViews), &sceneCbMapped_, L"scene.cb");
     lightBuf_ = CreateMappedUpload(ctx.Device(), (uint64_t)kLightBytes * kCbSlots, &lightBufMapped_, L"scene.lights");
     if (!sceneCb_ || !lightBuf_) return false;
 
@@ -273,8 +273,10 @@ void Renderer::FillSceneConstants(const FrameView& view, uint32_t w, uint32_t h,
     XMMATRIX viewM = XMLoadFloat4x4(&cam.view);
     XMMATRIX vpNoJitter = viewM * proj;
 
-    IUpscaler* upscaler = offscreen ? nullptr : EffectiveUpscaler();
-    const bool jitter = !offscreen && (settings_.taa || upscaler || EffectivePath() == RenderPath::PathTraced);
+    // A quad view (extra views) is a flat raster composite: no temporal jitter, no upscaler.
+    const bool quad = !offscreen && !view.extraViews.empty() && EffectivePath() == RenderPath::Raster;
+    IUpscaler* upscaler = (offscreen || quad) ? nullptr : EffectiveUpscaler();
+    const bool jitter = !offscreen && !quad && (settings_.taa || upscaler || EffectivePath() == RenderPath::PathTraced);
     float jxPx = 0, jyPx = 0;
     if (jitter) {
         const uint32_t phases = upscaler ? IUpscaler::JitterPhaseCount(w, targets_.outWidth) : 8u;
@@ -393,6 +395,13 @@ void Renderer::FillSceneConstants(const FrameView& view, uint32_t w, uint32_t h,
     sc.nearZ = cam.nearZ;
     sc.farZ = cam.farZ;
     sc.frameIndex = (float)(temporalIndex_ % 64);
+    // The DXR scene shaders read shading as 0 (Lit): RayTraced / PathTraced ignore the setting.
+    uint32_t shading = (EffectivePath() == RenderPath::Raster) ? (uint32_t)settings_.shading : 0u;
+    if (quad && shading == 0u) shading = (uint32_t)ViewShading::Unlit;  // the ortho views cannot be lit
+    sc.shading = (float)shading;
+    // Distance haze is a lighting-style contribution; Unlit/Wireframe scenes are drawn flat
+    // (RecordScene turns the lighting-adjacent effects off for these frames).
+    if (shading != 0u) sc.fog = 0.0f;
 }
 
 uint32_t Renderer::FillGpuLights(const LightParams& light, GpuLight* out) {
@@ -438,7 +447,25 @@ void Renderer::RecordScene(ID3D12GraphicsCommandList* cmd, const FrameView& view
         else
             path = RenderPath::Raster;
     }
-    IUpscaler* up = offscreen ? nullptr : EffectiveUpscaler();
+    const bool quad = !offscreen && !view.extraViews.empty() && path == RenderPath::Raster;
+    IUpscaler* up = (offscreen || quad) ? nullptr : EffectiveUpscaler();
+
+    // Unlit / Wireframe draw the models flat, so the lighting-adjacent effects have nothing to
+    // contribute this frame: run the frame with them off (a copy, RenderSettings is per-call here).
+    RenderSettings frameSettings = settings_;
+    const bool nonLit = path == RenderPath::Raster && (settings_.shading != ViewShading::Lit || quad);
+    if (quad) {
+        frameSettings.taa = false;
+        if (frameSettings.shading == ViewShading::Lit) frameSettings.shading = ViewShading::Unlit;
+        historyValid = false;
+    }
+    if (nonLit) {
+        frameSettings.shadows = false;
+        frameSettings.ssao = false;
+        frameSettings.ssr = false;
+        frameSettings.volumetric = false;
+        frameSettings.bloom = false;
+    }
 
     stats_.drawCalls = 0;
     stats_.triangles = 0;
@@ -448,11 +475,41 @@ void Renderer::RecordScene(ID3D12GraphicsCommandList* cmd, const FrameView& view
     stats_.outputHeight = targets_.outHeight;
     stats_.renderPath = path;
     stats_.upscaler = up ? up->Kind() : UpscalerKind::None;
-    PassContext pc{*ctx_, cmd, view, settings_, targets_, stats_, transient_,
+    PassContext pc{*ctx_, cmd, view, frameSettings, targets_, stats_, transient_,
                    sceneCb_->GetGPUVirtualAddress() + (uint64_t)cbSlot * kSceneCbSize,
                    lightBuf_->GetGPUVirtualAddress() + (uint64_t)cbSlot * kLightBytes,
                    frame, historyValid, offscreen, &builtin_, path, rt, up,
                    jitterPx_[0], jitterPx_[1], frameTimeMs_};
+    // quad view: one SceneConstants per extra view (orthographic, no jitter)
+    if (quad) {
+        const size_t count = std::min<size_t>(view.extraViews.size(), kMaxExtraViews);
+        for (size_t e = 0; e < count; ++e) {
+            const ExtraView& ev = view.extraViews[e];
+            SceneConstants esc = sc;
+            const XMMATRIX viewM = XMLoadFloat4x4(&ev.view);
+            const float pxW = std::max(1.0f, ev.rect[2] * (float)w), pxH = std::max(1.0f, ev.rect[3] * (float)h);
+            const XMMATRIX proj = XMMatrixOrthographicLH(ev.height * pxW / pxH, ev.height, ev.nearZ, ev.farZ);
+            const XMMATRIX vp = viewM * proj;
+            XMStoreFloat4x4(&esc.view, viewM);
+            XMStoreFloat4x4(&esc.proj, proj);
+            XMStoreFloat4x4(&esc.viewProj, vp);
+            XMStoreFloat4x4(&esc.viewProjNoJitter, vp);
+            XMStoreFloat4x4(&esc.prevViewProjNoJitter, vp);  // no motion
+            XMStoreFloat4x4(&esc.invProj, XMMatrixInverse(nullptr, proj));
+            const XMMATRIX invView = XMMatrixInverse(nullptr, viewM);
+            XMStoreFloat4x4(&esc.invView, invView);
+            XMStoreFloat3(&esc.eyePos, invView.r[3]);
+            esc.jitterUv = {0, 0};
+            esc.nearZ = ev.nearZ;
+            esc.farZ = ev.farZ;
+            esc.viewportSize = {pxW, pxH};
+            esc.invViewportSize = {1.0f / pxW, 1.0f / pxH};
+            esc.edgeScale = pxH / 1080.0f;
+            const size_t slot = (size_t)kCbSlots + (size_t)cbSlot * kMaxExtraViews + e;
+            memcpy(sceneCbMapped_ + slot * kSceneCbSize, &esc, sizeof(esc));
+            pc.extraSceneConstants[e] = sceneCb_->GetGPUVirtualAddress() + (uint64_t)slot * kSceneCbSize;
+        }
+    }
     for (auto& pass : passes_) pass->Execute(pc);
 
     if (!offscreen) {

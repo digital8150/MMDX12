@@ -199,6 +199,7 @@ void App::RecordRenderBenchFrame(ID3D12GraphicsCommandList* cmd) {
         for (uint64_t f : {slot, slot > 0 ? slot - 1 : slot}) {
             gpu.UpdateSkinning(f, inst.SkinMatrices());
             gpu.UpdateMorphs(f, inst.VertexMorphDeltas(), inst.MorphVersion());
+            gpu.UpdateMaterials(f, inst.MaterialMul(), inst.MaterialAdd(), inst.MaterialVersion());
         }
     };
     upload(*scene_->character, *scene_->characterGpu);

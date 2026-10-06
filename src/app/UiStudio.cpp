@@ -96,6 +96,7 @@ bool App::FinishStudioLoad() {
         sm->kind = m.kind;
         sm->visible = m.visible;
         sm->attach = m.attach;
+        sm->place = sm->placeApplied = m.place;
         sm->uid = doc->nextUid++;
         sm->path = m.pmx->sourcePath;
         sm->pmx = m.pmx;
@@ -218,6 +219,7 @@ void App::LeaveStudio() {
     audio_.Unload();
     RenderSettings rs = renderer_.Settings();
     rs.viewportX = rs.viewportY = rs.viewportW = rs.viewportH = 0;
+    rs.shading = ViewShading::Lit;  // the studio shading mode is an editing view only
     renderer_.SetSettings(rs);
     studioLeaveConfirm_ = false;
     studioPending_ = StudioAction::None;
@@ -268,8 +270,22 @@ void App::UpdateStudio(double dt) {
     if (!io.WantTextInput && !videoDialogOpen_ && !studioLeaveConfirm_ &&
         ((ImGui::IsKeyPressed(ImGuiKey_Slash, false) && io.KeyShift) || ImGui::IsKeyPressed(ImGuiKey_F1, false)))
         studioHelpOpen_ = !studioHelpOpen_;
-    if (!io.WantTextInput && !StudioModal()) {
+    // holding the right button flies the viewport camera with WASDQE: the shortcuts stay out of the way
+    if (!io.WantTextInput && !StudioModal() && !ImGui::IsMouseDown(ImGuiMouseButton_Right)) {
         const bool ctrl = io.KeyCtrl, shift = io.KeyShift;
+        if (!ctrl && !io.KeyAlt && ImGui::IsKeyPressed(ImGuiKey_F, false)) StudioFocusSelection();
+        {  // numpad views (the renderer is perspective-only): 1 front, 3 right, 7 top; Ctrl = the opposite side
+            const auto view = [&](ImGuiKey k, float yaw, float pitch) {
+                if (!ImGui::IsKeyPressed(k, false)) return;
+                StudioTakeFreeCamera();
+                freeCam_.yaw = yaw;
+                freeCam_.pitch = pitch;
+            };
+            const float pi = 3.14159265f;
+            view(ImGuiKey_Keypad1, ctrl ? pi : 0.0f, 0.0f);
+            view(ImGuiKey_Keypad3, ctrl ? -pi * 0.5f : pi * 0.5f, 0.0f);
+            view(ImGuiKey_Keypad7, 0.0f, ctrl ? -1.45f : 1.45f);
+        }
         const auto pressed = [](ImGuiKey k, bool repeat = true) { return ImGui::IsKeyPressed(k, repeat); };
         if (pressed(ImGuiKey_Space, false)) StudioSetPlaying(!d.playing);
         const bool redo = ctrl && (pressed(ImGuiKey_Y) || (shift && pressed(ImGuiKey_Z)));
@@ -296,9 +312,11 @@ void App::UpdateStudio(double dt) {
         if (ctrl && pressed(ImGuiKey_V, false)) StudioPaste(shift);
         if (ctrl && pressed(ImGuiKey_A, false)) StudioSelectAll();
         if (pressed(ImGuiKey_I, false)) StudioRegisterPose(ctrl);  // pose edits, or the picked rows (Ctrl: all bones)
+        if (!ctrl && pressed(ImGuiKey_T, false)) d.modelGizmo = !d.modelGizmo;
         if (!ctrl && pressed(ImGuiKey_E, false)) d.gizmoTool = 0;
         if (!ctrl && pressed(ImGuiKey_W, false)) d.gizmoTool = 1;
         if (!ctrl && pressed(ImGuiKey_L, false)) d.gizmoLocal = !d.gizmoLocal;
+        if (pressed(ImGuiKey_Escape, false) && d.possessCamera) StudioPossess(false);
         if (pressed(ImGuiKey_Escape, false) && studioViewDrag_ != 2 && d.activeBone >= 0) StudioSelectBone(-1, false);
         if (ctrl && pressed(ImGuiKey_S, false)) StudioSave(shift);
         if (ctrl && pressed(ImGuiKey_O, false)) StudioRequest(StudioAction::Open);
@@ -401,14 +419,31 @@ void App::StudioUpdateModel(StudioModel& m, uint64_t slot, float frame, float ph
     else inst.ResetPose();
     if (!m.IsStage()) StudioApplyPose(m);
     if (m.kind == ModelKind::Character) {
-        inst.SetScale(m.libraryId.empty() ? 1.0f : settings_.CharacterScale(m.libraryId));
+        // placement: the root carries rotation + position; the display scale (library x placement) scales about the
+        // origin afterwards, so the position is divided by it
+        const PropAttach& pl = m.place;
+        const float s = (m.libraryId.empty() ? 1.0f : settings_.CharacterScale(m.libraryId)) * std::max(0.01f, pl.scale);
+        inst.SetScale(s);
+        {
+            constexpr float kRad = 0.01745329252f;
+            DirectX::XMFLOAT4X4 root;
+            DirectX::XMStoreFloat4x4(&root, DirectX::XMMatrixMultiply(
+                DirectX::XMMatrixRotationRollPitchYaw(pl.rotationDeg.x * kRad, pl.rotationDeg.y * kRad, pl.rotationDeg.z * kRad),
+                DirectX::XMMatrixTranslation(pl.translation.x / s, pl.translation.y / s, pl.translation.z / s)));
+            inst.SetRootTransform(root);
+        }
         inst.EnablePhysics(d.physics);
+        if (!(m.placeApplied == m.place)) {  // moved by hand: the bodies restart at the new place
+            m.placeApplied = m.place;
+            resetPhysics = true;
+        }
         if (resetPhysics) inst.ResetPhysics();
     }
     if (m.IsProp()) inst.SetRootTransform(StudioPropRoot(m));
     if (!m.IsStage() || m.bound) inst.UpdatePose(physicsDt);
     m.gpu->UpdateSkinning(slot, inst.SkinMatrices());
     m.gpu->UpdateMorphs(slot, inst.VertexMorphDeltas(), inst.MorphVersion());
+    m.gpu->UpdateMaterials(slot, inst.MaterialMul(), inst.MaterialAdd(), inst.MaterialVersion());
 }
 
 void App::StudioCamera(CameraParams& camera) const {
@@ -516,6 +551,60 @@ void App::StudioPushTrackEdit(const char* name, const std::vector<TrackState>& b
     d.history.Push(std::make_unique<TrackEditCommand>(d, name, before, std::move(after)));
 }
 
+// Viewport navigation starts from the motion camera's current view, so the free camera begins where it was.
+void App::StudioTakeFreeCamera() {
+    StudioDoc& d = *studio_;
+    if (!d.useMotionCamera || !d.cameraEval) return;
+    const CameraPose pose = d.cameraEval->Evaluate((float)(d.time * kMmdFps));
+    freeCam_.target = pose.target;
+    freeCam_.yaw = pose.rotation.y;
+    freeCam_.pitch = std::clamp(-pose.rotation.x, -1.45f, 1.45f);
+    freeCam_.distance = std::clamp(std::fabs(pose.distance), 2.0f, 600.0f);
+    freeCam_.fovDeg = pose.fovDeg;
+    d.useMotionCamera = false;
+}
+
+// F: frame the picked bone, else the selected model (its centre bone), else the whole scene origin.
+void App::StudioFocusSelection() {
+    StudioDoc& d = *studio_;
+    StudioModel* m = StudioPoseModel();
+    if (!m) m = d.Selected();
+    StudioTakeFreeCamera();
+    if (!m || !m->inst) {
+        freeCam_.target = {0, 10, 0};
+        freeCam_.distance = 45.0f;
+        return;
+    }
+    const float scale = std::max(0.1f, m->inst->Scale());
+    if (d.activeBone >= 0 && d.activeBone < (int)m->pmx->bones.size()) {
+        freeCam_.target = m->inst->BoneWorldPosition(d.activeBone);
+        freeCam_.distance = std::clamp(12.0f * scale, 3.0f, 600.0f);
+        return;
+    }
+    const int center = m->pmx->FindBone(kCenterBone);
+    DirectX::XMFLOAT3 t{0, 10, 0};
+    if (center >= 0) {
+        t = m->inst->BoneWorldPosition(center);
+        t.y += 4.0f * scale;
+    }
+    freeCam_.target = t;
+    freeCam_.distance = std::clamp((m->IsStage() ? 90.0f : 40.0f) * scale, 3.0f, 600.0f);
+}
+
+CameraKf App::StudioViewedCamera(int frame) const {
+    const StudioDoc& d = *studio_;
+    CameraKf k;
+    if (!d.useMotionCamera || d.camera.camera.empty()) {
+        // the view the user is looking at
+        FillLinearCameraInterp(k.interp);
+        PoseFromFree(freeCam_.target, freeCam_.yaw, freeCam_.pitch, freeCam_.distance, freeCam_.fovDeg, k);
+        k.frame = frame;
+    } else {
+        k = SampleCamera(d.camera.camera, frame);
+    }
+    return k;
+}
+
 void App::StudioInsertKeys(const std::vector<uint64_t>& rows, int frame) {
     OpTimer timer{"StudioInsertKeys"};
     StudioDoc& d = *studio_;
@@ -537,16 +626,7 @@ void App::StudioInsertKeys(const std::vector<uint64_t>& rows, int frame) {
         inserted.insert({row, frame});
         if (!seen.insert({(int)kind, name}).second) continue;
         if (kind == RowKind::Camera) {
-            CameraKf k;
-            if (!d.useMotionCamera || d.camera.camera.empty()) {
-                // keys the view the user is looking at
-                FillLinearCameraInterp(k.interp);
-                PoseFromFree(freeCam_.target, freeCam_.yaw, freeCam_.pitch, freeCam_.distance, freeCam_.fovDeg, k);
-                k.frame = frame;
-            } else {
-                k = SampleCamera(d.camera.camera, frame);
-            }
-            UpsertKey(d.camera.camera, k);
+            UpsertKey(d.camera.camera, StudioViewedCamera(frame));
         } else if (kind == RowKind::Light) {
             // a new key keeps the current interpolated value (empty track: the lighting preset)
             LightKf k = d.camera.light.empty() ? StudioPresetLightKey(frame) : SampleLight(d.camera.light, (float)frame);
@@ -1043,7 +1123,19 @@ void App::StudioRebuildRows() {
     }
     auto keysOfModel = [&](uint64_t rowId, const auto& keys, std::vector<TimelineKey>& out) { keysOf(canon(rowId), keys, out); };
 
-    auto addGroup = [&](uint32_t g, const std::string& label, const std::vector<PmxDisplayFrame::Item>& items) {
+    // the bone / morph search in the inspector narrows the timeline rows (groups without a match disappear)
+    const auto matches = [&](const PmxDisplayFrame::Item& it) {
+        if (!d.boneFilter[0]) return true;
+        const std::string& n = it.morph ? pmx.morphs[(size_t)it.index].name : pmx.bones[(size_t)it.index].name;
+        const std::string& en = it.morph ? pmx.morphs[(size_t)it.index].nameEn : pmx.bones[(size_t)it.index].nameEn;
+        return n.find(d.boneFilter) != std::string::npos || en.find(d.boneFilter) != std::string::npos;
+    };
+    auto addGroup = [&](uint32_t g, const std::string& label, const std::vector<PmxDisplayFrame::Item>& allItems) {
+        std::vector<PmxDisplayFrame::Item> filtered;
+        if (d.boneFilter[0])
+            for (const auto& it : allItems)
+                if (matches(it)) filtered.push_back(it);
+        const std::vector<PmxDisplayFrame::Item>& items = d.boneFilter[0] ? filtered : allItems;
         if (items.empty()) return;
         TimelineRow group;
         group.id = MakeRowId(RowKind::Group, g, 0);
@@ -1189,53 +1281,121 @@ bool App::StudioExportVmdTo(const std::filesystem::path& path) {
 // UI
 // ---------------------------------------------------------------------------
 
+namespace {
+// Panel window titles: the ### part is the stable id (the text follows the UI language)
+std::string PanelTitle(const char* text, const char* id) { return std::string(text) + "###" + id; }
+
+// Default panel arrangement, built when no layout exists (first run, scripted runs, "reset layout"):
+// scene list left, properties right, timeline below, the 3D view in the middle.
+void BuildDefaultStudioDock(ImGuiID dock, ImVec2 size, float leftW, float rightW, float bottomH) {
+    ImGui::DockBuilderRemoveNode(dock);
+    ImGui::DockBuilderAddNode(dock, ImGuiDockNodeFlags_DockSpace);
+    ImGui::DockBuilderSetNodeSize(dock, size);
+    ImGuiID center = dock, left = 0, right = 0, bottom = 0;
+    bottom = ImGui::DockBuilderSplitNode(center, ImGuiDir_Down, bottomH / size.y, nullptr, &center);
+    left = ImGui::DockBuilderSplitNode(center, ImGuiDir_Left, leftW / size.x, nullptr, &center);
+    right = ImGui::DockBuilderSplitNode(center, ImGuiDir_Right, rightW / (size.x - leftW), nullptr, &center);
+    ImGui::DockBuilderDockWindow("###studio_outliner", left);
+    ImGui::DockBuilderDockWindow("###studio_inspector", right);
+    ImGui::DockBuilderDockWindow("###studio_timeline", bottom);
+    ImGui::DockBuilderDockWindow("###studio_viewport", center);
+    ImGui::DockBuilderFinish(dock);
+}
+} // namespace
+
 void App::DrawStudio() {
     using namespace ui;
     if (!studio_) return;
     StudioDoc& d = *studio_;
     ImGuiIO& io = ImGui::GetIO();
     const ImVec2 ds = io.DisplaySize;
+    const Palette& pal = P();
+    const float top = Dp(kTopBarH);
 
+    // --- top bar: a fixed window above the dock space
     ImGui::SetNextWindowPos(ImVec2(0, 0));
-    ImGui::SetNextWindowSize(ds);
+    ImGui::SetNextWindowSize(ImVec2(ds.x, top));
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
-    ImGui::Begin("##studio", nullptr,
+    ImGui::Begin("##studiotop", nullptr,
                  ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoBackground | ImGuiWindowFlags_NoMove |
-                     ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoBringToFrontOnFocus |
+                     ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoDocking | ImGuiWindowFlags_NoScrollWithMouse |
+                     ImGuiWindowFlags_NoScrollbar);
+    ImGui::PopStyleVar();
+    DrawStudioTopBar(0, 0, ds.x, top);
+    ImGui::End();
+    if (studio_.get() != &d) return;  // left the studio (back button) or replaced the project (project menu)
+
+    // --- dock space host (transparent: the 3D view shows through the viewport panel)
+    const ImVec2 hostSize(ds.x, std::max(1.0f, ds.y - top));
+    ImGui::SetNextWindowPos(ImVec2(0, top));
+    ImGui::SetNextWindowSize(hostSize);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
+    ImGui::Begin("##studiohost", nullptr,
+                 ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoBackground | ImGuiWindowFlags_NoMove |
+                     ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoDocking | ImGuiWindowFlags_NoBringToFrontOnFocus |
                      ImGuiWindowFlags_NoScrollWithMouse | ImGuiWindowFlags_NoScrollbar);
     ImGui::PopStyleVar();
-
-    // a short window (high DPI scale, small screens) gives the viewport a bigger share: the timeline shrinks to 30 %
-    const float bottomH = std::clamp(ds.y / Dpi() * 0.3f, 220.0f, kBottomH);
-    const float top = Dp(kTopBarH), left = Dp(kOutlinerW), right = ds.x - Dp(kInspectorW), bottom = ds.y - Dp(bottomH);
-    DrawStudioViewport(left, top, right, bottom);
-    DrawStudioTopBar(0, 0, ds.x, top);
-    if (studio_.get() != &d) {  // left the studio (back button) or replaced the project (project menu)
-        ImGui::End();
-        return;
+    const ImGuiID dockId = ImGui::GetID("##StudioDock");
+    if (studioResetLayout_ || ImGui::DockBuilderGetNode(dockId) == nullptr) {
+        // a short window (high DPI scale, small screens) gives the viewport a bigger share: the timeline shrinks to 30 %
+        const float bottomH = std::clamp(ds.y / Dpi() * 0.3f, 220.0f, kBottomH);
+        BuildDefaultStudioDock(dockId, hostSize, Dp(kOutlinerW), Dp(kInspectorW), Dp(bottomH));
+        studioResetLayout_ = false;
     }
-    DrawStudioOutliner(0, top, left, bottom);
-    DrawStudioInspector(right, top, ds.x, bottom);
-    DrawStudioTimeline(0, bottom, ds.x, ds.y);
+    ImGui::DockSpace(dockId, ImVec2(0, 0), ImGuiDockNodeFlags_None);
+    ImGui::End();
+
+    // One dockable window per panel. The panel code draws in screen coordinates, so each gets its content rectangle.
+    const auto panel = [&](const char* title, const char* id, bool opaque, bool tabBarWhenAlone, auto&& draw) {
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
+        if (opaque) ImGui::PushStyleColor(ImGuiCol_WindowBg, ImGui::ColorConvertU32ToFloat4(pal.surface));
+        ImGuiWindowClass cls;
+        cls.DockNodeFlagsOverrideSet = tabBarWhenAlone ? 0 : ImGuiDockNodeFlags_AutoHideTabBar;
+        ImGui::SetNextWindowClass(&cls);
+        const std::string t = PanelTitle(title, id);
+        const bool open = ImGui::Begin(t.c_str(), nullptr,
+                                       ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse |
+                                           ImGuiWindowFlags_NoCollapse | (opaque ? 0 : ImGuiWindowFlags_NoBackground));
+        ImGui::PopStyleVar();
+        if (open) {
+            const ImVec2 o = ImGui::GetCursorScreenPos(), sz = ImGui::GetContentRegionAvail();
+            if (sz.x > 4.0f && sz.y > 4.0f) draw(o.x, o.y, o.x + sz.x, o.y + sz.y);
+        }
+        ImGui::End();
+        if (opaque) ImGui::PopStyleColor();
+        return open;
+    };
+    float vx0 = 0, vy0 = 0, vx1 = 0, vy1 = 0;
+    bool viewportOpen = false;
+    viewportOpen = panel(Tr("뷰포트"), "studio_viewport", false, false, [&](float x0, float y0, float x1, float y1) {
+        vx0 = x0; vy0 = y0; vx1 = x1; vy1 = y1;
+        DrawStudioViewport(x0, y0, x1, y1);
+    });
+    if (studio_.get() != &d) return;
+    panel(Tr("장면"), "studio_outliner", true, true, [&](float x0, float y0, float x1, float y1) { DrawStudioOutliner(x0, y0, x1, y1); });
+    panel(Tr("속성"), "studio_inspector", true, true, [&](float x0, float y0, float x1, float y1) { DrawStudioInspector(x0, y0, x1, y1); });
+    panel(Tr("타임라인"), "studio_timeline", true, true, [&](float x0, float y0, float x1, float y1) { DrawStudioTimeline(x0, y0, x1, y1); });
 
     DrawStudioUnsavedPrompt();
-    if (studio_.get() != &d) {  // left (or replaced) from the prompt
-        ImGui::End();
-        return;
-    }
-    ImGui::End();
+    if (studio_.get() != &d) return;  // left (or replaced) from the prompt
     DrawStudioHelp();
     DrawVideoRenderDialog();   // the render dialog (top bar render menu); starting it leaves for Screen::Offline
     if (screen_ != Screen::Studio) return;
     DrawToast();
 
-    // The 3D view fills the area between the panels (back buffer pixels = ImGui display pixels).
-    RenderSettings rs = renderer_.Settings();
-    const uint32_t vx = (uint32_t)left, vy = (uint32_t)top;
-    const uint32_t vw = (uint32_t)std::max(16.0f, right - left), vh = (uint32_t)std::max(16.0f, bottom - top);
-    if (rs.viewportX != vx || rs.viewportY != vy || rs.viewportW != vw || rs.viewportH != vh) {
-        rs.viewportX = vx; rs.viewportY = vy; rs.viewportW = vw; rs.viewportH = vh;
-        renderer_.SetSettings(rs);
+    // The 3D view fills the viewport panel (back buffer pixels = ImGui display pixels).
+    if (viewportOpen) {
+        RenderSettings rs = renderer_.Settings();
+        float rr[4];
+        StudioRenderRect(vx0, vy0, vx1, vy1, rr);  // the 16:9 frame while looking through the motion camera
+        const uint32_t vx = (uint32_t)rr[0], vy = (uint32_t)rr[1];
+        const uint32_t vw = (uint32_t)std::max(16.0f, rr[2]), vh = (uint32_t)std::max(16.0f, rr[3]);
+        const ViewShading shading = (ViewShading)std::clamp(d.shading, 0, 2);
+        if (rs.viewportX != vx || rs.viewportY != vy || rs.viewportW != vw || rs.viewportH != vh || rs.shading != shading) {
+            rs.viewportX = vx; rs.viewportY = vy; rs.viewportW = vw; rs.viewportH = vh;
+            rs.shading = shading;
+            renderer_.SetSettings(rs);
+        }
     }
 }
 
@@ -1318,6 +1478,9 @@ void App::DrawStudioTopBar(float x0, float y0, float x1, float y1) {
     DrawStudioRenderMenu();
     rx -= Dp(4.0f + 36.0f);
     ImGui::SetCursorScreenPos(ImVec2(rx, cy - Dp(18.0f)));
+    if (IconButton("##layoutreset", icon::Stack, Tr("패널 배치 초기화 (패널은 탭을 끌어서 옮기고 크기를 바꿀 수 있어요)"))) studioResetLayout_ = true;
+    rx -= Dp(4.0f + 36.0f);
+    ImGui::SetCursorScreenPos(ImVec2(rx, cy - Dp(18.0f)));
     if (IconButton("##help", icon::Keyboard, Tr("단축키  (?)"), studioHelpOpen_)) studioHelpOpen_ = !studioHelpOpen_;
 }
 
@@ -1376,6 +1539,13 @@ void App::DrawStudioOutliner(float x0, float y0, float x1, float y1) {
         if (index >= 0 && (rowHot || selected)) {
             ImGui::SetCursorScreenPos(ImVec2(b.x - Dp(76.0f), a.y + Dp(6.0f)));
             if (IconButton("##more", icon::DotsThree, Tr("모델 메뉴"), false, 28.0f)) menuFor = index;
+        }
+        if (index == -1) {  // possess the camera (C4D): navigating the viewport then edits this camera
+            ImGui::SetCursorScreenPos(ImVec2(b.x - Dp(44.0f), a.y + Dp(6.0f)));
+            if (IconButton("##possess", icon::Crosshair,
+                           d.possessCamera ? Tr("카메라 빙의 해제  (Esc)") : Tr("카메라 빙의: 뷰포트 조작이 이 카메라를 움직여요"),
+                           d.possessCamera, 28.0f))
+                StudioPossess(!d.possessCamera);
         }
         if (visible) {
             ImGui::SetCursorScreenPos(ImVec2(b.x - Dp(44.0f), a.y + Dp(6.0f)));
@@ -1507,6 +1677,7 @@ void App::DrawStudioInspector(float x0, float y0, float x1, float y1) {
         if (m) {
             line(Tr("본 / 모프"), std::to_string(m->pmx->bones.size()) + " / " + std::to_string(m->pmx->morphs.size()));
             if (m->IsProp()) DrawStudioPropPanel(w);
+            else if (m->kind == ModelKind::Character) DrawStudioPlacePanel(w);
         } else {
             char counts[96];
             std::snprintf(counts, sizeof(counts), Tr("카메라 %d · 조명 %d · 섀도 %d"), (int)d.camera.camera.size(),
@@ -1543,7 +1714,7 @@ void App::DrawStudioInspector(float x0, float y0, float x1, float y1) {
         if (StudioTrackOfRow(k.first, kind, name)) { first = &k; break; }
     }
     if (!first) {
-        StudioEndKeyEdit();  // the edited key is gone (deleted / deselected mid-edit)
+        if (!studioKeyLive_) StudioEndKeyEdit();  // the edited key is gone (deleted / deselected mid-edit)
         const ImVec2 c = ImGui::GetCursorScreenPos();
         Text(cdl, Font::Semibold, size::Small, c, p.ink2, Tr("선택한 키 없음"));
         ImGui::Dummy(ImVec2(w, Dp(24.0f)));
@@ -1572,7 +1743,9 @@ void App::DrawStudioInspector(float x0, float y0, float x1, float y1) {
     line(Tr("프레임"), std::to_string(first->second));
     if (IsCameraKind(kind)) {
         ImGui::Dummy(ImVec2(w, Dp(4.0f)));
-        if (DrawStudioCameraKeyFields(w, kind, first->second)) {  // light / shadow: no curves
+        // the camera key under the playhead is edited by the "camera values" section above (no second copy)
+        const bool shownAbove = kind == RowKind::Camera && first->second == d.Frame();
+        if (!shownAbove && DrawStudioCameraKeyFields(w, kind, first->second)) {  // light / shadow: no curves
             ImGui::EndChild();
             return;
         }
@@ -1724,6 +1897,10 @@ void App::DrawStudioTimeline(float x0, float y0, float x1, float y1) {
     if (IconButton("##loop", icon::Repeat,
                    d.HasRange() ? Tr("구간 반복") : Tr("반복 재생  (눈금자를 Shift+드래그하면 구간 지정)"), d.loop, 34.0f))
         d.loop = !d.loop;
+    ImGui::SameLine(0, Dp(2.0f));
+    if (IconButton("##autokey", icon::Diamond, d.autoKey ? Tr("자동 키 켬: 값을 고치면 재생 헤드에 키가 생겨요") : Tr("자동 키 끔: I 키로 직접 등록해요"),
+                   d.autoKey, 34.0f))
+        d.autoKey = !d.autoKey;
     ImGui::SameLine(0, Dp(12.0f));
 
     // frame field: applied on Enter (typing must not seek on every digit)
@@ -1826,6 +2003,118 @@ void App::DrawStudioTimeline(float x0, float y0, float x1, float y1) {
     StudioHandleTimeline(ev);
 }
 
+// Viewport navigation (Unity / Unreal style): RMB look + WASDQE fly (wheel = speed), Alt+LMB or LMB orbit, MMB pan,
+// Alt+RMB dolly, wheel zoom. The fly keys only count while the right button is held on the viewport.
+// Possessing the camera (C4D style) sends the same gestures to the motion camera's key at the playhead instead of the
+// free camera: orbit / pan / fly move the real camera, one undo step per gesture.
+void App::StudioViewportNavigate(bool hovered, bool active) {
+    StudioDoc& d = *studio_;
+    ImGuiIO& io = ImGui::GetIO();
+    const bool possessed = d.possessCamera;
+    const bool rmb = active && ImGui::IsMouseDown(ImGuiMouseButton_Right);
+    const auto keyDown = [](ImGuiKey k) { return ImGui::IsKeyDown(k); };
+    const float fwdIn = rmb && !io.KeyAlt ? (float)keyDown(ImGuiKey_W) - (float)keyDown(ImGuiKey_S) : 0.0f;
+    const float rightIn = rmb && !io.KeyAlt ? (float)keyDown(ImGuiKey_D) - (float)keyDown(ImGuiKey_A) : 0.0f;
+    const float upIn = rmb && !io.KeyAlt ? (float)(keyDown(ImGuiKey_E) || keyDown(ImGuiKey_Space)) - (float)keyDown(ImGuiKey_Q) : 0.0f;
+    const bool flying = fwdIn != 0.0f || rightIn != 0.0f || upIn != 0.0f;
+    const bool dragging = active && studioViewDrag_ == 1 && (io.MouseDelta.x != 0 || io.MouseDelta.y != 0);
+    const bool input = dragging || flying || (hovered && io.MouseWheel != 0);
+    FreeCamera possCam;
+    if (input && possessed) {
+        if (d.playing) StudioSetPlaying(false);  // the edit belongs to one frame
+        possCam = StudioViewedFree(d.Frame());
+    } else if (input) {
+        StudioTakeFreeCamera();
+    }
+    FreeCamera& cam = possessed ? possCam : freeCam_;
+    // a real camera often sits on its target (distance ~ 0): pan / dolly then follow a floor of 3 units
+    const float minDist = possessed ? 0.1f : 2.0f;
+    const float reach = possessed ? std::max(cam.distance, 3.0f) : cam.distance;
+    if (dragging) {
+        const ImVec2 delta = io.MouseDelta;
+        if (ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
+            cam.yaw += delta.x * 0.006f;
+            cam.pitch = std::clamp(cam.pitch + delta.y * 0.006f, -1.45f, 1.45f);
+        } else if (rmb && io.KeyAlt) {  // dolly
+            if (possessed) {
+                const float sy = std::sin(cam.yaw), cy = std::cos(cam.yaw), sp = std::sin(cam.pitch), cp = std::cos(cam.pitch);
+                const float step = reach * (delta.x - delta.y) * 0.006f;
+                cam.target.x += -sy * cp * step;
+                cam.target.y += -sp * step;
+                cam.target.z += cy * cp * step;
+            } else {
+                cam.distance = std::clamp(cam.distance * std::exp((delta.x - delta.y) * 0.006f), minDist, 600.0f);
+            }
+        } else if (rmb) {  // look around the eye: the target follows
+            const float sy = std::sin(cam.yaw), cy = std::cos(cam.yaw), sp = std::sin(cam.pitch), cp = std::cos(cam.pitch);
+            const DirectX::XMFLOAT3 eye{cam.target.x + sy * cp * cam.distance, cam.target.y + sp * cam.distance,
+                                        cam.target.z - cy * cp * cam.distance};
+            cam.yaw -= delta.x * 0.004f;
+            cam.pitch = std::clamp(cam.pitch + delta.y * 0.004f, -1.45f, 1.45f);
+            const float sy2 = std::sin(cam.yaw), cy2 = std::cos(cam.yaw), sp2 = std::sin(cam.pitch), cp2 = std::cos(cam.pitch);
+            cam.target = {eye.x - sy2 * cp2 * cam.distance, eye.y - sp2 * cam.distance, eye.z + cy2 * cp2 * cam.distance};
+        } else {  // pan
+            const float rx = std::cos(cam.yaw), rz = std::sin(cam.yaw);
+            const float scale = reach * 0.0015f;
+            cam.target.x += (-delta.x * rx) * scale;
+            cam.target.y += delta.y * scale;
+            cam.target.z += (-delta.x * rz) * scale;
+        }
+    }
+    if (flying) {
+        const float sy = std::sin(cam.yaw), cy = std::cos(cam.yaw), sp = std::sin(cam.pitch), cp = std::cos(cam.pitch);
+        const float fx = -sy * cp, fy = -sp, fz = cy * cp;  // eye -> target
+        const float speed = 30.0f * studioFlyMul_ * (io.KeyShift ? 3.0f : 1.0f) * io.DeltaTime;
+        cam.target.x += (fx * fwdIn + cy * rightIn) * speed;
+        cam.target.y += (fy * fwdIn + upIn) * speed;
+        cam.target.z += (fz * fwdIn + sy * rightIn) * speed;
+    }
+    if (hovered && io.MouseWheel != 0.0f) {
+        if (rmb) studioFlyMul_ = std::clamp(studioFlyMul_ * std::pow(1.2f, io.MouseWheel), 0.1f, 20.0f);  // fly speed
+        else if (possessed) {  // dolly the camera itself: eye and target move together, the lens distance stays
+            const float sy = std::sin(cam.yaw), cy = std::cos(cam.yaw), sp = std::sin(cam.pitch), cp = std::cos(cam.pitch);
+            const float step = reach * 0.12f * io.MouseWheel;
+            cam.target.x += -sy * cp * step;
+            cam.target.y += -sp * step;
+            cam.target.z += cy * cp * step;
+        } else cam.distance = std::clamp(cam.distance * std::pow(0.88f, io.MouseWheel), minDist, 600.0f);
+    }
+    if (possessed && input) StudioWriteCamera(cam);
+    StudioNavEditTick();
+}
+
+void App::StudioOrthoNavigate(const ViewProj& vp, bool hovered, bool active) {
+    StudioDoc& d = *studio_;
+    ImGuiIO& io = ImGui::GetIO();
+    // pan: right / middle (or an empty-space left) drag moves the shared look-at point in the view's plane
+    const bool dragging = active && (io.MouseDelta.x != 0 || io.MouseDelta.y != 0) &&
+                          (ImGui::IsMouseDown(ImGuiMouseButton_Right) || ImGui::IsMouseDown(ImGuiMouseButton_Middle) ||
+                           (ImGui::IsMouseDown(ImGuiMouseButton_Left) && studioViewDrag_ == 1));
+    if (dragging) {
+        const float s = vp.orthoHeight / std::max(1.0f, vp.h);
+        const XMFLOAT4X4& v = vp.view;
+        const XMFLOAT3 right{v._11, v._21, v._31}, up{v._12, v._22, v._32};  // view axes in world space (row-vector view)
+        d.quadCenter.x += (-io.MouseDelta.x * right.x + io.MouseDelta.y * up.x) * s;
+        d.quadCenter.y += (-io.MouseDelta.x * right.y + io.MouseDelta.y * up.y) * s;
+        d.quadCenter.z += (-io.MouseDelta.x * right.z + io.MouseDelta.y * up.z) * s;
+    }
+    if (hovered && io.MouseWheel != 0.0f) d.quadHeight = std::clamp(d.quadHeight * std::pow(0.88f, io.MouseWheel), 2.0f, 4000.0f);
+}
+
+void App::StudioAddQuadViews(FrameView& view) const {
+    const StudioDoc& d = *studio_;
+    if (d.viewLayout != 1) return;
+    const float rects[3][4] = {{0.5f, 0.0f, 0.5f, 0.5f}, {0.0f, 0.5f, 0.5f, 0.5f}, {0.5f, 0.5f, 0.5f, 0.5f}};  // top, front, left
+    view.mainRect[0] = 0.0f; view.mainRect[1] = 0.0f; view.mainRect[2] = 0.5f; view.mainRect[3] = 0.5f;
+    for (int k = 0; k < 3; ++k) {
+        ExtraView ev;
+        std::copy(rects[k], rects[k] + 4, ev.rect);
+        OrthoViewMatrix(k, d.quadCenter, &ev.view, nullptr);
+        ev.height = d.quadHeight;
+        view.extraViews.push_back(ev);
+    }
+}
+
 void App::DrawStudioViewport(float x0, float y0, float x1, float y1) {
     using namespace ui;
     StudioDoc& d = *studio_;
@@ -1833,8 +2122,43 @@ void App::DrawStudioViewport(float x0, float y0, float x1, float y1) {
     // camera of this frame: overlays, picking and the gizmo project with it
     CameraParams cp;
     StudioCamera(cp);
-    studioVp_ = MakeViewProj(cp.view, cp.eye, cp.fovYRadians, cp.nearZ, cp.farZ, x0, y0, std::max(1.0f, x1 - x0),
-                             std::max(1.0f, y1 - y0));
+    float rr[4];
+    StudioRenderRect(x0, y0, x1, y1, rr);
+    const bool quad = d.viewLayout == 1;
+    // views: 0 perspective camera, then (quad) top / front / left. Each has its rectangle and its projection.
+    struct QuadView { float x0, y0, x1, y1; ViewProj vp; };
+    QuadView views[4];
+    int viewCount = 1;
+    if (!quad) {
+        views[0] = {rr[0], rr[1], rr[0] + rr[2], rr[1] + rr[3],
+                    MakeViewProj(cp.view, cp.eye, cp.fovYRadians, cp.nearZ, cp.farZ, rr[0], rr[1], std::max(1.0f, rr[2]), std::max(1.0f, rr[3]))};
+    } else {
+        viewCount = 4;
+        const float mx = std::floor((x0 + x1) * 0.5f), my = std::floor((y0 + y1) * 0.5f);
+        const float xs[3] = {x0, mx, x1}, ys[3] = {y0, my, y1};
+        const int cells[4][2] = {{0, 0}, {1, 0}, {0, 1}, {1, 1}};  // perspective, top, front, left
+        for (int k = 0; k < 4; ++k) {
+            QuadView& q = views[k];
+            q.x0 = xs[cells[k][0]]; q.x1 = xs[cells[k][0] + 1];
+            q.y0 = ys[cells[k][1]]; q.y1 = ys[cells[k][1] + 1];
+            const float w = std::max(1.0f, q.x1 - q.x0), h = std::max(1.0f, q.y1 - q.y0);
+            if (k == 0) {
+                q.vp = MakeViewProj(cp.view, cp.eye, cp.fovYRadians, cp.nearZ, cp.farZ, q.x0, q.y0, w, h);
+            } else {
+                XMFLOAT4X4 view;
+                XMFLOAT3 eye;
+                OrthoViewMatrix(k - 1, d.quadCenter, &view, &eye);
+                q.vp = MakeOrthoViewProj(view, eye, d.quadHeight, 0.1f, 2.0f * kOrthoEyeDistance, q.x0, q.y0, w, h);
+            }
+        }
+    }
+    const auto viewAt = [&](ImVec2 m) {
+        for (int k = 0; k < viewCount; ++k)
+            if (m.x >= views[k].x0 && m.x < views[k].x1 && m.y >= views[k].y0 && m.y < views[k].y1) return k;
+        return 0;
+    };
+    if (!quad) studioActiveView_ = 0;
+    studioVp_ = views[std::clamp(studioActiveView_, 0, viewCount - 1)].vp;
 
     ImGui::SetCursorScreenPos(ImVec2(x0, y0));
     ImGui::SetNextItemAllowOverlap();  // the toolbar buttons drawn on top take the hover
@@ -1844,6 +2168,14 @@ void App::DrawStudioViewport(float x0, float y0, float x1, float y1) {
     const bool activated = ImGui::IsItemActivated(), deactivated = ImGui::IsItemDeactivated();
     if (hovered) ImGui::SetItemKeyOwner(ImGuiKey_MouseWheelY);
 
+    // the view under the mouse is the active one for a gesture (locked while a press is held)
+    if (quad && (activated || (studioViewDrag_ == 0 && !active))) {
+        studioActiveView_ = viewAt(io.MousePos);
+        studioVp_ = views[studioActiveView_].vp;
+    }
+    const int av = std::clamp(studioActiveView_, 0, viewCount - 1);
+    const QuadView& act = views[av];
+
     // a left press goes to the gizmo or a bone first, else it orbits; right/middle always move the camera
     if (activated) {
         studioPressPos_ = io.MousePos;
@@ -1851,12 +2183,22 @@ void App::DrawStudioViewport(float x0, float y0, float x1, float y1) {
         studioViewDrag_ = 1;
     }
     bool consumed = false;
-    StudioViewportPose(x0, y0, x1, y1, hovered || active, consumed);
-    // camera target: a click on a key dot of the camera path selects that key (no orbit)
-    if (studioViewDrag_ == 1 && hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left) && StudioPickCameraKey(io.MousePos))
-        studioViewDrag_ = 4;
-    DrawStudioCameraPath(x0, y0, x1, y1);
-    if (active && (std::fabs(io.MousePos.x - studioPressPos_.x) > Dp(3.0f) || std::fabs(io.MousePos.y - studioPressPos_.y) > Dp(3.0f)))
+    StudioViewportPose(act.x0, act.y0, act.x1, act.y1, hovered || active, consumed);
+    if (av == 0) {
+        StudioViewportCameraHandles(hovered || active);
+        // camera target: a click on a key dot of the camera path selects that key (no orbit)
+        if (studioViewDrag_ == 1 && hovered && !io.KeyAlt && ImGui::IsMouseClicked(ImGuiMouseButton_Left) && StudioPickCameraKey(io.MousePos))
+            studioViewDrag_ = 4;
+    }
+    {
+        // the camera path / frustum in the perspective view, the frame guides when there is one view
+        const ViewProj saved = studioVp_;
+        studioVp_ = views[0].vp;
+        DrawStudioCameraPath(views[0].x0, views[0].y0, views[0].x1, views[0].y1);
+        studioVp_ = saved;
+    }
+    if (!quad) DrawStudioFrameMask(x0, y0, x1, y1);
+    if (active &&(std::fabs(io.MousePos.x - studioPressPos_.x) > Dp(3.0f) || std::fabs(io.MousePos.y - studioPressPos_.y) > Dp(3.0f)))
         studioPressMoved_ = true;
     if (deactivated) {
         // a click (no drag) on empty space clears the bone selection
@@ -1865,41 +2207,44 @@ void App::DrawStudioViewport(float x0, float y0, float x1, float y1) {
         studioViewDrag_ = 0;
     }
 
-    const bool dragging = active && studioViewDrag_ == 1 && (io.MouseDelta.x != 0 || io.MouseDelta.y != 0);
-    if ((dragging || (hovered && io.MouseWheel != 0)) && d.useMotionCamera && d.cameraEval) {
-        // take over the motion camera's current view, so the free camera starts where it was
-        const CameraPose pose = d.cameraEval->Evaluate((float)(d.time * kMmdFps));
-        freeCam_.target = pose.target;
-        freeCam_.yaw = pose.rotation.y;
-        freeCam_.pitch = std::clamp(-pose.rotation.x, -1.45f, 1.45f);
-        freeCam_.distance = std::clamp(std::fabs(pose.distance), 2.0f, 600.0f);
-        freeCam_.fovDeg = pose.fovDeg;
-        d.useMotionCamera = false;
-    }
-    FreeCamera& cam = freeCam_;
-    if (dragging) {
-        const ImVec2 delta = io.MouseDelta;
-        if (ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
-            cam.yaw += delta.x * 0.006f;
-            cam.pitch = std::clamp(cam.pitch + delta.y * 0.006f, -1.45f, 1.45f);
-        } else {
-            const float rx = std::cos(cam.yaw), rz = std::sin(cam.yaw);
-            const float scale = cam.distance * 0.0015f;
-            cam.target.x += (-delta.x * rx) * scale;
-            cam.target.y += delta.y * scale;
-            cam.target.z += (-delta.x * rz) * scale;
+    if (av == 0) StudioViewportNavigate(hovered, active);
+    else StudioOrthoNavigate(act.vp, hovered, active);
+    (void)consumed;
+
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    if (quad) {
+        // the other views show the bones and the gizmo too; labels and the separators
+        for (int k = 0; k < viewCount; ++k)
+            if (k != av) StudioDrawPoseOverlay(views[k].vp, views[k].x0, views[k].y0, views[k].x1, views[k].y1);
+        const Palette& pp = P();
+        const float gx = views[1].x0, gy = views[2].y0;
+        dl->AddLine(ImVec2(gx, y0), ImVec2(gx, y1), pp.lineStrong, 1.0f);
+        dl->AddLine(ImVec2(x0, gy), ImVec2(x1, gy), pp.lineStrong, 1.0f);
+        const char* names[4] = {Tr("원근"), Tr("상단"), Tr("정면"), Tr("좌측")};
+        for (int k = 1; k < viewCount; ++k) {
+            ImVec2 sz;
+            Badge(dl, ImVec2(views[k].x0 + Dp(10.0f), views[k].y0 + Dp(10.0f)), names[k], WithAlpha(pp.surface, 0.85f), pp.ink2, &sz);
         }
     }
-    if (hovered && io.MouseWheel != 0.0f) cam.distance = std::clamp(cam.distance * std::pow(0.88f, io.MouseWheel), 2.0f, 600.0f);
-    (void)consumed;
 
     // view label (top left of the viewport) and the pose toolbar next to it, over the bone overlay
     const Palette& p = P();
-    ImDrawList* dl = ImGui::GetWindowDrawList();
-    const char* label = d.useMotionCamera && d.cameraEval ? Tr("카메라 모션") : Tr("자유 카메라");
+    const char* label = d.possessCamera ? Tr("카메라 빙의 중") : d.useMotionCamera && d.cameraEval ? Tr("카메라 모션") : Tr("자유 카메라");
     ImVec2 bs;
-    Badge(dl, ImVec2(x0 + Dp(12.0f), y0 + Dp(12.0f)), label, WithAlpha(p.surface, 0.85f), p.ink2, &bs);
+    Badge(dl, ImVec2(x0 + Dp(12.0f), y0 + Dp(12.0f)), label, d.possessCamera ? p.accent : WithAlpha(p.surface, 0.85f),
+          d.possessCamera ? p.onAccent : p.ink2, &bs);
     StudioViewportToolbar(x0 + Dp(12.0f) + bs.x + Dp(10.0f), y0 + Dp(12.0f) + bs.y * 0.5f);
+    {
+        // viewport shading, top right: solid / unlit / wireframe (the ray-traced paths always show lit)
+        const char* modes[] = {Tr("솔리드"), Tr("언릿"), Tr("와이어")};
+        const float segW = 210.0f, layW = 128.0f;
+        ImGui::SetCursorScreenPos(ImVec2(x1 - Dp(segW) - Dp(12.0f), y0 + Dp(8.0f)));
+        Segmented("##shading", modes, 3, &d.shading, segW, 30.0f);
+        // one view or the four-way split (top / front / left are orthographic and always drawn flat)
+        const char* layouts[] = {Tr("단일"), Tr("4분할")};
+        ImGui::SetCursorScreenPos(ImVec2(x1 - Dp(segW) - Dp(12.0f) - Dp(layW) - Dp(8.0f), y0 + Dp(8.0f)));
+        Segmented("##viewlayout", layouts, 2, &d.viewLayout, layW, 30.0f);
+    }
     if (d.models.empty() && studioJobs_.empty()) {
         const char* t1 = Tr("빈 프로젝트");
         const char* t2 = Tr("왼쪽 위의 ＋ 버튼으로 캐릭터와 스테이지를 추가하세요");

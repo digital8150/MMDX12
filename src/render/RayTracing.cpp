@@ -48,7 +48,9 @@ std::vector<D3D12_RAYTRACING_GEOMETRY_DESC> BuildGeometryDescs(GpuModel& model, 
         const MaterialConstants& c = model.MaterialConstantsCpu()[i];
         D3D12_RAYTRACING_GEOMETRY_DESC& d = descs.emplace_back();
         d.Type = D3D12_RAYTRACING_GEOMETRY_TYPE_TRIANGLES;
-        const bool alphaTest = m.alphaTested || c.diffuse.w < 0.999f;
+        // a stage BLAS is built once: materials a material morph targets stay non-opaque so the ray
+        // queries see their run-time alpha (RtGeometry). Character BLAS are rebuilt every frame.
+        const bool alphaTest = m.alphaTested || c.diffuse.w < 0.999f || (m.morphable && model.Role() == ModelRole::Stage);
         d.Flags = (m.castShadow && !alphaTest) ? D3D12_RAYTRACING_GEOMETRY_FLAG_OPAQUE
                                                : D3D12_RAYTRACING_GEOMETRY_FLAG_NONE;
         d.Triangles.IndexFormat = DXGI_FORMAT_R32_UINT;
@@ -83,14 +85,16 @@ bool RtScene::Initialize(Dx12Context& ctx, const std::filesystem::path& shaderDi
         return false;
     }
 
-    // skin.hlsl root signature: 0: 4 root constants b0, 1..5: root SRVs t0..t4, 6: root UAV u0.
+    // skin.hlsl root signature: 0: 4 root constants b0, 1..5: root SRVs t0..t4, 6: root UAV u0,
+    // 7: root SRV t5 (SDEF parameters).
     ID3D12Device* device = ctx.Device();
-    CD3DX12_ROOT_PARAMETER p[7];
+    CD3DX12_ROOT_PARAMETER p[8];
     p[0].InitAsConstants(4, 0);
     for (uint32_t i = 0; i < 5; ++i) p[1 + i].InitAsShaderResourceView(i);
     p[6].InitAsUnorderedAccessView(0);
+    p[7].InitAsShaderResourceView(5);
     CD3DX12_ROOT_SIGNATURE_DESC rs;
-    rs.Init(7, p, 0, nullptr, D3D12_ROOT_SIGNATURE_FLAG_NONE);
+    rs.Init(8, p, 0, nullptr, D3D12_ROOT_SIGNATURE_FLAG_NONE);
     ComPtr<ID3DBlob> blob, err;
     if (FAILED(D3D12SerializeRootSignature(&rs, D3D_ROOT_SIGNATURE_VERSION_1_0, &blob, &err))) {
         LOG_ERROR("RtScene: skin root signature serialization failed");
@@ -164,7 +168,7 @@ bool RtScene::EnsureModelResources(GpuModel& model) {
         for (size_t i = 0; i < model.Materials().size(); ++i) {
             const GpuModel::Material& m = model.Materials()[i];
             const MaterialConstants& c = model.MaterialConstantsCpu()[i];
-            if (m.indexCount > 0 && c.diffuse.w > 0.001f && m.doubleSided == (part == 1))
+            if (m.indexCount > 0 && (c.diffuse.w > 0.001f || m.morphable) && m.doubleSided == (part == 1))
                 rt.geometryMaterials.push_back((uint32_t)i);
         }
     }
@@ -227,7 +231,7 @@ bool RtScene::Build(ID3D12GraphicsCommandList* cmd, const std::vector<GpuModel*>
     for (GpuModel* m : models) {
         if (!usable(m) || !needsSkin(m) || !EnsureModelResources(*m)) continue;
         const auto& rt = m->Rt();
-        uint32_t c[4] = {m->VertexCount(), 0, 0, 0};
+        uint32_t c[4] = {m->VertexCount(), 0, m->HasSdef() ? 1u : 0u, 0};
         std::memcpy(&c[1], &time, sizeof(float));
         cmd->SetComputeRoot32BitConstants(0, 4, c, 0);
         cmd->SetComputeRootShaderResourceView(1, m->VertexBuffer()->GetGPUVirtualAddress());
@@ -236,6 +240,7 @@ bool RtScene::Build(ID3D12GraphicsCommandList* cmd, const std::vector<GpuModel*>
         cmd->SetComputeRootShaderResourceView(4, m->MorphBuffer(frame));
         cmd->SetComputeRootShaderResourceView(5, m->PrevMorphBuffer(frame));
         cmd->SetComputeRootUnorderedAccessView(6, rt.vertices->GetGPUVirtualAddress());
+        cmd->SetComputeRootShaderResourceView(7, m->SdefBuffer()->GetGPUVirtualAddress());
         cmd->Dispatch((m->VertexCount() + 63) / 64, 1, 1);
     }
     barriers.clear();
@@ -312,7 +317,7 @@ bool RtScene::Build(ID3D12GraphicsCommandList* cmd, const std::vector<GpuModel*>
         instanceCapacity_ = newInstances;
         geometryCapacity_ = newGeometries;
     }
-    // One ring entry per frame slot; 64 / 80 are the descriptor sizes.
+    // One ring entry per frame slot.
     auto* inst = reinterpret_cast<D3D12_RAYTRACING_INSTANCE_DESC*>(
         instancesMapped_ + (size_t)slot * instanceCapacity_ * sizeof(D3D12_RAYTRACING_INSTANCE_DESC));
     auto* geom = reinterpret_cast<RtGeometry*>(
@@ -339,7 +344,8 @@ bool RtScene::Build(ID3D12GraphicsCommandList* cmd, const std::vector<GpuModel*>
         for (uint32_t mi : rt.geometryMaterials) {
             const GpuModel::Material& m2 = m->Materials()[mi];
             const MaterialConstants& c = m->MaterialConstantsCpu()[mi];
-            const bool alphaTest = m2.alphaTested || c.diffuse.w < 0.999f;
+            const bool alphaTest = m2.alphaTested || c.diffuse.w < 0.999f ||
+                                   (m2.morphable && m->Role() == ModelRole::Stage);
             RtGeometry e{};
             e.vertexSrv = rt.srv;
             e.indexSrv = rt.srv + 1;
@@ -354,6 +360,12 @@ bool RtScene::Build(ID3D12GraphicsCommandList* cmd, const std::vector<GpuModel*>
             e.textureSrv = m2.srvTable;
             e.sphereSrv = m2.srvTable + 1;
             e.toonSrv = m2.srvTable + 2;
+            e.texMul = c.texMul;
+            e.texAdd = c.texAdd;
+            e.sphereMul = c.sphereMul;
+            e.sphereAdd = c.sphereAdd;
+            e.toonMul = c.toonMul;
+            e.toonAdd = c.toonAdd;
             *geom++ = e;
         }
         base += (uint32_t)rt.geometryMaterials.size();

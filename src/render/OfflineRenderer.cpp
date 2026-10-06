@@ -59,6 +59,10 @@ const D3D12_INPUT_ELEMENT_DESC kMmdLayout[] = {
     {"TEXCOORD", 1, DXGI_FORMAT_R32_FLOAT, 0, 56, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
     {"TEXCOORD", 2, DXGI_FORMAT_R32G32B32_FLOAT, 1, 0, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
     {"TEXCOORD", 3, DXGI_FORMAT_R32G32B32_FLOAT, 2, 0, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
+    {"TEXCOORD", 4, DXGI_FORMAT_R32G32B32_FLOAT, 3, 0, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},   // GpuSdef
+    {"TEXCOORD", 5, DXGI_FORMAT_R32G32B32_FLOAT, 3, 12, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
+    {"TEXCOORD", 6, DXGI_FORMAT_R32G32B32_FLOAT, 3, 24, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
+    {"TEXCOORD", 7, DXGI_FORMAT_R32_FLOAT, 3, 36, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
 };
 
 bool CreateRootSignature(ID3D12Device* device, const CD3DX12_ROOT_SIGNATURE_DESC& desc,
@@ -296,15 +300,15 @@ void OfflineRenderer::Impl::DrawEdges(ID3D12GraphicsCommandList* cmd, float shut
     for (int p = 0; p < 2; ++p) {  // pass 0: depth pre-pass, pass 1: edges
         for (GpuModel* model : view.models) {
             if (!model) continue;
-            D3D12_VERTEX_BUFFER_VIEW vbs[3] = {model->VertexBufferView(), model->MorphBufferView(frame),
-                                               model->PrevMorphBufferView(frame)};
-            cmd->IASetVertexBuffers(0, 3, vbs);
+            D3D12_VERTEX_BUFFER_VIEW vbs[4] = {model->VertexBufferView(), model->MorphBufferView(frame),
+                                               model->PrevMorphBufferView(frame), model->SdefBufferView()};
+            cmd->IASetVertexBuffers(0, 4, vbs);
             cmd->IASetIndexBuffer(&model->IndexBufferView());
             cmd->SetGraphicsRootShaderResourceView(2, model->BoneBuffer(frame));
             cmd->SetGraphicsRootShaderResourceView(5, model->PrevBoneBuffer(frame));
             for (const GpuModel::Material& mat : model->Materials()) {
                 if (p == 0) {
-                    if (mat.indexCount == 0) continue;
+                    if (mat.indexCount == 0 || !mat.visible) continue;
                     cmd->SetPipelineState(mat.doubleSided ? depthNoCull.Get() : depthCullBack.Get());
                 } else {
                     if (!mat.drawEdge || mat.indexCount == 0) continue;

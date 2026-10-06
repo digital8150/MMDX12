@@ -28,27 +28,30 @@ constexpr double kAutosaveSeconds = 60.0;
 // Undoable prop placement edit. Refers to the prop by uid: removing another model shifts indices.
 class PropAttachCommand : public Command {
 public:
-    PropAttachCommand(StudioDoc& doc, uint32_t uid, PropAttach before, PropAttach after)
-        : doc_(doc), uid_(uid), before_(std::move(before)), after_(std::move(after)) {}
+    // place: the character's world placement (StudioModel::place) instead of the prop's attach
+    PropAttachCommand(StudioDoc& doc, uint32_t uid, PropAttach before, PropAttach after, bool place = false)
+        : doc_(doc), uid_(uid), before_(std::move(before)), after_(std::move(after)), place_(place) {}
     void Do() override { Apply(after_); }
     void Undo() override { Apply(before_); }
-    std::string Name() const override { return Tr("소품 배치"); }
+    std::string Name() const override { return place_ ? Tr("모델 배치") : Tr("소품 배치"); }
 
 private:
     void Apply(const PropAttach& a) {
         const int i = doc_.IndexOfUid(uid_);
-        if (i >= 0) doc_.models[(size_t)i]->attach = a;
+        if (i >= 0) (place_ ? doc_.models[(size_t)i]->place : doc_.models[(size_t)i]->attach) = a;
     }
     StudioDoc& doc_;
     uint32_t uid_;
     PropAttach before_, after_;
+    bool place_;
 };
 
 std::string StemUtf8(const std::filesystem::path& p) { return PathToUtf8(p.stem()); }
 
 const std::vector<FileFilter>& ModelFilters() {
     static const std::vector<FileFilter> f = {
-        {L"3D", L"*.pmx;*.glb;*.gltf;*.vrm;*.fbx;*.obj"}, {L"PMX", L"*.pmx"}, {L"glTF / VRM", L"*.glb;*.gltf;*.vrm"},
+        {L"3D", L"*.pmx;*.pmd;*.x;*.glb;*.gltf;*.vrm;*.fbx;*.obj"}, {L"PMX / PMD", L"*.pmx;*.pmd"}, {L"X", L"*.x"},
+        {L"glTF / VRM", L"*.glb;*.gltf;*.vrm"},
         {L"FBX / OBJ", L"*.fbx;*.obj"}};
     return f;
 }
@@ -144,6 +147,7 @@ ProjectData App::StudioProjectData() const {
         pm.path = m.path;
         pm.libraryId = m.libraryId;
         pm.visible = m.visible;
+        pm.place = m.place;
         if (m.IsProp()) {
             pm.attach = m.attach;
             pm.attach.parent = m.attach.parent >= 0 ? d.IndexOfUid((uint32_t)m.attach.parent) : -1;  // uid -> index
@@ -570,6 +574,7 @@ void App::StudioRemoveModel(int index) {
 void App::StudioSelectModel(int index) {
     StudioDoc& d = *studio_;
     if (index < -1 || index >= (int)d.models.size() || d.selectedModel == index) return;
+    if (index >= 0) StudioPossess(false);  // possession belongs to the camera row
     d.selectedModel = index;
     d.selection.clear();
     d.selectedRows.clear();
@@ -959,6 +964,61 @@ void App::DrawStudioPropPanel(float w) {
         reset.parent = m->attach.parent;
         reset.bone = m->attach.bone;
         if (!(reset == m->attach)) d.history.Push(std::make_unique<PropAttachCommand>(d, m->uid, m->attach, reset));
+    }
+    ImGui::Dummy(ImVec2(w, Dp(4.0f)));
+}
+
+void App::StudioCommitPlace(uint32_t uid, const PropAttach& before, const PropAttach& after) {
+    if (before == after) return;
+    studio_->history.Push(std::make_unique<PropAttachCommand>(*studio_, uid, before, after, true));
+}
+
+// A character's place in the world (Unity-style transform): position, rotation, scale. Live while dragging a field,
+// one undo step per drag / typed value. The viewport gizmo (StudioViewportPose) edits the same data.
+void App::DrawStudioPlacePanel(float w) {
+    using namespace ui;
+    StudioDoc& d = *studio_;
+    StudioModel* m = d.Selected();
+    if (!m || m->kind != ModelKind::Character) return;
+    const Palette& p = P();
+    ImDrawList* cdl = ImGui::GetWindowDrawList();
+    ImGui::Dummy(ImVec2(w, Dp(6.0f)));
+    {
+        const ImVec2 c = ImGui::GetCursorScreenPos();
+        Text(cdl, Font::Semibold, size::Caption, c, p.ink3, Tr("트랜스폼"));
+        ImGui::Dummy(ImVec2(w, Dp(20.0f)));
+    }
+    PropAttach a = m->place;
+    bool dragEnded = false;
+    const auto dragRow = [&](const char* label, auto&& widget) {
+        const ImVec2 c = ImGui::GetCursorScreenPos();
+        Text(cdl, Font::Regular, size::Small, ImVec2(c.x, c.y + Dp(5.0f)), p.ink3, label);
+        ImGui::SetCursorScreenPos(ImVec2(c.x + Dp(64.0f), c.y));
+        ImGui::SetNextItemWidth(w - Dp(64.0f));
+        PushFont(Font::Regular, size::Small);
+        widget();
+        PopFont();
+        if (ImGui::IsItemActivated() && !studioPlaceDragging_) {
+            studioPlaceDragging_ = true;
+            studioPlaceBefore_ = m->place;
+        }
+        if (ImGui::IsItemDeactivated()) dragEnded = true;
+        ImGui::Dummy(ImVec2(w, Dp(4.0f)));
+    };
+    dragRow(Tr("위치"), [&] { ImGui::DragFloat3("##placet", &a.translation.x, 0.05f, 0.0f, 0.0f, "%.2f"); });
+    dragRow(Tr("회전"), [&] { ImGui::DragFloat3("##placer", &a.rotationDeg.x, 0.5f, 0.0f, 0.0f, "%.1f°"); });
+    dragRow(Tr("크기"), [&] { ImGui::DragFloat("##places", &a.scale, 0.005f, 0.01f, 100.0f, "%.3f"); });
+    a.scale = std::clamp(a.scale, 0.01f, 100.0f);
+    if (!(a == m->place)) m->place = a;
+    if (dragEnded && studioPlaceDragging_ && studioViewDrag_ != 6) {
+        studioPlaceDragging_ = false;
+        StudioCommitPlace(m->uid, studioPlaceBefore_, m->place);
+    }
+    ImGui::SetCursorScreenPos(ImVec2(ImGui::GetCursorScreenPos().x + Dp(64.0f), ImGui::GetCursorScreenPos().y));
+    if (Button("##placereset", Tr("트랜스폼 초기화"), icon::ArrowCcw, ButtonKind::Ghost, ImVec2((w - Dp(64.0f)) / Dpi(), 32.0f))) {
+        const PropAttach before = m->place;
+        m->place = PropAttach{};
+        StudioCommitPlace(m->uid, before, m->place);
     }
     ImGui::Dummy(ImVec2(w, Dp(4.0f)));
 }

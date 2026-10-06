@@ -85,6 +85,12 @@ AppOptions ParseCommandLine(int argc, wchar_t** argv) {
             else if (v == "rt") opt.renderPath = 1;
             else if (v == "pt") opt.renderPath = 2;
             else LOG_WARN("unknown --render value: %s (want raster|rt|pt)", v.c_str());
+        } else if (arg == L"--shading") {
+            const std::string v = ToLowerAscii(WideToUtf8(next()));
+            if (v == "lit") opt.shading = 0;
+            else if (v == "unlit") opt.shading = 1;
+            else if (v == "wire") opt.shading = 2;
+            else LOG_WARN("unknown --shading value: %s (want lit|unlit|wire)", v.c_str());
         } else if (arg == L"--upscaler") {
             const std::string v = ToLowerAscii(WideToUtf8(next()));
             if (v == "none") opt.upscaler = 0;
@@ -110,6 +116,8 @@ AppOptions ParseCommandLine(int argc, wchar_t** argv) {
             opt.bloomConv = _wtoi(next().c_str()) != 0 ? 1 : 0;
         } else if (arg == L"--lut") {
             opt.lut = WideToUtf8(next());
+        } else if (arg == L"--motion-lighting") {
+            opt.motionLighting = _wtoi(next().c_str()) != 0 ? 1 : 0;
         } else if (arg == L"--no-physics") {
             opt.noPhysics = true;
         } else if (arg == L"--offline-still") {
@@ -187,12 +195,14 @@ int App::Run(HINSTANCE instance, const AppOptions& options) {
     if (options_.lighting >= 0) settings_.lighting = std::clamp(options_.lighting, 0, kLightingPresetCount - 1);
     if (options_.quality >= 0) ApplyGraphicsPreset(std::clamp(options_.quality, 0, 3));
     if (options_.renderPath >= 0) settings_.renderPath = std::clamp(options_.renderPath, 0, 2);
+    shadingOverride_ = options_.shading;
     if (options_.upscaler >= 0) settings_.upscaler = std::clamp(options_.upscaler, 0, 3);
     if (options_.upscalerQuality >= 0) settings_.upscalerQuality = std::clamp(options_.upscalerQuality, 0, 4);
     if (options_.dof >= 0) settings_.dof = options_.dof != 0;
     if (options_.volumetric >= 0) settings_.volumetric = options_.volumetric != 0;
     if (options_.volumetricDensity > 0.0f) settings_.volumetricDensity = std::clamp(options_.volumetricDensity, 0.25f, 4.0f);
     if (options_.bloomConv >= 0) settings_.bloomConvolution = options_.bloomConv != 0;
+    if (options_.motionLighting >= 0) settings_.motionLighting = options_.motionLighting != 0;
 
     ImGui_ImplWin32_EnableDpiAwareness();
 
@@ -282,6 +292,7 @@ int App::Run(HINSTANCE instance, const AppOptions& options) {
     if (options_.volumetric >= 0) settings_.volumetric = persisted.volumetric;
     if (options_.volumetricDensity > 0.0f) settings_.volumetricDensity = persisted.volumetricDensity;
     if (options_.bloomConv >= 0) settings_.bloomConvolution = persisted.bloomConvolution;
+    if (options_.motionLighting >= 0) settings_.motionLighting = persisted.motionLighting;
     if (!options_.lut.empty()) settings_.colorLut = persisted.colorLut;
     settings_.Save(settingsPath_);
 
@@ -370,8 +381,15 @@ bool App::InitImGui() {
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
     ImGuiIO& io = ImGui::GetIO();
-    io.IniFilename = nullptr;
-    io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
+    io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard | ImGuiConfigFlags_DockingEnable;
+    io.ConfigDockingTransparentPayload = true;
+    // The studio's panel arrangement persists next to the exe. Scripted / captured runs start from the default layout.
+    if (options_.uiScript.empty() && options_.quitAfterFrames == 0) {
+        iniPath_ = PathToUtf8(ExecutableDir() / L"mmdx12_layout.ini");
+        io.IniFilename = iniPath_.c_str();
+    } else {
+        io.IniFilename = nullptr;
+    }
 
     assetsDir_ = ExecutableDir() / L"assets";
     if (!std::filesystem::exists(assetsDir_ / L"fonts")) {
@@ -516,6 +534,7 @@ void App::RenderFrame() {
         if (screen_ == Screen::Studio && studio_) {
             UpdateStudioScene();
             BuildStudioFrameView(view);
+            StudioAddQuadViews(view);
         } else if (inScene) {
             const float frame = (float)(playTime_ * kMmdFps);
             UpdateScene(frame);
@@ -839,6 +858,7 @@ void App::ApplyRenderSettings() {
     rs.taa = settings_.taa;
     rs.exposure = settings_.exposure;
     rs.renderPath = (RenderPath)settings_.renderPath;
+    if (shadingOverride_ >= 0) rs.shading = (ViewShading)std::clamp(shadingOverride_, 0, 2);
     rs.upscaler = (UpscalerKind)settings_.upscaler;
     rs.upscalerQuality = (UpscalerQuality)settings_.upscalerQuality;
     rs.ptSamples = (uint32_t)settings_.ptSamples;
@@ -1090,6 +1110,13 @@ bool App::BuildSceneRuntime(ScenePackage& pkg) {
 
     s->motion = pkg.motion;
     s->camera = pkg.camera;
+    for (const VmdLightKey& k : pkg.lightKeys) studio::UpsertKey(s->lightTrack, studio::LightKf{(int)k.frame, k.color, k.direction});
+    for (const VmdShadowKey& k : pkg.shadowKeys)
+        studio::UpsertKey(s->shadowTrack, studio::ShadowKf{(int)k.frame, k.mode, k.distance});
+    if (studio::IsDefaultLightTrack(s->lightTrack)) s->lightTrack.clear();
+    if (studio::IsDefaultShadowTrack(s->shadowTrack)) s->shadowTrack.clear();
+    if (!s->lightTrack.empty() || !s->shadowTrack.empty())
+        LOG_INFO("camera vmd: light track %zu keys, self-shadow track %zu keys", s->lightTrack.size(), s->shadowTrack.size());
     s->endFrame = pkg.endFrame;
     s->hasAudio = !pkg.audioPath.empty() && audio_.Load(pkg.audioPath);
     if (s->hasAudio) s->endFrame = std::max(s->endFrame, (float)(audio_.DurationSeconds() * kMmdFps));
@@ -1141,10 +1168,13 @@ void App::UpdateScene(float frame) {
     scene_->characterGpu->UpdateSkinning(slot, scene_->character->SkinMatrices());
     scene_->characterGpu->UpdateMorphs(slot, scene_->character->VertexMorphDeltas(),
                                        scene_->character->MorphVersion());
+    scene_->characterGpu->UpdateMaterials(slot, ch.MaterialMul(), ch.MaterialAdd(), ch.MaterialVersion());
     for (size_t i = 0; i < scene_->stages.size(); ++i) {
         scene_->stageGpu[i]->UpdateSkinning(slot, scene_->stages[i]->SkinMatrices());
         scene_->stageGpu[i]->UpdateMorphs(slot, scene_->stages[i]->VertexMorphDeltas(),
                                           scene_->stages[i]->MorphVersion());
+        const ModelInstance& st = *scene_->stages[i];
+        scene_->stageGpu[i]->UpdateMaterials(slot, st.MaterialMul(), st.MaterialAdd(), st.MaterialVersion());
     }
 }
 
@@ -1180,6 +1210,9 @@ void App::BuildFrameView(float frame, FrameView& view) {
     }
     const LightingPreset preset = screen_ == Screen::BenchRun ? LightingPreset::Studio : (LightingPreset)settings_.lighting;
     BuildLighting(preset, playTime_, focus, view.light);
+    // the camera VMD's light / self-shadow tracks (MMD's own lighting of the song) replace the preset's key light
+    if (settings_.motionLighting && screen_ != Screen::BenchRun)
+        ApplyLightShadowTracks(scene_->lightTrack, scene_->shadowTrack, frame, view);
 
     // DoF focus plane: the character's head (center bone + 8 without one), as view-space z.
     if (scene_->character) {

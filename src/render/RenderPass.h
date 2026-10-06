@@ -112,6 +112,7 @@ struct PassContext {
     IUpscaler* upscaler;                       // active upscaler; null when none / unavailable
     float jitterPxX, jitterPxY;                // projection jitter in render pixels (see Renderer.cpp)
     float frameTimeMs;                         // wall time since the previous on-screen frame
+    D3D12_GPU_VIRTUAL_ADDRESS extraSceneConstants[3] = {};  // one per FrameView::extraViews entry (set after construction)
 };
 
 class IRenderPass {

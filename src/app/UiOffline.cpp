@@ -242,6 +242,7 @@ void App::StartOfflineVideo(double startSeconds, double endSeconds, bool fromLob
         // the whole window shows the render (no studio panels): the image is not fitted into the viewport area
         RenderSettings rs = renderer_.Settings();
         rs.viewportX = rs.viewportY = rs.viewportW = rs.viewportH = 0;
+        rs.shading = ViewShading::Lit;  // the studio shading mode is an editing view only
         renderer_.SetSettings(rs);
         // the project's camera motion when there is one, else the view the editor shows
         if (!studio_->camera.camera.empty()) studio_->useMotionCamera = true;   // StudioPoseForRender builds the evaluator
@@ -310,18 +311,22 @@ DirectX::XMFLOAT3 App::CharacterCenter() const {
 }
 
 void App::UploadOfflinePrevPose(uint64_t slot) {
-    const auto upload = [&](GpuModel& g, const OfflineJob::Pose& p) {
+    // materials are not motion-blurred: the entry gets the models' current material state
+    const auto upload = [&](GpuModel& g, const OfflineJob::Pose& p, const ModelInstance& inst) {
         g.UpdateSkinning(slot, p.skin);
         g.UpdateMorphs(slot, p.morph, p.morphVersion);
+        g.UpdateMaterials(slot, inst.MaterialMul(), inst.MaterialAdd(), inst.MaterialVersion());
     };
     if (offline_.studio) {
         if (!studio_ || offline_.prevPose.size() != studio_->models.size()) return;
-        for (size_t i = 0; i < studio_->models.size(); ++i) upload(*studio_->models[i]->gpu, offline_.prevPose[i]);
+        for (size_t i = 0; i < studio_->models.size(); ++i)
+            upload(*studio_->models[i]->gpu, offline_.prevPose[i], *studio_->models[i]->inst);
         return;
     }
     if (!scene_ || offline_.prevPose.size() != 1 + scene_->stages.size()) return;
-    upload(*scene_->characterGpu, offline_.prevPose[0]);
-    for (size_t i = 0; i < scene_->stages.size(); ++i) upload(*scene_->stageGpu[i], offline_.prevPose[1 + i]);
+    upload(*scene_->characterGpu, offline_.prevPose[0], *scene_->character);
+    for (size_t i = 0; i < scene_->stages.size(); ++i)
+        upload(*scene_->stageGpu[i], offline_.prevPose[1 + i], *scene_->stages[i]);
 }
 
 // ---------------------------------------------------------------------------

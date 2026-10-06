@@ -102,6 +102,11 @@ void App::StudioSetPose(const char* undoName, const PoseLayer& before) {
     if (a.Empty()) a.frame = -1;
     m->pose = a;
     if (SamePoseLayer(b, a)) return;
+    // auto-key: the finished edit is keyed under the playhead right away (one undo step for edit + keys)
+    if (d.autoKey && !a.Empty() && a.frame == d.Frame()) {
+        StudioRegisterPose(false, &b, undoName);
+        return;
+    }
     d.history.Push(std::make_unique<PoseEditCommand>(d, d.selectedModel, undoName, std::move(b), std::move(a)));
 }
 
@@ -144,7 +149,7 @@ void App::StudioSelectBone(int bone, bool toggle) {
     d.rowsKey = ~0ull;
 }
 
-void App::StudioRegisterPose(bool allBones) {
+void App::StudioRegisterPose(bool allBones, const PoseLayer* layerBefore, const char* undoName) {
     StudioDoc& d = *studio_;
     StudioModel* m = StudioPoseModel();
     if (!m) {
@@ -201,10 +206,11 @@ void App::StudioRegisterPose(bool allBones) {
     for (int b : bones) poseAfter.bones.erase(b);
     for (int i : morphs) poseAfter.morphs.erase(i);
     if (poseAfter.Empty()) poseAfter.frame = -1;
-    const char* name = allBones ? Tr("모든 본 등록") : Tr("포즈 등록");
+    const char* name = undoName ? undoName : allBones ? Tr("모든 본 등록") : Tr("포즈 등록");
     std::vector<std::unique_ptr<Command>> parts;
     parts.push_back(std::make_unique<TrackEditCommand>(d, name, std::move(before), std::move(after)));
-    parts.push_back(std::make_unique<PoseEditCommand>(d, d.selectedModel, name, m->pose, std::move(poseAfter)));
+    // undo returns to the layer as it was before the edit (auto-key passes it), not to the half-keyed one
+    parts.push_back(std::make_unique<PoseEditCommand>(d, d.selectedModel, name, layerBefore ? *layerBefore : m->pose, std::move(poseAfter)));
     d.history.Push(std::make_unique<CompositeCommand>(name, std::move(parts)));
     d.selection = std::move(keyed);
     d.rowsKey = ~0ull;
@@ -395,12 +401,25 @@ void App::StudioViewportPose(float x0, float y0, float x1, float y1, bool hovere
             StudioSetPose(Tr("본 편집"), studioPoseBefore_);
             studioViewDrag_ = 0;
         }
+        if (studioViewDrag_ == 6 && m) {
+            StudioCommitPlace(m->uid, studioPlaceBefore_, m->place);
+            studioPlaceDragging_ = false;
+            studioViewDrag_ = 0;
+        }
         return;
     }
     const GizmoStyle gs = MakeGizmoStyle();
     const BoneOverlayStyle os = MakeOverlayStyle();
     if (d.activeBone >= (int)m->pmx->bones.size()) d.activeBone = -1;
     studioGizmoShown_ = d.activeBone >= 0 && StudioGizmoFrameOf(*m, d.activeBone, studioGizmoFrame_, studioGizmoMode_);
+    // no bone picked: the toolbar's model tool moves / rotates the whole character (world axes at its origin)
+    const bool modelTool = d.modelGizmo && d.activeBone < 0 && m->kind == ModelKind::Character;
+    if (modelTool) {
+        studioGizmoFrame_ = GizmoFrame{};
+        studioGizmoFrame_.center = m->place.translation;
+        studioGizmoMode_ = d.gizmoTool == 1 ? GizmoMode::Translate : GizmoMode::Rotate;
+        studioGizmoShown_ = true;
+    }
     const ImVec2 mouse = io.MousePos;
 
     // hover (not while dragging): the gizmo first, then the bones
@@ -414,10 +433,14 @@ void App::StudioViewportPose(float x0, float y0, float x1, float y1, bool hovere
     }
 
     // press: start a gizmo drag or pick a bone (the camera keeps right/middle and empty-space drags)
-    if (studioViewDrag_ == 1 && ImGui::IsMouseClicked(ImGuiMouseButton_Left) && hovered) {
+    if (studioViewDrag_ == 1 && ImGui::IsMouseClicked(ImGuiMouseButton_Left) && hovered && !io.KeyAlt) {  // Alt+LMB orbits
         if (studioGizmoHot_ != GizmoPart::None) {
             studioGizmoDrag_ = BeginGizmoDrag(studioVp_, studioGizmoFrame_, studioGizmoMode_, gs, studioGizmoHot_, mouse);
-            if (studioGizmoDrag_.part != GizmoPart::None) {
+            if (studioGizmoDrag_.part != GizmoPart::None && modelTool) {
+                studioViewDrag_ = 6;  // model placement drag
+                studioPlaceBefore_ = m->place;
+                studioPlaceDragging_ = true;
+            } else if (studioGizmoDrag_.part != GizmoPart::None) {
                 const int bone = d.activeBone;
                 studioViewDrag_ = 2;
                 studioDragBone_ = bone;
@@ -472,6 +495,37 @@ void App::StudioViewportPose(float x0, float y0, float x1, float y1, bool hovere
             }
         }
     }
+    // model placement drag: world translation / rotation about a world axis, live; one undo step on release
+    if (studioViewDrag_ == 6) {
+        consumed = true;
+        if (ImGui::IsKeyPressed(ImGuiKey_Escape, false)) {  // cancel
+            m->place = studioPlaceBefore_;
+            studioPlaceDragging_ = false;
+            studioViewDrag_ = 4;
+        } else {
+            PropAttach pl = studioPlaceBefore_;
+            if (studioGizmoMode_ == GizmoMode::Translate) {
+                const XMFLOAT3 w = GizmoDragTranslation(studioGizmoDrag_, mouse);
+                pl.translation = {pl.translation.x + w.x, pl.translation.y + w.y, pl.translation.z + w.z};
+            } else {
+                XMFLOAT3 axis;
+                const float angle = GizmoDragAngle(studioGizmoDrag_, mouse, &axis);
+                if (angle != 0.0f) {
+                    const XMFLOAT4 q0f = QuatFromEulerDeg(pl.rotationDeg);
+                    const XMVECTOR dq = XMQuaternionRotationAxis(XMVector3Normalize(XMLoadFloat3(&axis)), angle);
+                    XMFLOAT4 q;
+                    XMStoreFloat4(&q, XMQuaternionNormalize(XMQuaternionMultiply(XMLoadFloat4(&q0f), dq)));  // q0, then the world turn
+                    pl.rotationDeg = EulerDeg(q);
+                }
+            }
+            m->place = pl;
+            if (!ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
+                StudioCommitPlace(m->uid, studioPlaceBefore_, m->place);
+                studioPlaceDragging_ = false;
+                studioViewDrag_ = 0;
+            }
+        }
+    }
     if (studioViewDrag_ >= 3) consumed = true;
     if ((studioViewDrag_ == 3 || studioViewDrag_ == 4) && !ImGui::IsMouseDown(ImGuiMouseButton_Left)) studioViewDrag_ = 0;
 
@@ -497,7 +551,7 @@ void App::StudioViewportToolbar(float x, float cy) {
     const Palette& p = P();
     ImDrawList* dl = ImGui::GetWindowDrawList();
     const float b = 30.0f, gap = 2.0f;
-    const float w = Dp(4 * b + 3 * gap + 2 * 9.0f + 8.0f);
+    const float w = Dp(5 * b + 4 * gap + 3 * 9.0f + 8.0f);
     dl->AddRectFilled(ImVec2(x, cy - Dp(b * 0.5f + 4.0f)), ImVec2(x + w, cy + Dp(b * 0.5f + 4.0f)), WithAlpha(p.surface, 0.85f),
                       Dp(10.0f));
     ImGui::SetCursorScreenPos(ImVec2(x + Dp(4.0f), cy - Dp(b * 0.5f)));
@@ -506,10 +560,104 @@ void App::StudioViewportToolbar(float x, float cy) {
     if (IconButton("##vprot", icon::Refresh, Tr("회전  (E)"), d.gizmoTool == 0, b)) d.gizmoTool = 0;
     ImGui::SameLine(0, Dp(gap));
     if (IconButton("##vpmove", icon::ArrowsOutCardinal, Tr("이동  (W)"), d.gizmoTool == 1, b)) d.gizmoTool = 1;
+    ImGui::SameLine(0, Dp(gap));
+    if (IconButton("##vpmodel", icon::PersonSimple, d.modelGizmo ? Tr("모델 이동/회전 끄기  (T)") : Tr("모델 이동/회전  (T)"), d.modelGizmo, b))
+        d.modelGizmo = !d.modelGizmo;
     ImGui::SameLine(0, Dp(9.0f));
     if (IconButton("##vplocal", d.gizmoLocal ? icon::Cube : icon::Globe,
                    d.gizmoLocal ? Tr("로컬 축 (클릭: 전역 축)  (L)") : Tr("전역 축 (클릭: 로컬 축)  (L)"), false, b))
         d.gizmoLocal = !d.gizmoLocal;
+}
+
+// Eye and target handles of the motion camera, drawn with the translate gizmo in the free view (the camera row is
+// selected): dragging the eye swings the camera around its target, dragging the target turns it about its eye. Both go
+// through StudioWriteCamera (auto-key rules, one undo step per drag).
+void App::StudioViewportCameraHandles(bool hovered) {
+    using namespace DirectX;
+    StudioDoc& d = *studio_;
+    ImGuiIO& io = ImGui::GetIO();
+    const bool free = !(d.useMotionCamera && d.cameraEval);
+    if (d.selectedModel >= 0 || d.possessCamera || !free || !d.cameraEval || d.camera.camera.empty() || d.playing) {
+        if (studioViewDrag_ == 7) studioViewDrag_ = 0;
+        studioCamHandle_ = 0;
+        return;
+    }
+    const int frame = d.Frame();
+    const CameraPose pose = d.cameraEval->Evaluate((float)(d.time * kMmdFps));
+    CameraPathPoint cur;
+    CameraMotion::ToView(pose, &cur.view, &cur.eye);
+    const XMFLOAT3 handles[2] = {cur.eye, pose.target};
+    const GizmoStyle gs = MakeGizmoStyle();
+    const ImVec2 mouse = io.MousePos;
+
+    // pick a handle: a click near one of the dots, not on a gizmo part
+    if (studioViewDrag_ == 1 && hovered && !io.KeyAlt && ImGui::IsMouseClicked(ImGuiMouseButton_Left) &&
+        !(studioCamHandle_ && studioCamHot_ != GizmoPart::None)) {
+        float best = ui::Dp(12.0f);
+        int pick = 0;
+        for (int i = 0; i < 2; ++i) {
+            ImVec2 pt;
+            if (!studioVp_.Project(handles[i], pt)) continue;
+            const float dist = std::hypot(mouse.x - pt.x, mouse.y - pt.y);
+            if (dist <= best) { best = dist; pick = i + 1; }
+        }
+        if (pick) {
+            studioCamHandle_ = pick;
+            studioViewDrag_ = 4;  // the click selects the handle; no orbit
+        }
+    }
+    if (!studioCamHandle_) return;
+    const XMFLOAT3 pos = handles[studioCamHandle_ - 1];
+    if (studioViewDrag_ != 7) {
+        studioCamFrame_ = GizmoFrame{};
+        studioCamFrame_.center = pos;
+        studioCamHot_ = hovered ? GizmoHitTest(studioVp_, studioCamFrame_, GizmoMode::Translate, gs, mouse) : GizmoPart::None;
+    }
+    if (studioViewDrag_ == 1 && hovered && studioCamHot_ != GizmoPart::None && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+        studioCamDrag_ = BeginGizmoDrag(studioVp_, studioCamFrame_, GizmoMode::Translate, gs, studioCamHot_, mouse);
+        if (studioCamDrag_.part != GizmoPart::None) {
+            studioViewDrag_ = 7;
+            studioCamKeyBase_ = SampleCamera(d.camera.camera, frame);  // the motion camera, not the free view
+            studioCamBase_ = FreeFromKey(studioCamKeyBase_);
+        }
+    }
+    if (studioViewDrag_ == 7) {
+        const XMFLOAT3 w = GizmoDragTranslation(studioCamDrag_, mouse);
+        FreeCamera c = studioCamBase_;
+        const float sy = std::sin(c.yaw), cy = std::cos(c.yaw), sp = std::sin(c.pitch), cp = std::cos(c.pitch);
+        XMFLOAT3 eye{c.target.x + sy * cp * c.distance, c.target.y + sp * c.distance, c.target.z - cy * cp * c.distance};
+        XMFLOAT3 target = c.target;
+        if (studioCamHandle_ == 1) { eye.x += w.x; eye.y += w.y; eye.z += w.z; }
+        else { target.x += w.x; target.y += w.y; target.z += w.z; }
+        const XMFLOAT3 dir{eye.x - target.x, eye.y - target.y, eye.z - target.z};
+        const float len = std::sqrt(dir.x * dir.x + dir.y * dir.y + dir.z * dir.z);
+        if (len > 0.05f) {
+            c.target = target;
+            c.distance = len;
+            c.pitch = std::clamp(std::asin(std::clamp(dir.y / len, -1.0f, 1.0f)), -1.45f, 1.45f);
+            c.yaw = std::atan2(dir.x, -dir.z);
+            StudioWriteCamera(c, &studioCamKeyBase_, false);
+        }
+        if (!ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
+            StudioEndKeyEdit();
+            studioViewDrag_ = 0;
+        }
+    }
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    DrawGizmo(dl, studioVp_, studioCamFrame_, GizmoMode::Translate, gs, studioCamHot_,
+              studioViewDrag_ == 7 ? studioCamDrag_.part : GizmoPart::None);
+}
+
+// Bones and the gizmo of the current selection in a view that has no interaction this frame (quad view).
+void App::StudioDrawPoseOverlay(const ViewProj& vp, float x0, float y0, float x1, float y1) {
+    StudioDoc& d = *studio_;
+    StudioModel* m = StudioPoseModel();
+    if (!m || !m->visible || d.playing) return;
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    dl->PushClipRect(ImVec2(x0, y0), ImVec2(x1, y1), true);
+    if (d.showBones) DrawBoneOverlay(dl, vp, *m->pmx, *m->inst, d.selectedBones, d.activeBone, -1, MakeOverlayStyle());
+    if (studioGizmoShown_) DrawGizmo(dl, vp, studioGizmoFrame_, studioGizmoMode_, MakeGizmoStyle(), GizmoPart::None, GizmoPart::None);
+    dl->PopClipRect();
 }
 
 bool App::StudioScriptGizmoPoint(int part, ImVec2& out) const {
@@ -565,8 +713,19 @@ void App::DrawStudioBoneTab(float w) {
         ImGui::PopTextWrapPos();
     };
 
+    // --- search: narrows the timeline rows to the matching bones / morphs (Enter picks the first matching bone)
+    if (SearchField("##bonefilter", d.boneFilter, sizeof(d.boneFilter), Tr("본 검색 (타임라인 필터)"), w / Dpi())) d.rowsKey = ~0ull;
+    if (d.boneFilter[0] && ImGui::GetIO().WantTextInput && ImGui::IsKeyPressed(ImGuiKey_Enter, false)) {
+        for (size_t i = 0; i < pmx.bones.size(); ++i)
+            if (pmx.bones[i].name.find(d.boneFilter) != std::string::npos || pmx.bones[i].nameEn.find(d.boneFilter) != std::string::npos) {
+                StudioSelectBone((int)i, false);
+                break;
+            }
+    }
+    ImGui::Dummy(ImVec2(w, Dp(8.0f)));
+
     // --- the active bone
-    const int bone = d.activeBone >= 0 && d.activeBone < (int)pmx.bones.size() ? d.activeBone : -1;
+    const int bone =d.activeBone >= 0 && d.activeBone < (int)pmx.bones.size() ? d.activeBone : -1;
     if (bone < 0) {
         const ImVec2 c = ImGui::GetCursorScreenPos();
         Text(cdl, Font::Semibold, size::Small, c, p.ink2, Tr("선택한 본 없음"));
@@ -669,6 +828,39 @@ void App::DrawStudioBoneTab(float w) {
         if (Button("##posereset", Tr("편집 취소"), icon::ArrowCcw, ButtonKind::Secondary, ImVec2(bw, 34.0f))) StudioResetPose();
         Tooltip(Tr("등록하지 않은 편집을 버리고 모션 값으로 돌아가기"));
         ImGui::EndDisabled();
+    }
+
+    // --- IK on/off: the state at the playhead (VMD IK keys: enabled before the first key); a toggle keys it here
+    {
+        std::vector<int> ikBones;
+        for (size_t i = 0; i < pmx.bones.size(); ++i)
+            if (pmx.bones[i].flags & PmxBone_IK) ikBones.push_back((int)i);
+        if (!ikBones.empty()) {
+            ImGui::Dummy(ImVec2(w, Dp(14.0f)));
+            caption(Tr("IK 켜기 / 끄기"));
+            for (int ib : ikBones) {
+                const std::string& nm = pmx.bones[(size_t)ib].name;
+                const auto it = m->motion.ik.find(nm);
+                bool on = true;
+                if (it != m->motion.ik.end())
+                    for (const IkKf& k : it->second) {
+                        if (k.frame > frame) break;
+                        on = k.enabled;
+                    }
+                bool v = on;
+                char id[32];
+                std::snprintf(id, sizeof(id), "##ikon%d", ib);
+                Switch(id, nm.c_str(), &v);
+                if (v != on) {
+                    std::vector<IkKf> before = it != m->motion.ik.end() ? it->second : std::vector<IkKf>{};
+                    std::vector<IkKf> after = before;
+                    UpsertKey(after, IkKf{frame, v});
+                    d.history.Push(std::make_unique<IkEditCommand>(d, d.selectedModel, v ? Tr("IK 켜기") : Tr("IK 끄기"), nm,
+                                                                   std::move(before), std::move(after)));
+                    break;  // the motion changed under the iterators
+                }
+            }
+        }
     }
 
     // --- pose files and mirror

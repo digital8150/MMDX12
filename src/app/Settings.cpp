@@ -88,6 +88,7 @@ bool AppSettings::Load(const std::filesystem::path& file) {
         else if (key == "renderScale" && ParseFloat(value, f)) renderScale = f;
         else if (key == "volume" && ParseFloat(value, f)) volume = f;
         else if (key == "drawEdges" && ParseBool(value, b)) drawEdges = b;
+        else if (key == "motionLighting" && ParseBool(value, b)) motionLighting = b;
         else if (key == "physics" && ParseBool(value, b)) physics = b;
         else if (key == "graphicsPreset" && ParseInt(value, i)) graphicsPreset = i;
         else if (key == "shadows" && ParseBool(value, b)) shadows = b;
@@ -218,6 +219,7 @@ bool AppSettings::Save(const std::filesystem::path& file) const {
     std::fprintf(f, "renderScale=%.3f\n", renderScale);
     std::fprintf(f, "volume=%.3f\n", volume);
     std::fprintf(f, "drawEdges=%d\n", drawEdges ? 1 : 0);
+    std::fprintf(f, "motionLighting=%d\n", motionLighting ? 1 : 0);
     std::fprintf(f, "physics=%d\n", physics ? 1 : 0);
     std::fprintf(f, "graphicsPreset=%d\n", graphicsPreset);
     std::fprintf(f, "shadows=%d\nssao=%d\nssr=%d\nbloom=%d\ntaa=%d\n", shadows ? 1 : 0, ssao ? 1 : 0, ssr ? 1 : 0,
