@@ -524,3 +524,17 @@ Triggered by GitHub issue #1 (video rendering stops while the window is minimize
 
 ### Not verified
 - The minimized case was only built, not exercised (headless runs cannot minimize); the issue reporter should confirm.
+
+## 2026-10-06 (5) — fix: release build ran unoptimized (2-10 fps in play mode), release 1.1.1
+
+### Done
+- The 1.1.0 release exe played at 2-10 fps (Bullet physics; `--no-physics` was normal). Cause: `build_release/CMakeCache.txt` had empty
+  `CMAKE_CXX_FLAGS` / `CMAKE_CXX_FLAGS_RELEASE`, so the packaged exe was built without `/O2`, `NDEBUG` and `/EHsc`
+  (found by running the packaged zip: GPU 43 ms vs 4.7 ms for the dev build). Why the cache was empty is unknown.
+- `CMakeLists.txt` states `/EHsc`, `/O2` and `NDEBUG` explicitly (Release / RelWithDebInfo / MinSizeRel);
+  `tools/package_release.ps1` deletes the cache before configuring. Checked with a Release build configured with empty flag
+  variables: Bullet gets `/EHsc /O2`, 300 play frames in 8.6 s, GPU 4.1 ms.
+- Version 1.1.1, packaged from a clean worktree of the commit (the studio WIP in the main tree stayed out of the zip).
+
+### Notes
+- 1.0.x / 1.1.0 zips were built from that cache; users get the fix through the automatic update (feed: website `latest.json`).
