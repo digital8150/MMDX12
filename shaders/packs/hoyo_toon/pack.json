@@ -21,7 +21,7 @@
     "zh": "原神 / 崩坏:星穹铁道 / 绝区零官方MMD模型"
   },
   "authors": [
-    { "name": "MMDX12", "role": "셰이더" }
+    { "name": "MMDX12", "role": "shader" }
   ],
   "license": "MIT",
   "tags": ["toon", "anime", "hoyoverse"],
