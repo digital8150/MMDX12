@@ -50,9 +50,11 @@ void App::UpdateUpdate() {
     // The check starts once the window is up (the start is not slowed: it is a worker thread).
     if (!updateCheckQueued_ && screen_ == Screen::Select) StartUpdateCheck();
     const updater::Controller::State& s = update_.Get();
-    // A ui-script "updateinstall" quits once the staging succeeded (the applier restarts the app).
-    if (updateInstallingFromCli_ && s.phase == updater::Controller::Phase::Staged) {
-        LOG_INFO("UPDATEINSTALL staged=1 - exiting for the restart");
+    // Once the staging succeeded the app must exit: the applier (already spawned) waits for this
+    // process to end, swaps the files and restarts the new version.
+    if (s.phase == updater::Controller::Phase::Staged) {
+        if (updateInstallingFromCli_) LOG_INFO("UPDATEINSTALL staged=1 - exiting for the restart");
+        else LOG_INFO("update: staged - exiting for the restart");
         running_ = false;
     }
     if (updateInstallingFromCli_ && s.phase == updater::Controller::Phase::Failed) {
