@@ -82,13 +82,16 @@ static void TestRoundTrip() {
         m.motion.ik["\xE5\x8F\xB3\xE8\x85\x95"] = {IkKf{0, true}, IkKf{30, false}};      // 右腕
         data.models.push_back(m);
     }
-    // 2: stage, no keys, invisible
+    // 2: stage, no keys, invisible, world placement
     {
         ProjectModel m;
         m.name = "\xE3\x82\xB9\xE3\x83\x86\xE3\x83\xBC\xE3\x82\xB8";  // ステージ
         m.kind = ModelKind::Stage;
         m.path = stagePath;
         m.visible = false;
+        m.place.translation = {0.0f, 0.0f, 5.0f};  // world placement of a stage
+        m.place.rotationDeg = {0.0f, 180.0f, 0.0f};
+        m.place.scale = 2.0f;
         data.models.push_back(m);
     }
     // 3: prop with attach and one bone key
@@ -211,8 +214,8 @@ static void TestRoundTrip() {
         Check(b.place == data.models[0].place, "character placement kept (t/r/s)");
         const ProjectModel& st = loaded.models[1];
         Check(st.name == data.models[1].name && st.kind == ModelKind::Stage && !st.visible &&
-                  st.motion.Empty(),
-              "stage kept: name, kind, visible=false, no keys");
+                  st.motion.Empty() && st.place == data.models[1].place,
+              "stage kept: name, kind, visible=false, no keys, placement");
 
         const ProjectModel& p = loaded.models[2];
         Check(p.kind == ModelKind::Prop && p.attach == data.models[2].attach,

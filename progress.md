@@ -538,3 +538,20 @@ Triggered by GitHub issue #1 (video rendering stops while the window is minimize
 
 ### Notes
 - 1.0.x / 1.1.0 zips were built from that cache; users get the fix through the automatic update (feed: website `latest.json`).
+
+## 2026-10-06 (6) — Studio viewport: forced raster path, per-view quad shading, independent ortho navigation
+
+Delegated to the opencode worker (smoke review).
+
+### Done
+- Studio viewport always renders with the raster path (`DrawStudio` forces it each frame, `LeaveStudio` -> `ApplyRenderSettings` restores
+  the user's path). Offline / video renders keep their own renderer. PT/RT no longer break Unlit / Wireframe / quad view.
+- Quad view shading is per view: the camera quadrant keeps the selected shading (lit Solid / Unlit / Wireframe); the top / front / left
+  ortho views are always drawn flat (their own SceneConstants, `ExtraView`). AO / SSR / haze apply only inside the camera quadrant
+  (`gP1` = camera rect in uv, `composite.hlsl`). TAA / upscaler stay off in quad.
+- Each ortho view has its own centre / zoom (`StudioDoc::quadCenter[3]`, `quadHeight[3]`); the view under the mouse drives it.
+
+### Not verified
+- Quad view was only built and read, not captured (no script command toggles `viewLayout`). Single view with `--render rt` was captured: raster, no `[E]`.
+- Behavior change: wireframe no longer shows wire floor / models in the ortho quadrants.
+- The tree also holds earlier uncommitted studio WIP (Gizmo / StudioProject / UiStudioPose / project test), committed together here.

@@ -973,13 +973,13 @@ void App::StudioCommitPlace(uint32_t uid, const PropAttach& before, const PropAt
     studio_->history.Push(std::make_unique<PropAttachCommand>(*studio_, uid, before, after, true));
 }
 
-// A character's place in the world (Unity-style transform): position, rotation, scale. Live while dragging a field,
-// one undo step per drag / typed value. The viewport gizmo (StudioViewportPose) edits the same data.
+// A character's or stage's place in the world (Unity-style transform): position, rotation, scale. Live while
+// dragging a field, one undo step per drag / typed value. The viewport gizmo (StudioViewportPose) edits the same data.
 void App::DrawStudioPlacePanel(float w) {
     using namespace ui;
     StudioDoc& d = *studio_;
     StudioModel* m = d.Selected();
-    if (!m || m->kind != ModelKind::Character) return;
+    if (!m || m->IsProp()) return;
     const Palette& p = P();
     ImDrawList* cdl = ImGui::GetWindowDrawList();
     ImGui::Dummy(ImVec2(w, Dp(6.0f)));

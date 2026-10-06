@@ -158,7 +158,7 @@ struct FrameView {
     CameraParams camera;
     // Where `camera` is drawn (fractions of the render target). With extraViews it is one quadrant of the target.
     float mainRect[4] = {0, 0, 1, 1};
-    std::vector<ExtraView> extraViews;  // at most kMaxExtraViews; non-empty: flat shading, no TAA / upscaler
+    std::vector<ExtraView> extraViews;  // at most kMaxExtraViews; non-empty: the extra views draw flat, the camera view keeps its shading; no TAA / upscaler
     LightParams light;
     std::vector<GpuModel*> models;  // drawn in this order (stage parts first, then characters)
     bool studioFloor = false;       // draw the procedural studio floor at y = 0

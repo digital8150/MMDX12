@@ -39,7 +39,7 @@ struct StudioModel {
     uint32_t uid = 0;              // stable id (prop parents, async loads); indices shift when a model is removed
     ModelKind kind = ModelKind::Character;  // stage: no physics, drawn first; prop: follows `attach`, no physics
     PropAttach attach;             // props: parent = uid of the parent model (-1 world)
-    PropAttach place;              // characters: world placement (translation, rotationDeg, scale multiplier)
+    PropAttach place;              // characters / stages: world placement (translation, rotationDeg, scale)
     PropAttach placeApplied;       // the placement the instance was last posed with (physics resets when it changes)
     bool visible = true;
     std::shared_ptr<const PmxModel> pmx;
@@ -112,10 +112,10 @@ struct StudioDoc {
     bool useLightTrack = true;      // the light track drives the renderer's key light (else the lighting preset)
     bool useShadowTrack = true;     // the self-shadow track drives the shadows (else the render settings)
     bool showCameraPath = true;     // camera path overlay in the viewport (free camera only)
-    bool modelGizmo = false;        // viewport gizmo moves / rotates the selected character (no bone picked)
+    bool modelGizmo = false;        // viewport gizmo moves / rotates the selected character / stage (no bone picked)
     int viewLayout = 0;             // 0 single perspective view, 1 quad view (perspective + top / front / left, orthographic)
-    DirectX::XMFLOAT3 quadCenter{0, 10, 0};  // what the orthographic views look at
-    float quadHeight = 40.0f;                // world units across the height of an orthographic view
+    DirectX::XMFLOAT3 quadCenter[3] = {{0, 10, 0}, {0, 10, 0}, {0, 10, 0}};  // per ortho view (top / front / left): what it looks at
+    float quadHeight[3] = {40.0f, 40.0f, 40.0f};  // per ortho view: world units across its height (zoom)
     bool possessCamera = false;     // C4D style: viewport navigation edits the motion camera instead of the free view
     int shading = 0;                // viewport shading (ViewShading): 0 lit, 1 unlit, 2 wireframe (raster path only)
     bool frameMask = true;         // camera view: render the 16:9 frame only and dim the rest (WYSIWYG with the video)
@@ -293,7 +293,7 @@ struct StudioPackageModel {
     ModelKind kind = ModelKind::Character;
     bool visible = true;
     PropAttach attach;                       // props: parent = index into StudioPackage::models (-1 world)
-    PropAttach place;                        // characters: world placement
+    PropAttach place;                        // characters / stages: world placement
     MotionData motion;                       // names canonicalised to pmx
 };
 struct StudioPackage {

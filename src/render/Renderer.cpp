@@ -396,8 +396,8 @@ void Renderer::FillSceneConstants(const FrameView& view, uint32_t w, uint32_t h,
     sc.farZ = cam.farZ;
     sc.frameIndex = (float)(temporalIndex_ % 64);
     // The DXR scene shaders read shading as 0 (Lit): RayTraced / PathTraced ignore the setting.
+    // The quad view's extra views get their own shading from their SceneConstants below.
     uint32_t shading = (EffectivePath() == RenderPath::Raster) ? (uint32_t)settings_.shading : 0u;
-    if (quad && shading == 0u) shading = (uint32_t)ViewShading::Unlit;  // the ortho views cannot be lit
     sc.shading = (float)shading;
     // Distance haze is a lighting-style contribution; Unlit/Wireframe scenes are drawn flat
     // (RecordScene turns the lighting-adjacent effects off for these frames).
@@ -452,11 +452,13 @@ void Renderer::RecordScene(ID3D12GraphicsCommandList* cmd, const FrameView& view
 
     // Unlit / Wireframe draw the models flat, so the lighting-adjacent effects have nothing to
     // contribute this frame: run the frame with them off (a copy, RenderSettings is per-call here).
+    // The shading mode is the camera view's: in a quad view the extra views are drawn flat through
+    // their own SceneConstants, and the camera view keeps the selected shading.
     RenderSettings frameSettings = settings_;
-    const bool nonLit = path == RenderPath::Raster && (settings_.shading != ViewShading::Lit || quad);
+    const bool nonLit = path == RenderPath::Raster && settings_.shading != ViewShading::Lit;
     if (quad) {
         frameSettings.taa = false;
-        if (frameSettings.shading == ViewShading::Lit) frameSettings.shading = ViewShading::Unlit;
+        frameSettings.volumetric = false;  // the march follows the frame camera: wrong in the extra views
         historyValid = false;
     }
     if (nonLit) {
@@ -486,6 +488,9 @@ void Renderer::RecordScene(ID3D12GraphicsCommandList* cmd, const FrameView& view
         for (size_t e = 0; e < count; ++e) {
             const ExtraView& ev = view.extraViews[e];
             SceneConstants esc = sc;
+            // per-view shading: the ortho views are always drawn flat (Unlit, or Wireframe when
+            // that shading mode is selected); only the camera quadrant renders lit
+            if (esc.shading < (float)ViewShading::Unlit) esc.shading = (float)ViewShading::Unlit;
             const XMMATRIX viewM = XMLoadFloat4x4(&ev.view);
             const float pxW = std::max(1.0f, ev.rect[2] * (float)w), pxH = std::max(1.0f, ev.rect[3] * (float)h);
             const XMMATRIX proj = XMMatrixOrthographicLH(ev.height * pxW / pxH, ev.height, ev.nearZ, ev.farZ);

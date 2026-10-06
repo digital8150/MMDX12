@@ -1,6 +1,8 @@
 // Lighting composite: colour * AO (depth-aware upsample), blended SSR, distance haze.
 //   t0 colour (HDR), t1 depth (raw), t2 normal, t3 ao (half res, may be null), t4 ssr (half res, may be null).
 //   gP0.x = AO intensity (0 = off), gP0.y = SSR on, gP0.zw = half-res texel size.
+//   gP1 = camera-view rect in uv (Studio quad view): AO / SSR / haze only apply inside it
+//   (gP1.z <= 0: the whole screen).
 #include "fullscreen.hlsli"
 
 Texture2D<float4> gColorTex : register(t0);
@@ -32,11 +34,16 @@ float4 PSComposite(FsOut i) : SV_Target {
     float z = LinearZ(d);
     float4 nt = gNormalTex.SampleLevel(gPoint, i.uv, 0);
 
-    if (gP0.x > 0.0) {
+    // Studio quad view: AO / SSR / haze unproject through the frame camera, so they only apply
+    // inside the camera quadrant (gP1 = the rect in uv; gP1.z <= 0: the whole screen).
+    const bool cam = gP1.z <= 0.0 ||
+                     (i.uv.x >= gP1.x && i.uv.x < gP1.x + gP1.z && i.uv.y >= gP1.y && i.uv.y < gP1.y + gP1.w);
+
+    if (cam && gP0.x > 0.0) {
         float ao = UpsampleAo(i.uv, z);
         c.rgb *= lerp(1.0, ao, gP0.x);
     }
-    if (gP0.y > 0.0 && nt.z > 0.01) {
+    if (cam && gP0.y > 0.0 && nt.z > 0.01) {
         // 3x3 alpha-weighted gather hides the per-pixel jitter of the half-res march
         float4 r = 0;
         [unroll] for (int y = -1; y <= 1; ++y)
@@ -54,7 +61,7 @@ float4 PSComposite(FsOut i) : SV_Target {
         float w = saturate(fres * r.a * nt.w);
         c.rgb = lerp(c.rgb, r.rgb, w);
     }
-    if (gFog > 0.0) {
+    if (cam && gFog > 0.0) {
         float3 vp = ViewPosFromDepth(i.uv, d);
         float dist = length(vp);
         float f = (1.0 - exp(-dist * gFog * 0.0011)) * 0.85;

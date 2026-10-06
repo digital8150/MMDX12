@@ -163,10 +163,11 @@ struct CameraPathPoint {
 // - `keys`: eye positions at the key frames, drawn as filled circles (keyRadius, outline ring); keys whose index is in
 //   `selectedKeys` use selectedKey and radius keyRadius + 1.5.
 // - `current`: the camera at the current frame: a filled circle (currentRadius) at its eye, a thin line from the eye
-//   to its target (the target colour) with a small 3 px dot at the target, and its view frustum drawn as a wireframe
-//   pyramid: apex at the eye, a rectangle at distance `frustumLength` world units in front of it with half-height
-//   `frustumLength * tan(fovY / 2)` and half-width = half-height * `aspect`, the 4 edges apex->corners and the rectangle,
-//   plus a small filled triangle above the rectangle's top edge marking "up" (like Blender's camera gizmo). The
+//   to its target (the target colour) with a small 3 px dot at the target, and its view frustum drawn as a pyramid:
+//   apex at the eye, a rectangle at distance `frustumLength` world units in front of it with half-height
+//   `frustumLength * tan(fovY / 2)` and half-width = half-height * `aspect`, the 4 edges apex->corners and the
+//   rectangle, the far plane as a translucent filled face (when every corner is in front), and a small filled
+//   triangle above the rectangle's top edge marking "up" (like Blender's camera gizmo). The
 //   frustum corners are computed in the motion camera's view space and transformed to world with the inverse of
 //   `current.view`. Pass `current == nullptr` to skip it.
 // Every line goes through ProjectSegment (clipped at the near plane), every dot through Project (skipped when behind).

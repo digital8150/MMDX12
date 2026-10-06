@@ -393,16 +393,18 @@ void App::StudioViewportPose(float x0, float y0, float x1, float y1, bool hovere
     StudioDoc& d = *studio_;
     ImGuiIO& io = ImGui::GetIO();
     StudioModel* m = StudioPoseModel();
+    // a selected visible stage (no bones): the model gizmo only, never the bone overlay
+    StudioModel* stage = !m && d.Selected() && d.Selected()->IsStage() && d.Selected()->visible ? d.Selected() : nullptr;
     studioGizmoShown_ = false;
-    if (!m || !m->visible || d.playing) {
+    if ((!m && !stage) || (m && !m->visible) || d.playing) {
         studioHoverBone_ = -1;
         studioGizmoHot_ = GizmoPart::None;
         if (studioViewDrag_ == 2) {  // playback started mid-drag: keep the edit made so far
             StudioSetPose(Tr("본 편집"), studioPoseBefore_);
             studioViewDrag_ = 0;
         }
-        if (studioViewDrag_ == 6 && m) {
-            StudioCommitPlace(m->uid, studioPlaceBefore_, m->place);
+        if (studioViewDrag_ == 6 && d.Selected()) {
+            StudioCommitPlace(d.Selected()->uid, studioPlaceBefore_, d.Selected()->place);
             studioPlaceDragging_ = false;
             studioViewDrag_ = 0;
         }
@@ -410,23 +412,24 @@ void App::StudioViewportPose(float x0, float y0, float x1, float y1, bool hovere
     }
     const GizmoStyle gs = MakeGizmoStyle();
     const BoneOverlayStyle os = MakeOverlayStyle();
-    if (d.activeBone >= (int)m->pmx->bones.size()) d.activeBone = -1;
-    studioGizmoShown_ = d.activeBone >= 0 && StudioGizmoFrameOf(*m, d.activeBone, studioGizmoFrame_, studioGizmoMode_);
-    // no bone picked: the toolbar's model tool moves / rotates the whole character (world axes at its origin)
-    const bool modelTool = d.modelGizmo && d.activeBone < 0 && m->kind == ModelKind::Character;
+    if (m && d.activeBone >= (int)m->pmx->bones.size()) d.activeBone = -1;
+    studioGizmoShown_ = m && d.activeBone >= 0 && StudioGizmoFrameOf(*m, d.activeBone, studioGizmoFrame_, studioGizmoMode_);
+    // no bone picked: the toolbar's model tool moves / rotates the whole character / stage (world axes at its origin)
+    StudioModel* const mm = m ? m : stage;
+    const bool modelTool = d.modelGizmo && d.activeBone < 0 && mm;
     if (modelTool) {
         studioGizmoFrame_ = GizmoFrame{};
-        studioGizmoFrame_.center = m->place.translation;
+        studioGizmoFrame_.center = mm->place.translation;
         studioGizmoMode_ = d.gizmoTool == 1 ? GizmoMode::Translate : GizmoMode::Rotate;
         studioGizmoShown_ = true;
     }
     const ImVec2 mouse = io.MousePos;
 
-    // hover (not while dragging): the gizmo first, then the bones
+    // hover (not while dragging): the gizmo first, then the bones (stages have no bones)
     if (studioViewDrag_ != 2) {
         studioGizmoHot_ = hovered && studioGizmoShown_ ? GizmoHitTest(studioVp_, studioGizmoFrame_, studioGizmoMode_, gs, mouse)
                                                        : GizmoPart::None;
-        studioHoverBone_ = hovered && d.showBones && studioGizmoHot_ == GizmoPart::None &&
+        studioHoverBone_ = hovered && m && d.showBones && studioGizmoHot_ == GizmoPart::None &&
                                        (studioViewDrag_ == 0 || (studioViewDrag_ == 1 && ImGui::IsMouseClicked(ImGuiMouseButton_Left)))
                                ? PickBone(studioVp_, *m->pmx, *m->inst, mouse, os)
                                : -1;
@@ -438,7 +441,7 @@ void App::StudioViewportPose(float x0, float y0, float x1, float y1, bool hovere
             studioGizmoDrag_ = BeginGizmoDrag(studioVp_, studioGizmoFrame_, studioGizmoMode_, gs, studioGizmoHot_, mouse);
             if (studioGizmoDrag_.part != GizmoPart::None && modelTool) {
                 studioViewDrag_ = 6;  // model placement drag
-                studioPlaceBefore_ = m->place;
+                studioPlaceBefore_ = mm->place;
                 studioPlaceDragging_ = true;
             } else if (studioGizmoDrag_.part != GizmoPart::None) {
                 const int bone = d.activeBone;
@@ -499,7 +502,7 @@ void App::StudioViewportPose(float x0, float y0, float x1, float y1, bool hovere
     if (studioViewDrag_ == 6) {
         consumed = true;
         if (ImGui::IsKeyPressed(ImGuiKey_Escape, false)) {  // cancel
-            m->place = studioPlaceBefore_;
+            mm->place = studioPlaceBefore_;
             studioPlaceDragging_ = false;
             studioViewDrag_ = 4;
         } else {
@@ -518,9 +521,9 @@ void App::StudioViewportPose(float x0, float y0, float x1, float y1, bool hovere
                     pl.rotationDeg = EulerDeg(q);
                 }
             }
-            m->place = pl;
+            mm->place = pl;
             if (!ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
-                StudioCommitPlace(m->uid, studioPlaceBefore_, m->place);
+                StudioCommitPlace(mm->uid, studioPlaceBefore_, mm->place);
                 studioPlaceDragging_ = false;
                 studioViewDrag_ = 0;
             }
@@ -532,7 +535,7 @@ void App::StudioViewportPose(float x0, float y0, float x1, float y1, bool hovere
     // overlay
     ImDrawList* dl = ImGui::GetWindowDrawList();
     dl->PushClipRect(ImVec2(x0, y0), ImVec2(x1, y1), true);
-    if (d.showBones)
+    if (m && d.showBones)
         DrawBoneOverlay(dl, studioVp_, *m->pmx, *m->inst, d.selectedBones, d.activeBone, studioHoverBone_, os);
     if (studioGizmoShown_)
         DrawGizmo(dl, studioVp_, studioGizmoFrame_, studioGizmoMode_, gs, studioViewDrag_ == 2 ? GizmoPart::None : studioGizmoHot_,
@@ -547,7 +550,7 @@ void App::StudioViewportPose(float x0, float y0, float x1, float y1, bool hovere
 void App::StudioViewportToolbar(float x, float cy) {
     using namespace ui;
     StudioDoc& d = *studio_;
-    if (!StudioPoseModel()) return;
+    if (!d.Selected()) return;  // characters and stages (the pose model or the model gizmo's target)
     const Palette& p = P();
     ImDrawList* dl = ImGui::GetWindowDrawList();
     const float b = 30.0f, gap = 2.0f;
@@ -652,10 +655,12 @@ void App::StudioViewportCameraHandles(bool hovered) {
 void App::StudioDrawPoseOverlay(const ViewProj& vp, float x0, float y0, float x1, float y1) {
     StudioDoc& d = *studio_;
     StudioModel* m = StudioPoseModel();
-    if (!m || !m->visible || d.playing) return;
+    StudioModel* stage = !m && d.Selected() && d.Selected()->IsStage() && d.Selected()->visible ? d.Selected() : nullptr;
+    if ((!m && !stage) || d.playing) return;
     ImDrawList* dl = ImGui::GetWindowDrawList();
     dl->PushClipRect(ImVec2(x0, y0), ImVec2(x1, y1), true);
-    if (d.showBones) DrawBoneOverlay(dl, vp, *m->pmx, *m->inst, d.selectedBones, d.activeBone, -1, MakeOverlayStyle());
+    if (m && d.showBones)
+        DrawBoneOverlay(dl, vp, *m->pmx, *m->inst, d.selectedBones, d.activeBone, -1, MakeOverlayStyle());
     if (studioGizmoShown_) DrawGizmo(dl, vp, studioGizmoFrame_, studioGizmoMode_, MakeGizmoStyle(), GizmoPart::None, GizmoPart::None);
     dl->PopClipRect();
 }

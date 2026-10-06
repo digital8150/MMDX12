@@ -48,7 +48,7 @@ struct ProjectModel {
     std::string libraryId;             // library character id (saved display scale); may be empty
     bool visible = true;
     PropAttach attach;                 // used for props only
-    PropAttach place;                  // characters: world placement (translation / rotationDeg / scale; parent unused)
+    PropAttach place;                  // characters / stages: world placement (translation / rotationDeg / scale; parent unused)
     MotionData motion;                 // its keys; motion.modelName is written as the VMD header model name
 };
 

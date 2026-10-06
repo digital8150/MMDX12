@@ -224,6 +224,7 @@ void App::LeaveStudio() {
     studioLeaveConfirm_ = false;
     studioPending_ = StudioAction::None;
     screen_ = Screen::Select;
+    ApplyRenderSettings();  // also restores the user's render path: the studio forces the raster path (editing view)
 }
 
 // ---------------------------------------------------------------------------
@@ -439,7 +440,28 @@ void App::StudioUpdateModel(StudioModel& m, uint64_t slot, float frame, float ph
         }
         if (resetPhysics) inst.ResetPhysics();
     }
-    if (m.IsProp()) inst.SetRootTransform(StudioPropRoot(m));
+    if (m.IsProp()) {
+        inst.SetRootTransform(StudioPropRoot(m));
+    } else if (m.IsStage()) {
+        // placement of a stage: scale + rotation + position in the root (no library scale). Keyless stages are
+        // posed once, so a moved one is re-posed here and its once-built static BLAS is rebuilt.
+        const PropAttach& pl = m.place;
+        const float s = std::max(0.01f, pl.scale);
+        constexpr float kRad = 0.01745329252f;
+        DirectX::XMFLOAT4X4 root;
+        DirectX::XMStoreFloat4x4(&root, DirectX::XMMatrixMultiply(
+            DirectX::XMMatrixMultiply(
+                DirectX::XMMatrixScaling(s, s, s),
+                DirectX::XMMatrixRotationRollPitchYaw(pl.rotationDeg.x * kRad, pl.rotationDeg.y * kRad,
+                                                      pl.rotationDeg.z * kRad)),
+            DirectX::XMMatrixTranslation(pl.translation.x, pl.translation.y, pl.translation.z)));
+        inst.SetRootTransform(root);
+        if (!(m.placeApplied == m.place)) {
+            m.placeApplied = m.place;
+            m.gpu->Rt().blasBuilt = false;  // the stage BLAS was built once, at the old placement
+            if (!m.bound) inst.UpdatePose(0.0f);
+        }
+    }
     if (!m.IsStage() || m.bound) inst.UpdatePose(physicsDt);
     m.gpu->UpdateSkinning(slot, inst.SkinMatrices());
     m.gpu->UpdateMorphs(slot, inst.VertexMorphDeltas(), inst.MorphVersion());
@@ -1384,6 +1406,16 @@ void App::DrawStudio() {
     DrawToast();
 
     // The 3D view fills the viewport panel (back buffer pixels = ImGui display pixels).
+    // PT/RT cannot render the Unlit / Wireframe shading or the quad view: the studio viewport is
+    // an editing view and always renders with the raster path (LeaveStudio restores the user's
+    // path; offline / video / still renders keep their own chosen renderer).
+    {
+        RenderSettings rs = renderer_.Settings();
+        if (rs.renderPath != RenderPath::Raster) {
+            rs.renderPath = RenderPath::Raster;
+            renderer_.SetSettings(rs);
+        }
+    }
     if (viewportOpen) {
         RenderSettings rs = renderer_.Settings();
         float rr[4];
@@ -1677,7 +1709,7 @@ void App::DrawStudioInspector(float x0, float y0, float x1, float y1) {
         if (m) {
             line(Tr("본 / 모프"), std::to_string(m->pmx->bones.size()) + " / " + std::to_string(m->pmx->morphs.size()));
             if (m->IsProp()) DrawStudioPropPanel(w);
-            else if (m->kind == ModelKind::Character) DrawStudioPlacePanel(w);
+            else DrawStudioPlacePanel(w);
         } else {
             char counts[96];
             std::snprintf(counts, sizeof(counts), Tr("카메라 %d · 조명 %d · 섀도 %d"), (int)d.camera.camera.size(),
@@ -2086,19 +2118,22 @@ void App::StudioViewportNavigate(bool hovered, bool active) {
 void App::StudioOrthoNavigate(const ViewProj& vp, bool hovered, bool active) {
     StudioDoc& d = *studio_;
     ImGuiIO& io = ImGui::GetIO();
-    // pan: right / middle (or an empty-space left) drag moves the shared look-at point in the view's plane
+    // each ortho view has its own navigation state; the view under the mouse (studioActiveView_)
+    // drives the one being edited (this runs only when an ortho view is active, av 1..3)
+    const int v = std::clamp(studioActiveView_ - 1, 0, 2);
+    // pan: right / middle (or an empty-space left) drag moves the view's own look-at point in its plane
     const bool dragging = active && (io.MouseDelta.x != 0 || io.MouseDelta.y != 0) &&
                           (ImGui::IsMouseDown(ImGuiMouseButton_Right) || ImGui::IsMouseDown(ImGuiMouseButton_Middle) ||
                            (ImGui::IsMouseDown(ImGuiMouseButton_Left) && studioViewDrag_ == 1));
     if (dragging) {
         const float s = vp.orthoHeight / std::max(1.0f, vp.h);
-        const XMFLOAT4X4& v = vp.view;
-        const XMFLOAT3 right{v._11, v._21, v._31}, up{v._12, v._22, v._32};  // view axes in world space (row-vector view)
-        d.quadCenter.x += (-io.MouseDelta.x * right.x + io.MouseDelta.y * up.x) * s;
-        d.quadCenter.y += (-io.MouseDelta.x * right.y + io.MouseDelta.y * up.y) * s;
-        d.quadCenter.z += (-io.MouseDelta.x * right.z + io.MouseDelta.y * up.z) * s;
+        const XMFLOAT4X4& m = vp.view;
+        const XMFLOAT3 right{m._11, m._21, m._31}, up{m._12, m._22, m._32};  // view axes in world space (row-vector view)
+        d.quadCenter[v].x += (-io.MouseDelta.x * right.x + io.MouseDelta.y * up.x) * s;
+        d.quadCenter[v].y += (-io.MouseDelta.x * right.y + io.MouseDelta.y * up.y) * s;
+        d.quadCenter[v].z += (-io.MouseDelta.x * right.z + io.MouseDelta.y * up.z) * s;
     }
-    if (hovered && io.MouseWheel != 0.0f) d.quadHeight = std::clamp(d.quadHeight * std::pow(0.88f, io.MouseWheel), 2.0f, 4000.0f);
+    if (hovered && io.MouseWheel != 0.0f) d.quadHeight[v] = std::clamp(d.quadHeight[v] * std::pow(0.88f, io.MouseWheel), 2.0f, 4000.0f);
 }
 
 void App::StudioAddQuadViews(FrameView& view) const {
@@ -2109,8 +2144,8 @@ void App::StudioAddQuadViews(FrameView& view) const {
     for (int k = 0; k < 3; ++k) {
         ExtraView ev;
         std::copy(rects[k], rects[k] + 4, ev.rect);
-        OrthoViewMatrix(k, d.quadCenter, &ev.view, nullptr);
-        ev.height = d.quadHeight;
+        OrthoViewMatrix(k, d.quadCenter[k], &ev.view, nullptr);
+        ev.height = d.quadHeight[k];
         view.extraViews.push_back(ev);
     }
 }
@@ -2147,8 +2182,8 @@ void App::DrawStudioViewport(float x0, float y0, float x1, float y1) {
             } else {
                 XMFLOAT4X4 view;
                 XMFLOAT3 eye;
-                OrthoViewMatrix(k - 1, d.quadCenter, &view, &eye);
-                q.vp = MakeOrthoViewProj(view, eye, d.quadHeight, 0.1f, 2.0f * kOrthoEyeDistance, q.x0, q.y0, w, h);
+                OrthoViewMatrix(k - 1, d.quadCenter[k - 1], &view, &eye);
+                q.vp = MakeOrthoViewProj(view, eye, d.quadHeight[k - 1], 0.1f, 2.0f * kOrthoEyeDistance, q.x0, q.y0, w, h);
             }
         }
     }

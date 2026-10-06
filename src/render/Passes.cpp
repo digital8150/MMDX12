@@ -762,10 +762,15 @@ bool CompositePass::CreatePipelines(Dx12Context& ctx, const std::filesystem::pat
 
 void CompositePass::Execute(PassContext& pc) {
     RenderTargets& t = pc.targets;
-    const float c0[4] = {t.ao ? pc.settings.ssaoIntensity : 0.0f, t.ssr ? 1.0f : 0.0f,
-                         1.0f / Half(t.width), 1.0f / Half(t.height)};
+    // Quad view: AO / SSR / distance haze unproject through the frame camera, so they only apply
+    // inside the camera quadrant (gP1 = the rect in uv; gP1.z <= 0: the whole target).
+    const bool quad = !pc.view.extraViews.empty();
+    const float c0[8] = {t.ao ? pc.settings.ssaoIntensity : 0.0f, t.ssr ? 1.0f : 0.0f,
+                         1.0f / Half(t.width), 1.0f / Half(t.height),
+                         quad ? pc.view.mainRect[0] : 0.0f, quad ? pc.view.mainRect[1] : 0.0f,
+                         quad ? pc.view.mainRect[2] : 0.0f, quad ? pc.view.mainRect[3] : 0.0f};
     t.lit.Transition(pc.cmd, kRt);
-    pipe_.Draw(pc, {&t.lit}, pc.transient.SrvTable(pc.ctx, {&t.color, &t.depth, &t.normal, t.ao, t.ssr}), c0, 4);
+    pipe_.Draw(pc, {&t.lit}, pc.transient.SrvTable(pc.ctx, {&t.color, &t.depth, &t.normal, t.ao, t.ssr}), c0, 8);
     t.lit.Transition(pc.cmd, kSrv);
     t.hdrFinal = &t.lit;
 }
