@@ -49,5 +49,5 @@ shader manager) and never crashes. Saving `effect.hlsl` while the app runs reloa
   offline GI renderer do not apply them.
 - No effects in the stack = no extra targets, no extra passes: the frame is identical to a build without the feature.
 - Check a pack with `pack_check <folder> --compile`. Template: `shaders/pack_template_effect`.
-- Built-in examples: `shaders/packs/chromatic_aberration`, `film_grain`, `crt_scanlines`.
+- Examples (online gallery only, not bundled): chromatic_aberration, film_grain, crt_scanlines (sources in the website repo `shader-packs/`).
 - CLI: `--effect <id>[,<id>...]` replaces the stack for one run, `--effect none` clears it.

@@ -183,7 +183,7 @@ progress.md is the session log. Read its latest entry first.
   unlit / wire / quad views, and ends with a CopyResource into `hdrFinal` / `ldr`. Pack textures use the v2 table (`PackFxSampleTex`,
   t0 space5), frame inputs are t0..t3 space6, params 16 root constants at b2. UI: `App::DrawEffectStackEditor` (shader manager detail
   of an effect pack + the play bar's effect button); surface pickers list surface packs only. Templates `shaders/pack_template`
-  (surface) / `pack_template_effect`; built-ins chromatic_aberration, film_grain, crt_scanlines. Studio projects don't store the
+  (surface) / `pack_template_effect`; online-gallery-only examples chromatic_aberration, film_grain, crt_scanlines (not bundled; sources in the website repo). Studio projects don't store the
   stack yet (app-level setting).
 - `OfflineRenderer` (render/OfflineRenderer.h) is independent of `RenderSettings`: `Renderer::BeginOffline` builds the TLAS,
   then `Renderer::RenderOffline` replaces `Render` each frame (GPU-time-budgeted iterations, preview present) until Done.

@@ -743,3 +743,21 @@ finished by Claude.
 
 ### Not verified / notes
 - Worker output was not reviewed (translation wording for ja / zh, key byte-exactness) and no UI capture in another language was made.
+
+## 2026-10-07 (12) — effect packs online-only, previews, docs, release 1.4.0
+
+### Done
+- The three screen effects (chromatic_aberration, film_grain, crt_scanlines) are no longer built in: removed from `shaders/packs`,
+  moved to the website repo `shader-packs/` as gallery packs (1.0.0, `minAppVersion` 1.4.0, apiVersion 3), with previews captured from
+  real play renders (Miku, `--effect <id>`). `docs/shader_effect_api.md` and CLAUDE.md say "online gallery only".
+- Website docs: new page "Screen Effect Packs" (`effects`, order 5) in ko / en / ja / zh (manifest additions, stages, PackEffect
+  inputs / helpers, example, stack UI, CLI, debugging); later pages renumbered; the overview links it.
+- Version 1.4.0 (CMake). Release 1.4.0 = studio lighting source + spot rig, effect packs API 3, UI cleanup (play bar, lobby tabs), i18n.
+
+### Verified
+- `pack_check --compile` OK on the three gallery zips; an effect pack extracted into `shader_packs/` renders through `--effect` with
+  no `[E]`; the installed list shows only the two built-in surface packs.
+
+### Not verified / notes
+- A stale `build/bin/shaders/packs/<effect>` copy is not removed by `copy_shaders` (deleted by hand): a dev build dir keeps old built-ins.
+- The in-app online install of an effect pack was not clicked through (zip extraction path only).
