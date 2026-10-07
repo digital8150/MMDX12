@@ -36,6 +36,7 @@ struct RtPtPackRecord {
     float4 headUp;
     float4 headForward;
     float4 params[4];
+    float4 headPos;   // xyz world head bone position, w = headScale
 };
 
 struct RtGeometry {

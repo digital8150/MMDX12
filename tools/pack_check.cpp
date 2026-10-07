@@ -274,6 +274,18 @@ void CheckTextureIndices(const ShaderPack& pack, const fs::path& dir, bool& ok) 
             size_t n;
             while ((n = fread(buf, 1, sizeof(buf), f)) > 0) hlsl.append(buf, n);
             fclose(f);
+            // PtPackOut is read as is: a field PackEvaluate never assigns is undefined (e.g. a garbage terminator)
+            for (const char* field : {"albedo", "shadowTint", "shadowBias", "specular", "terminator", "flatFace"}) {
+                const std::string key = std::string(".") + field;
+                bool assigned = false;
+                for (size_t pos = hlsl.find(key); pos != std::string::npos && !assigned; pos = hlsl.find(key, pos + 1)) {
+                    size_t i = pos + key.size();
+                    if (i < hlsl.size() && (isalnum((unsigned char)hlsl[i]) || hlsl[i] == '_')) continue;   // longer name
+                    while (i < hlsl.size() && (hlsl[i] == ' ' || hlsl[i] == '\t')) ++i;
+                    if (i + 1 < hlsl.size() && hlsl[i] == '=' && hlsl[i + 1] != '=') assigned = true;
+                }
+                if (!assigned) printf("  [warn] pt_surface.hlsl never assigns PtPackOut.%s (it would be undefined)\n", field);
+            }
             for (const char* fn : {"PtPackSampleTex(", "PtPackSampleTexLevel("}) {
                 for (size_t pos = hlsl.find(fn); pos != std::string::npos; pos = hlsl.find(fn, pos + 1)) {
                     size_t i = pos + strlen(fn);

@@ -25,6 +25,8 @@ struct PtPackIn {
     uint materialClass;   // the existing PackClass of the material
     float params[16];     // the pack's 16 sliders, as float
     // head frame
+    float3 headPos;       // world position of the head bone (only when headValid)
+    float headScale;      // world units per model unit (character display scale)
     float3 headRight;
     float3 headUp;
     float3 headForward;
@@ -36,6 +38,7 @@ struct PtPackOut {
     float3 shadowTint;    // linear colour multiplying the shaded side
     float shadowBias;     // shifts the terminator, -1..1
     float3 specular;      // additive linear radiance, already includes any rim / matcap the author wants
+    float2 terminator;    // N.L edges (lo, hi) of the shadow terminator smoothstep; hi <= lo = engine default (-0.12, 0.22)
     bool flatFace;        // bool: use the engine's existing flat-face handling = no GI gradient on this surface
 };
 

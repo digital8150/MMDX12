@@ -32,15 +32,18 @@ PtPackOut PackEvaluate(PtPackIn i);
 - `float3 baseColor`: linear base colour (`SrgbToLinear(texture * diffuse)`)
 - `uint materialClass`: pack material class (`PACK_BODY`, `PACK_SKIN`, `PACK_FACE`, `PACK_EYE`, `PACK_HAIR`, `PACK_WEAPON`)
 - `float params[16]`: 16 pack sliders
-- Head frame: `float3 headRight`, `float3 headUp`, `float3 headForward`, `bool headValid`
+- Head frame: `float3 headPos` (world position of the head bone), `float headScale` (world units per model unit), `float3 headRight`, `float3 headUp`, `float3 headForward`, `bool headValid`
 
 ### `PtPackOut`
 
 - `float3 albedo`: linear surface albedo used for GI diffuse bounces and reflections
 - `float3 shadowTint`: linear multiplier on the shaded side of the terminator
-- `float shadowBias`: shifts the terminator (-1..1)
+- `float shadowBias`: shifts the terminator, in N.L units. A pack that shades with a smoothed normal (faces) returns `dot(Nsmooth, L) - dot(normal, L)`
+- `float2 terminator`: (lo, hi) N.L edges of the terminator smoothstep. `hi <= lo` (e.g. `float2(0, 0)`) = the engine default (-0.12, 0.22). A half-Lambert ramp `threshold +- softness` maps to `2*(threshold -+ softness) - 1`.
 - `float3 specular`: additive linear radiance (rim, matcap, highlights)
 - `bool flatFace`: whether to use the engine's flat face handling (no GI gradient)
+
+**Assign every field of `PtPackOut`**: an unassigned field is undefined (`tools/pack_check` warns).
 
 ### Helpers
 

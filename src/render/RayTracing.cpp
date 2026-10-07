@@ -429,6 +429,7 @@ bool RtScene::Build(ID3D12GraphicsCommandList* cmd, const std::vector<GpuModel*>
         DirectX::XMFLOAT3 headUp = {0.0f, 1.0f, 0.0f};
         DirectX::XMFLOAT3 headForward = {0.0f, 0.0f, -1.0f};
         uint32_t headValid = 0;
+        DirectX::XMFLOAT4 headPosScale = {0.0f, 0.0f, 0.0f, 1.0f};   // world head bone position, headScale
 
         if (isPtPack) {
             const auto& matConsts = m->MaterialConstantsCpu();
@@ -462,6 +463,11 @@ bool RtScene::Build(ID3D12GraphicsCommandList* cmd, const std::vector<GpuModel*>
                     float invF = fLen > 1e-6f ? 1.0f / fLen : 1.0f;
                     headForward = {f.x * invF, f.y * invF, f.z * invF};
 
+                    // bind head position * skinning matrix (row vectors), as PackHeadFrame does
+                    const DirectX::XMFLOAT4& hp = matConsts[0].packHead;
+                    headPosScale = {hp.x * M._11 + hp.y * M._21 + hp.z * M._31 + M._41,
+                                    hp.x * M._12 + hp.y * M._22 + hp.z * M._32 + M._42,
+                                    hp.x * M._13 + hp.y * M._23 + hp.z * M._33 + M._43, scale};
                     headValid = 1;
                 }
             }
@@ -495,6 +501,7 @@ bool RtScene::Build(ID3D12GraphicsCommandList* cmd, const std::vector<GpuModel*>
                 rec->headValid = headValid;
                 rec->texBase = texBase;
                 rec->texInfo = texInfo;
+                rec->headPos = headPosScale;
                 rec->headRight = {headRight.x, headRight.y, headRight.z, 0.0f};
                 rec->headUp = {headUp.x, headUp.y, headUp.z, 0.0f};
                 rec->headForward = {headForward.x, headForward.y, headForward.z, 0.0f};

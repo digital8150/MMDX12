@@ -175,6 +175,8 @@ void CSPathTrace(uint3 id : SV_DispatchThreadID) {
                         [unroll] for (int p = 0; p < 16; ++p)
                             packIn.params[p] = rec.params[p >> 2][p & 3];
                         packIn.headRight = rec.headRight.xyz;
+                        packIn.headPos = rec.headPos.xyz;
+                        packIn.headScale = rec.headPos.w;
                         packIn.headUp = rec.headUp.xyz;
                         packIn.headForward = rec.headForward.xyz;
                         packIn.headValid = (rec.headValid != 0);

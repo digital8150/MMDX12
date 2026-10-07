@@ -55,13 +55,15 @@ RtPtPackRecord LoadPtPackRecord(uint packSrv) {
     rec.params[1] = asfloat(buf.Load4(80));
     rec.params[2] = asfloat(buf.Load4(96));
     rec.params[3] = asfloat(buf.Load4(112));
+    rec.headPos = asfloat(buf.Load4(128));
     return rec;
 }
 
 // Composes the sun direct term from PtPackOut and geometry/lighting terms.
 float3 PtPackComposeSunDirect(PtPackOut ptPackOut, float3 n, float sunVis, float flatVal) {
     float ndl = dot(n, -gLightDir);
-    float terminator = smoothstep(-0.12, 0.22, ndl + ptPackOut.shadowBias);
+    float2 edge = ptPackOut.terminator.y > ptPackOut.terminator.x ? ptPackOut.terminator : float2(-0.12, 0.22);
+    float terminator = smoothstep(edge.x, edge.y, ndl + ptPackOut.shadowBias);
     float term = lerp(terminator * sunVis, lerp(1.0, sunVis, 0.8), flatVal);
     return lerp(ptPackOut.albedo * ptPackOut.shadowTint, ptPackOut.albedo, term) * gSunIntensity + ptPackOut.specular * sunVis;
 }
