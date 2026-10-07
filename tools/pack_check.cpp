@@ -152,8 +152,10 @@ bool PrintManifest(const ShaderPack& pack, const std::string& error) {
     // type: "surface" (default) or "effect" (+ its injection stage)
     if (pack.type == mmdx::PackType::Effect)
         printf("  type: effect (stage: %s)\n", pack.stage == mmdx::PackEffectStage::PreBloom ? "pre-bloom" : "post");
-    else
+    else {
         printf("  type: surface\n");
+        printf("  pt_surface: %s\n", pack.hasPtSurface ? "yes" : "no");
+    }
     PrintTextures(pack);
     if (pack.params.empty()) {
         printf("  params: (none)\n");
@@ -403,6 +405,33 @@ int wmain(int argc, wchar_t** argv) {
             ok = false;
         } else {
             printf("compile ok (%zu bytes)\n", blob->GetBufferSize());
+        }
+
+        if (pack.hasPtSurface) {
+            const fs::path giHlsl = mmdx::ExecutableDir() / L"shaders" / L"offline_gi.hlsl";
+            if (!fs::is_regular_file(giHlsl, ec)) {
+                printf("[problem] %s not found\n", mmdx::PathToUtf8(giHlsl).c_str());
+                ok = false;
+            } else {
+                fs::path ptRel = fs::relative(pack.dir / L"pt_surface.hlsl", giHlsl.parent_path(), ec);
+                if (ec || ptRel.empty()) ptRel = pack.dir / L"pt_surface.hlsl";
+                std::string ptInc = mmdx::PathToUtf8(ptRel);
+                std::replace(ptInc.begin(), ptInc.end(), '\\', '/');
+                const std::string ptIncDefine = "\"" + ptInc + "\"";
+                const std::vector<std::pair<std::string, std::string>> ptDefines = {
+                    {"MMDX_PT_PACK", ptIncDefine}};
+                printf("compile: CSRender of %s (cs_6_5, MMDX_PT_PACK = %s)\n",
+                       mmdx::PathToUtf8(giHlsl.filename()).c_str(), ptIncDefine.c_str());
+                std::string ptErrors;
+                const mmdx::ComPtr ptBlob = mmdx::CompileShaderDxc(giHlsl, "CSRender", "cs_6_5", ptDefines, &ptErrors);
+                if (!ptErrors.empty()) printf("%s\n", ptErrors.c_str());
+                if (!ptBlob) {
+                    printf("[problem] pt_surface shader compile failed\n");
+                    ok = false;
+                } else {
+                    printf("compile ok (%zu bytes)\n", ptBlob->GetBufferSize());
+                }
+            }
         }
     }
 

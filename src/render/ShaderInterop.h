@@ -127,7 +127,20 @@ enum RtGeometryFlags : uint32_t {
     RtGeom_CastShadow = 1u << 16,  // occludes shadow rays
     RtGeom_AlphaTest  = 1u << 17,  // non-opaque in the BLAS: ray queries evaluate texture alpha
     RtGeom_Character  = 1u << 18,
+    RtGeom_PtPack     = 1u << 19,
 };
+
+// Pack record read by offline GI path tracer for geometries with RtGeom_PtPack. 128 bytes.
+struct RtPtPackRecord {
+    uint32_t materialClass;
+    uint32_t headValid;
+    float _pad0[2];
+    DirectX::XMFLOAT4 headRight;   // xyz, w unused
+    DirectX::XMFLOAT4 headUp;      // xyz, w unused
+    DirectX::XMFLOAT4 headForward; // xyz, w unused
+    float params[16];
+};
+static_assert(sizeof(RtPtPackRecord) == 128, "RtPtPackRecord layout");
 
 // One entry per BLAS geometry. TLAS InstanceID = index of the model's first entry, so a hit's
 // entry is gGeometries[CommittedInstanceID() + CommittedGeometryIndex()]. 176 bytes.
@@ -142,7 +155,7 @@ struct RtGeometry {
     uint32_t textureSrv;   // SrvHeap index of the material texture (GpuModel::Material::srvTable + 0)
     uint32_t sphereSrv;    // srvTable + 1
     uint32_t toonSrv;      // srvTable + 2
-    uint32_t _pad;
+    uint32_t packSrv;      // SrvHeap index of raw ByteAddressBuffer holding RtPtPackRecord (when RtGeom_PtPack)
     // material morph texture factors, as MaterialConstants::texMul..toonAdd
     DirectX::XMFLOAT4 texMul, texAdd, sphereMul, sphereAdd, toonMul, toonAdd;
 };

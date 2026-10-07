@@ -4,9 +4,11 @@
 #include "render/GpuModel.h"
 #include "render/RenderPass.h"
 #include "render/ShaderInterop.h"
+#include "render/ShaderPack.h"
 #include "core/Log.h"
 #include <directx/d3dx12.h>
 #include <algorithm>
+#include <cmath>
 #include <cstring>
 
 namespace mmdx {
@@ -120,13 +122,19 @@ bool RtScene::Initialize(Dx12Context& ctx, const std::filesystem::path& shaderDi
 void RtScene::Shutdown() {
     if (instances_ && instancesMapped_) instances_->Unmap(0, nullptr);
     if (geometries_ && geometriesMapped_) geometries_->Unmap(0, nullptr);
-    instancesMapped_ = geometriesMapped_ = nullptr;
+    if (packRecords_ && packRecordsMapped_) packRecords_->Unmap(0, nullptr);
+    if (packSrvBase_ != DescriptorHeap::kInvalid && ctx_) {
+        ctx_->SrvHeap().Free(packSrvBase_, kSlots * packRecordCapacity_);
+        packSrvBase_ = DescriptorHeap::kInvalid;
+    }
+    instancesMapped_ = geometriesMapped_ = packRecordsMapped_ = nullptr;
     instances_.Reset();
     geometries_.Reset();
+    packRecords_.Reset();
     tlas_.Reset();
     tlasScratch_.Reset();
     tlasBytes_ = tlasScratchBytes_ = 0;
-    tlasCapacity_ = instanceCapacity_ = geometryCapacity_ = 0;
+    tlasCapacity_ = instanceCapacity_ = geometryCapacity_ = packRecordCapacity_ = 0;
     lastSlot_ = 0;
     skinPso_.Reset();
     skinRootSig_.Reset();
@@ -317,6 +325,58 @@ bool RtScene::Build(ID3D12GraphicsCommandList* cmd, const std::vector<GpuModel*>
         instanceCapacity_ = newInstances;
         geometryCapacity_ = newGeometries;
     }
+
+    uint32_t packGeomCount = 0;
+    for (GpuModel* m : models) {
+        if (!usable(m) || m->Role() != ModelRole::Character || m->ShaderPackId().empty()) continue;
+        const ShaderPack* sp = ShaderPacks().Find(m->ShaderPackId());
+        if (sp && sp->hasPtSurface) {
+            packGeomCount += (uint32_t)m->Rt().geometryMaterials.size();
+        }
+    }
+    if (packGeomCount > packRecordCapacity_) {
+        const uint32_t newPackCapacity = std::max(std::max(packGeomCount, 2 * packRecordCapacity_), 16u);
+        auto newPackRecordsBuf = CreateBuffer(device,
+                                              (uint64_t)kSlots * newPackCapacity * sizeof(RtPtPackRecord),
+                                              D3D12_HEAP_TYPE_UPLOAD, D3D12_RESOURCE_FLAG_NONE,
+                                              D3D12_RESOURCE_STATE_GENERIC_READ, L"rt.packRecords");
+        if (!newPackRecordsBuf) return false;
+        void* prm = nullptr;
+        if (FAILED(newPackRecordsBuf->Map(0, nullptr, &prm))) return false;
+
+        uint32_t newSrvBase = ctx_->SrvHeap().Allocate(kSlots * newPackCapacity);
+        if (newSrvBase == DescriptorHeap::kInvalid) {
+            newPackRecordsBuf->Unmap(0, nullptr);
+            return false;
+        }
+
+        for (uint32_t s = 0; s < kSlots; ++s) {
+            for (uint32_t r = 0; r < newPackCapacity; ++r) {
+                uint32_t idx = s * newPackCapacity + r;
+                D3D12_SHADER_RESOURCE_VIEW_DESC srv{};
+                srv.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+                srv.ViewDimension = D3D12_SRV_DIMENSION_BUFFER;
+                srv.Format = DXGI_FORMAT_R32_TYPELESS;
+                srv.Buffer.Flags = D3D12_BUFFER_SRV_FLAG_RAW;
+                srv.Buffer.FirstElement = (UINT)(idx * (sizeof(RtPtPackRecord) / 4));
+                srv.Buffer.NumElements = (UINT)(sizeof(RtPtPackRecord) / 4);
+                device->CreateShaderResourceView(newPackRecordsBuf.Get(), &srv, ctx_->SrvHeap().Cpu(newSrvBase + idx));
+            }
+        }
+
+        if (packRecords_) ctx_->DeferRelease(packRecords_);
+        if (packSrvBase_ != DescriptorHeap::kInvalid) {
+            ctx_->SrvHeap().Free(packSrvBase_, kSlots * packRecordCapacity_);
+        }
+        packRecords_ = newPackRecordsBuf;
+        packRecordsMapped_ = (uint8_t*)prm;
+        packSrvBase_ = newSrvBase;
+        packRecordCapacity_ = newPackCapacity;
+    }
+
+    uint32_t curPackRecord = 0;
+    const size_t slotPackBase = (size_t)slot * packRecordCapacity_;
+
     // One ring entry per frame slot.
     auto* inst = reinterpret_cast<D3D12_RAYTRACING_INSTANCE_DESC*>(
         instancesMapped_ + (size_t)slot * instanceCapacity_ * sizeof(D3D12_RAYTRACING_INSTANCE_DESC));
@@ -341,6 +401,55 @@ bool RtScene::Build(ID3D12GraphicsCommandList* cmd, const std::vector<GpuModel*>
             id.AccelerationStructure = rt.parts[part].blas->GetGPUVirtualAddress();
             *inst++ = id;
         }
+
+        bool isPtPack = false;
+        if (m->Role() == ModelRole::Character && !m->ShaderPackId().empty()) {
+            const ShaderPack* sp = ShaderPacks().Find(m->ShaderPackId());
+            if (sp && sp->hasPtSurface) isPtPack = true;
+        }
+
+        DirectX::XMFLOAT3 headRight = {1.0f, 0.0f, 0.0f};
+        DirectX::XMFLOAT3 headUp = {0.0f, 1.0f, 0.0f};
+        DirectX::XMFLOAT3 headForward = {0.0f, 0.0f, -1.0f};
+        uint32_t headValid = 0;
+
+        if (isPtPack) {
+            const auto& matConsts = m->MaterialConstantsCpu();
+            if (!matConsts.empty() && matConsts[0].packHead.w > 0.5f) {
+                uint32_t headBone = matConsts[0].packHeadBone;
+                const DirectX::XMFLOAT4X4* bonesCur = m->BoneMatricesCpu(frame);
+                const DirectX::XMFLOAT4X4* bonesPrev = m->PrevBoneMatricesCpu(frame);
+                if (bonesCur && headBone < m->BoneCount()) {
+                    DirectX::XMFLOAT4X4 M = bonesCur[headBone];
+                    if (time < 1.0f && bonesPrev) {
+                        const DirectX::XMFLOAT4X4& P = bonesPrev[headBone];
+                        float* mF = reinterpret_cast<float*>(&M);
+                        const float* pF = reinterpret_cast<const float*>(&P);
+                        for (int k = 0; k < 16; ++k) {
+                            mF[k] = pF[k] + (mF[k] - pF[k]) * time;
+                        }
+                    }
+                    DirectX::XMFLOAT3 r = {M._11, M._12, M._13};
+                    float scale = std::sqrt(r.x * r.x + r.y * r.y + r.z * r.z);
+                    if (scale < 1e-4f) scale = 1.0f;
+                    float invScale = 1.0f / scale;
+                    headRight = {r.x * invScale, r.y * invScale, r.z * invScale};
+
+                    DirectX::XMFLOAT3 u = {M._21, M._22, M._23};
+                    float uLen = std::sqrt(u.x * u.x + u.y * u.y + u.z * u.z);
+                    float invU = uLen > 1e-6f ? 1.0f / uLen : 1.0f;
+                    headUp = {u.x * invU, u.y * invU, u.z * invU};
+
+                    DirectX::XMFLOAT3 f = {-M._31, -M._32, -M._33};
+                    float fLen = std::sqrt(f.x * f.x + f.y * f.y + f.z * f.z);
+                    float invF = fLen > 1e-6f ? 1.0f / fLen : 1.0f;
+                    headForward = {f.x * invF, f.y * invF, f.z * invF};
+
+                    headValid = 1;
+                }
+            }
+        }
+
         for (uint32_t mi : rt.geometryMaterials) {
             const GpuModel::Material& m2 = m->Materials()[mi];
             const MaterialConstants& c = m->MaterialConstantsCpu()[mi];
@@ -360,6 +469,26 @@ bool RtScene::Build(ID3D12GraphicsCommandList* cmd, const std::vector<GpuModel*>
             e.textureSrv = m2.srvTable;
             e.sphereSrv = m2.srvTable + 1;
             e.toonSrv = m2.srvTable + 2;
+
+            if (isPtPack && curPackRecord < packRecordCapacity_) {
+                uint32_t recordIdx = (uint32_t)slotPackBase + curPackRecord;
+                RtPtPackRecord* rec = reinterpret_cast<RtPtPackRecord*>(
+                    packRecordsMapped_ + recordIdx * sizeof(RtPtPackRecord));
+                rec->materialClass = c.packClass;
+                rec->headValid = headValid;
+                rec->_pad0[0] = rec->_pad0[1] = 0.0f;
+                rec->headRight = {headRight.x, headRight.y, headRight.z, 0.0f};
+                rec->headUp = {headUp.x, headUp.y, headUp.z, 0.0f};
+                rec->headForward = {headForward.x, headForward.y, headForward.z, 0.0f};
+                std::memcpy(rec->params, c.packParams, 16 * sizeof(float));
+
+                e.packSrv = packSrvBase_ + recordIdx;
+                e.flags |= RtGeom_PtPack;
+                ++curPackRecord;
+            } else {
+                e.packSrv = 0;
+            }
+
             e.texMul = c.texMul;
             e.texAdd = c.texAdd;
             e.sphereMul = c.sphereMul;

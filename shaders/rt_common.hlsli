@@ -25,6 +25,17 @@
 #define RTG_CAST_SHADOW (1u << 16)
 #define RTG_ALPHA_TEST  (1u << 17)
 #define RTG_CHARACTER   (1u << 18)
+#define RTG_PT_PACK     (1u << 19)
+
+struct RtPtPackRecord {
+    uint materialClass;
+    uint headValid;
+    uint2 _pad0;
+    float4 headRight;
+    float4 headUp;
+    float4 headForward;
+    float4 params[4];
+};
 
 struct RtGeometry {
     uint vertexSrv;
@@ -37,7 +48,7 @@ struct RtGeometry {
     uint textureSrv;
     uint sphereSrv;
     uint toonSrv;
-    uint _pad;
+    uint packSrv;
     float4 texMul, texAdd, sphereMul, sphereAdd, toonMul, toonAdd;   // material morph factors
 };
 

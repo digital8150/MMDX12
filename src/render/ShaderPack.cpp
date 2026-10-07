@@ -354,6 +354,7 @@ bool ParseShaderPackManifest(const std::string& json, const std::filesystem::pat
     out.params.clear();
     out.textures.clear();
     out.hasEdge = false;
+    out.hasPtSurface = false;
     out.type = PackType::Surface;
     out.stage = PackEffectStage::Post;
     out.status = PackStatus::Ready;
@@ -579,6 +580,8 @@ bool ParseShaderPackManifest(const std::string& json, const std::filesystem::pat
         if (!fs::is_regular_file(dir / L"effect.hlsl", ec)) problems.push_back("effect packs need effect.hlsl");
     } else if (!fs::is_regular_file(dir / L"surface.hlsl", ec)) {
         problems.push_back("surface.hlsl is missing");
+    } else {
+        out.hasPtSurface = fs::is_regular_file(dir / L"pt_surface.hlsl", ec);
     }
 
     if (!problems.empty()) {

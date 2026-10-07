@@ -88,6 +88,12 @@ public:
     ID3D12Resource* SdefBuffer() const { return sdef_.Get(); }
     D3D12_GPU_VIRTUAL_ADDRESS BoneBuffer(uint64_t frame) const;      // StructuredBuffer<float4x4> (t0)
     D3D12_GPU_VIRTUAL_ADDRESS PrevBoneBuffer(uint64_t frame) const;  // previous frame (t4)
+    const DirectX::XMFLOAT4X4* BoneMatricesCpu(uint64_t frame) const {
+        return reinterpret_cast<const DirectX::XMFLOAT4X4*>(boneMapped_[frame % kRing]);
+    }
+    const DirectX::XMFLOAT4X4* PrevBoneMatricesCpu(uint64_t frame) const {
+        return reinterpret_cast<const DirectX::XMFLOAT4X4*>(boneMapped_[(frame + kRing - 1) % kRing]);
+    }
     // Bind-pose bounds (model space).
     DirectX::XMFLOAT3 BoundsMin() const { return boundsMin_; }
     DirectX::XMFLOAT3 BoundsMax() const { return boundsMax_; }

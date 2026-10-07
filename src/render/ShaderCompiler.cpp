@@ -175,7 +175,7 @@ std::filesystem::path CachePath(const std::filesystem::path& file, const char* e
     h = Fnv(h, key.data(), key.size());
     for (const auto& d : defines) {
         // a shader pack's surface (quoted include path relative to the shader): its folder's sources are inputs too
-        if (d.first == "MMDX_PACK" && d.second.size() > 2) {
+        if ((d.first == "MMDX_PACK" || d.first == "MMDX_PT_PACK") && d.second.size() > 2) {
             const std::filesystem::path inc = file.parent_path() / Utf8ToPath(d.second.substr(1, d.second.size() - 2));
             const uint64_t ph = SourceHash(inc.parent_path());
             h = Fnv(h, &ph, sizeof(ph));

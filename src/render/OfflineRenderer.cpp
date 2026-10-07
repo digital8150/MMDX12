@@ -4,11 +4,15 @@
 #include "render/PassCommon.h"
 #include "render/GpuModel.h"
 #include "asset/ImageLoader.h"
+#include "render/ShaderPack.h"
 #include "core/Log.h"
+#include "core/TextUtil.h"
 #include <directx/d3dx12.h>
 #include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <map>
+#include <set>
 #include <vector>
 
 namespace mmdx {
@@ -95,8 +99,13 @@ ComPtr<ID3D12Resource> CreateMappedUpload(ID3D12Device* device, uint64_t bytes, 
 
 struct OfflineRenderer::Impl {
     Dx12Context* ctx = nullptr;
+    std::filesystem::path shaderDir;
+    uint32_t packGeneration = 0;
     // offline_gi.hlsl (ComputePipeline, cs_6_5)
-    ComputePipeline clearImage, clearCounter, render, prepassLevel, prepassDisplay, prepassSmooth;
+    ComputePipeline clearImage, clearCounter, defaultRender, prepassLevel, prepassDisplay, prepassSmooth;
+    ComputePipeline* render = &defaultRender;
+    std::map<std::string, ComputePipeline> ptRenderPipes;
+    std::set<std::string> ptRenderFailed;
     // offline_post.hlsl
     ComputePipeline denoise, bloomDown, bloomBlur, finalize, edgeAccumulate;
     // offline_volumetric.hlsl, bloom_fft.hlsl (optional effects: empty pipelines disable them)
@@ -428,7 +437,7 @@ void OfflineRenderer::Impl::Work(ID3D12GraphicsCommandList* cmd, TransientDescri
                              (float)width, (float)height, 0.0f, job.errorThreshold,
                              shutter, focus, lensRadius, icValid ? 1.0f : 0.0f,
                              (float)job.maxBounces, (float)prepassFine, 0.0f, 0.0f};
-        render.Dispatch(pc, icSrv, table, c, 16, Groups(width), Groups(height));
+        render->Dispatch(pc, icSrv, table, c, 16, Groups(width), Groups(height));
         UavBarrier(cmd);
         ++samples;
         if (count) {
@@ -659,12 +668,14 @@ bool OfflineRenderer::Initialize(Dx12Context& ctx, const std::filesystem::path& 
     if (!RtPipelinesSupported(ctx)) return false;
     Impl& m = *impl_;
 
+    m.shaderDir = shaderDir;
     const std::filesystem::path gi = shaderDir / L"offline_gi.hlsl";
     const std::filesystem::path post = shaderDir / L"offline_post.hlsl";
     bool ok = true;
     ok &= m.clearImage.Create(ctx, gi, "CSClearImage");
     ok &= m.clearCounter.Create(ctx, gi, "CSClearCounter");
-    ok &= m.render.Create(ctx, gi, "CSRender");
+    ok &= m.defaultRender.Create(ctx, gi, "CSRender");
+    m.render = &m.defaultRender;
     ok &= m.prepassLevel.Create(ctx, gi, "CSPrepassLevel");
     ok &= m.prepassDisplay.Create(ctx, gi, "CSPrepassDisplay");
     ok &= m.prepassSmooth.Create(ctx, gi, "CSPrepassSmooth");
@@ -872,6 +883,9 @@ void OfflineRenderer::Shutdown() {
     m.presentPso.Reset();
     m.list.Reset();
     m.alloc.Reset();
+    m.ptRenderPipes.clear();
+    m.ptRenderFailed.clear();
+    m.render = &m.defaultRender;
     m.ctx = nullptr;
     impl_.reset();
     progress_ = {};
@@ -901,6 +915,59 @@ void OfflineRenderer::Begin(ID3D12GraphicsCommandList* cmd, TransientDescriptors
     m.lensRadius = view.focusDistance > 0.0f ? kLensScale * view.focusDistance : 0.0f;
     // itemsPerFrame carries over: consecutive images (video) cost about the same per dispatch
     for (Impl::Slot& s : m.slots) { s.counted = false; s.timed = false; }
+
+    // 1b. PT pack pipeline selection
+    ShaderPackRegistry& reg = ShaderPacks();
+    if (m.packGeneration != reg.Generation()) {
+        m.ptRenderPipes.clear();
+        m.ptRenderFailed.clear();
+        m.packGeneration = reg.Generation();
+    }
+
+    const ShaderPack* chosenPack = nullptr;
+    bool warnedMultiple = false;
+    for (GpuModel* model : m.view.models) {
+        if (!model || model->Role() != ModelRole::Character || model->ShaderPackId().empty()) continue;
+        const ShaderPack* pack = reg.Find(model->ShaderPackId());
+        if (!pack || !pack->hasPtSurface) continue;
+        if (!chosenPack) {
+            chosenPack = pack;
+        } else if (chosenPack->id != pack->id && !warnedMultiple) {
+            LOG_WARN("offline: multiple pt packs present; using %s for GiTable", chosenPack->id.c_str());
+            warnedMultiple = true;
+        }
+    }
+
+    if (!chosenPack) {
+        m.render = &m.defaultRender;
+    } else {
+        auto it = m.ptRenderPipes.find(chosenPack->id);
+        if (it != m.ptRenderPipes.end()) {
+            m.render = &it->second;
+        } else if (m.ptRenderFailed.count(chosenPack->id)) {
+            m.render = &m.defaultRender;
+        } else {
+            std::error_code ec;
+            std::filesystem::path rel = std::filesystem::relative(chosenPack->dir / L"pt_surface.hlsl", m.shaderDir, ec);
+            if (ec || rel.empty()) rel = chosenPack->dir / L"pt_surface.hlsl";
+            std::string inc = PathToUtf8(rel);
+            std::replace(inc.begin(), inc.end(), '\\', '/');
+            const std::string incDefine = "\"" + inc + "\"";
+            const ShaderDefines defs = {{"MMDX_PT_PACK", incDefine}};
+
+            ComputePipeline pipe;
+            const std::filesystem::path gi = m.shaderDir / L"offline_gi.hlsl";
+            if (pipe.Create(*m.ctx, gi, "CSRender", defs)) {
+                LOG_INFO("offline: pt pack '%s' compiled into CSRender", chosenPack->id.c_str());
+                auto [ins, _] = m.ptRenderPipes.emplace(chosenPack->id, std::move(pipe));
+                m.render = &ins->second;
+            } else {
+                LOG_ERROR("offline: failed to compile CSRender with pt pack '%s'", chosenPack->id.c_str());
+                m.ptRenderFailed.insert(chosenPack->id);
+                m.render = &m.defaultRender;
+            }
+        }
+    }
 
     // 2. per-image constants
     memcpy(m.sceneCbMapped, &sc, sizeof(sc));

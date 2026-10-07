@@ -130,6 +130,7 @@ struct ShaderPack {
     std::vector<ShaderPackParam> params;  // at most kPackMaxParams
     std::vector<PackTexture> textures;    // at most kPackMaxTextures; optional extra textures (PackSampleTex)
     bool hasEdge = false;                 // surface.hlsl sets PACK_HAS_EDGE: the pack draws the outlines too (PackEdge)
+    bool hasPtSurface = false;            // pt_surface.hlsl exists next to surface.hlsl (offline GI stills)
     // state
     PackStatus status = PackStatus::Ready;
     std::string statusMessage;            // English, for the log / the pack details (compiler output may be long)

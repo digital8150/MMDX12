@@ -32,6 +32,27 @@
 #include "rt_common.hlsli"   // includes common.hlsli
 #include "offline_common.hlsli"
 #include "offline_glass.hlsli"
+#ifdef MMDX_PT_PACK
+#include "pt_pack_api.hlsli"
+#include MMDX_PT_PACK
+
+RtPtPackRecord LoadPtPackRecord(uint packSrv) {
+    ByteAddressBuffer buf = gBindlessBuf[NonUniformResourceIndex(packSrv)];
+    RtPtPackRecord rec;
+    uint4 v0 = buf.Load4(0);
+    rec.materialClass = v0.x;
+    rec.headValid = v0.y;
+    rec._pad0 = v0.zw;
+    rec.headRight = asfloat(buf.Load4(16));
+    rec.headUp = asfloat(buf.Load4(32));
+    rec.headForward = asfloat(buf.Load4(48));
+    rec.params[0] = asfloat(buf.Load4(64));
+    rec.params[1] = asfloat(buf.Load4(80));
+    rec.params[2] = asfloat(buf.Load4(96));
+    rec.params[3] = asfloat(buf.Load4(112));
+    return rec;
+}
+#endif
 cbuffer PassCB : register(b1) { float4 gP0; float4 gP1; float4 gP2; float4 gP3; };
 SamplerState gPoint : register(s0);
 SamplerState gLinear : register(s1);
@@ -877,6 +898,37 @@ void CSRender(uint3 id : SV_DispatchThreadID) {
             continue;
         }
         const bool viaGlass = specChain && depth > 0u;
+#ifdef MMDX_PT_PACK
+        PtPackOut ptPackOut = (PtPackOut)0;
+        bool isPtPackHit = (s.g.flags & RTG_PT_PACK) != 0;
+        float ptSunVis = 0.0;
+        if (isPtPackHit) {
+            RtPtPackRecord rec = LoadPtPackRecord(s.g.packSrv);
+            PtPackIn packIn;
+            packIn.pos = s.pos;
+            packIn.normal = s.n;
+            packIn.V = -d;
+            packIn.uv = s.uv;
+            packIn.L = -gLightDir;
+            if (!diffuseChain) {
+                float3 sv = SunVisibility(s, rng);
+                ptSunVis = Luminance(sv);
+            }
+            packIn.sunVis = ptSunVis;
+            packIn.baseColor = SrgbToLinear(saturate(s.tex.rgb * s.g.diffuse.rgb));
+            packIn.materialClass = rec.materialClass;
+            [unroll] for (int p = 0; p < 16; ++p)
+                packIn.params[p] = rec.params[p >> 2][p & 3];
+            packIn.headRight = rec.headRight.xyz;
+            packIn.headUp = rec.headUp.xyz;
+            packIn.headForward = rec.headForward.xyz;
+            packIn.headValid = (rec.headValid != 0);
+
+            ptPackOut = PackEvaluate(packIn);
+            s.albedo = ptPackOut.albedo;
+            if (ptPackOut.flatFace) s.flat = true;
+        }
+#endif
         if (specChain) {
             primHit = true;
             primAlbedo = s.albedo;
@@ -890,10 +942,25 @@ void CSRender(uint3 id : SV_DispatchThreadID) {
         float3 V = -d;
         float cosV = saturate(dot(s.n, V));
         float pSpec = s.refl > 0.001 ? saturate(s.refl + (1.0 - s.refl) * pow(1.0 - cosV, 5.0) * s.refl) : 0.0;
-        if (!diffuseChain)
-            radiance += T * CameraDirect(s, V, pSpec, rng);
-        else
+        if (!diffuseChain) {
+#ifdef MMDX_PT_PACK
+            if (isPtPackHit) {
+                float ndl = dot(s.n, -gLightDir);
+                float flatVal = s.flat ? 1.0 : 0.0;
+                float terminator = smoothstep(-0.12, 0.22, ndl + ptPackOut.shadowBias);
+                float term = lerp(terminator * ptSunVis, lerp(1.0, ptSunVis, 0.8), flatVal);
+                float3 sunDirect = lerp(ptPackOut.albedo * ptPackOut.shadowTint, ptPackOut.albedo, term) * gSunIntensity + ptPackOut.specular * ptSunVis;
+                if (gNumLights >= 1.0)
+                    sunDirect += (1.0 - pSpec) * s.albedo / PI * PunctualIrradiance(s, s.character, rng);
+                radiance += T * (s.emission + sunDirect);
+            } else
+#endif
+            {
+                radiance += T * CameraDirect(s, V, pSpec, rng);
+            }
+        } else {
             radiance += T * (s.emission + (1.0 - pSpec) * s.albedo / PI * DirectIrradiance(s, rng));
+        }
         if (depth == maxDepth) break;
 
         // indirect diffuse from the irradiance cache (the prepass); mirror lobe still traced

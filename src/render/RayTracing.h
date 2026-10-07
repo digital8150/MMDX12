@@ -62,6 +62,11 @@ private:
     uint8_t* instancesMapped_ = nullptr;
     uint8_t* geometriesMapped_ = nullptr;
     uint32_t instanceCapacity_ = 0, geometryCapacity_ = 0;  // per slot
+    // PT pack records upload ring (persistently mapped), kSlots entries each, grown on demand
+    ComPtr<ID3D12Resource> packRecords_;
+    uint8_t* packRecordsMapped_ = nullptr;
+    uint32_t packRecordCapacity_ = 0;                       // per slot
+    uint32_t packSrvBase_ = DescriptorHeap::kInvalid;       // kSlots * packRecordCapacity_ descriptors
     uint32_t lastSlot_ = 0;
     bool ready_ = false;
 };
