@@ -728,3 +728,18 @@ finished by Claude.
 ### Not verified / notes
 - Play bar after the width fix, slider drag on the stack, the lobby 셰이더 tab and the open "화면 효과" row were not captured.
 - Lobby 화면 tab at 1600x900: the lighting section sits under the play button until scrolled.
+
+## 2026-10-07 (11) — i18n gap fix
+
+### Done
+- Audited every Korean literal in `src/` against `Tr()` and the en / ja / zh tables (delegated to antigravity, `full` level, no review).
+  All user-visible strings were already wrapped; 10 `Tr()` keys were missing from the tables and were added to all three
+  (`개`, `설정`, `세부`, `화면`, `스팟 편집`, `선택한 스팟 삭제`, `팩 설정 사용`, the pack-texture-missing note, the no-adjustable-items
+  note, the effect-stack pointer note). Tables are 816 entries each and in sync.
+- Left alone on purpose: AssetLibrary classifier hints, `SpotLight::name` undo identifiers, native picker title.
+
+### Verified
+- Worker reported a clean `build.cmd build`; diff touches only I18nEn / I18nJa / I18nZh (+10 lines each).
+
+### Not verified / notes
+- Worker output was not reviewed (translation wording for ja / zh, key byte-exactness) and no UI capture in another language was made.

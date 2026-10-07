@@ -813,6 +813,16 @@ const Entry kEnglish[] = {
     {"텍스처 폴더", "Texture folder"},
     {"텍스처 폴더 선택", "Choose the texture folder"},
     {"텍스처 폴더 지우기", "Clear the texture folder"},
+    {"개", ""},
+    {"개의 팩 텍스처가 없어 흰색으로 표시됩니다", " pack textures are missing (shown white)"},
+    {"선택한 스팟 삭제", "Delete selected spot"},
+    {"설정", "Settings"},
+    {"세부", "Advanced"},
+    {"스팟 편집", "Edit spot"},
+    {"조절할 수 있는 항목이 없습니다", "No adjustable items"},
+    {"팩 설정 사용", "Use pack settings"},
+    {"화면", "Screen"},
+    {"화면 효과는 로비의 셰이더 섹션(\"화면 효과\")과 재생 바의 ✦ 버튼에서 켜고 순서를 바꿀 수 있습니다.", "Screen effects can be enabled and reordered in the lobby's Shaders section (\"Screen effects\") and from the ✦ button on the playback bar."},
 };
 const int kEnglishCount = (int)(sizeof(kEnglish) / sizeof(kEnglish[0]));
 
