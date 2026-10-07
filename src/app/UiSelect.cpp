@@ -641,7 +641,7 @@ void App::DrawSelect() {
                 if (pack) {
                     PushFont(Font::Regular, size::Caption);
                     ImGui::PushStyleColor(ImGuiCol_Text, ImGui::ColorConvertU32ToFloat4(P().ink3));
-                    ImGui::TextUnformatted(Tr("래스터 · 레이 트레이싱에 적용 (패스 트레이싱 · 오프라인 GI는 기본 셰이딩)"));
+                    ImGui::TextWrapped("%s", pack->hasPtSurface ? Tr("래스터 · 레이 트레이싱 · 패스 트레이싱 · 오프라인 GI에 모두 적용") : Tr("래스터 · 레이 트레이싱에 적용 (이 팩은 패스 트레이싱 · 오프라인 GI용 셰이더가 없어 기본 셰이딩)"));
                     ImGui::PopStyleColor();
                     PopFont();
                 }

@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.24)
-project(MMDX12 VERSION 1.4.0 LANGUAGES C CXX)
+project(MMDX12 VERSION 1.5.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -149,6 +149,11 @@ if(EXISTS ${CMAKE_SOURCE_DIR}/tools/pack_check.cpp)
   add_executable(pack_check tools/pack_check.cpp)
   # CompileShaderDxc comes from mmdx_render (dxcompiler / dxcapi); the manifest parsing from mmdx_core (json, NetUtil).
   target_link_libraries(pack_check PRIVATE mmdx_render)
+endif()
+if(EXISTS ${CMAKE_SOURCE_DIR}/tools/shader_choice_test.cpp)
+  add_executable(shader_choice_test tools/shader_choice_test.cpp src/app/Settings.cpp)
+  target_include_directories(shader_choice_test PRIVATE ${CMAKE_SOURCE_DIR}/src)
+  target_link_libraries(shader_choice_test PRIVATE mmdx_render)
 endif()
 if(EXISTS ${CMAKE_SOURCE_DIR}/tools/anim_probe.cpp)
   add_executable(anim_probe tools/anim_probe.cpp)

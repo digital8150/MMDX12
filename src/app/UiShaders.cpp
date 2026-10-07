@@ -434,6 +434,10 @@ void App::DrawShaderPackDetail(float x0, float y0, float x1, float y1) {
             Caption(Tr("이런 모델에 맞춰 만들었어요"));
             Para(pk->recommendedFor.Get(lang), p.ink2);
         }
+        if (pk->type == PackType::Surface) {
+            Caption(Tr("지원하는 렌더 경로"));
+            Para(pk->hasPtSurface ? Tr("래스터 · 레이 트레이싱 · 패스 트레이싱 · 오프라인 GI에 모두 적용") : Tr("래스터 · 레이 트레이싱에 적용 (이 팩은 패스 트레이싱 · 오프라인 GI용 셰이더가 없어 기본 셰이딩)"), p.ink2);
+        }
         if (!pk->authors.empty()) {
             Caption(Tr("만든 사람"));
             for (size_t i = 0; i < pk->authors.size(); ++i) {

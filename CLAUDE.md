@@ -152,8 +152,8 @@ progress.md is the session log. Read its latest entry first.
   in `core/NetUtil.*` (shared with the updater).
   `GpuModel::SetShaderPack` writes class / head bone / params into `MaterialConstants`; `ScenePass::PackPsos` compiles
   mmd.hlsl's `PSPack` with DXC (FXC cannot `#include` a macro: `MMDX_PACK` = the quoted surface path) on first use and
-  falls back to the default PSOs on errors (`[E]` + toast). Lit raster / RT camera view only; PT, offline GI, unlit / wire /
-  ortho views use the default. A negative normal-target reflectivity (`nt.z < 0`) = "no AO" (composite). Choice is saved per
+  falls back to the default PSOs on errors (`[E]` + toast). `surface.hlsl` runs in the lit raster / RT camera view; PT and offline GI use the pack's
+  `pt_surface.hlsl` when it has one (see below), else the default; unlit / wire / ortho views always use the default. A negative normal-target reflectivity (`nt.z < 0`) = "no AO" (composite). Choice is saved per
   character (`characterShader=` ini) / per studio model (`.mmdxproj` "shader"); `--shader-pack <id|none>` overrides a run.
   API v2 (`kPackApiVersion` 2; apiVersion 1 packs still load): a pack may declare `"textures"` in pack.json (at most 16:
   `{ "file": "textures/x.png", "address": "wrap"|"clamp", "srgb": true }`, png/jpg/jpeg, paths inside the pack), uploaded
@@ -175,7 +175,7 @@ progress.md is the session log. Read its latest entry first.
   from a user texture folder, v1 fallback per missing map; `tools/pack_check` validates
   textures (format / count / size / total ≤ 32 MB / bad paths; missing files are warnings) and literal
   `PackSampleTex(N)` indices against the declared count.
-  `pt_surface.hlsl` (docs/shader_pt_api.md, phases 1-3): optional `PackEvaluate(PtPackIn)` hook for offline GI (`CSRender`, `OfflineRenderer`) and real-time PT (`CSPathTrace`, `PathTracePass`) with pack textures supported (`PtPackSampleTex*`, `render/PackTextures.*`); packs without it leave PT/GI untouched; shared variant cache `render/PtPackVariants.*`.
+  `pt_surface.hlsl` (docs/shader_pt_api.md, phases 1-3): optional `PackEvaluate(PtPackIn)` hook for offline GI (`CSRender`, `OfflineRenderer`) and real-time PT (`CSPathTrace`, `PathTracePass`) with pack textures supported (`PtPackSampleTex*`, `render/PackTextures.*`); packs without it leave PT/GI untouched; shared variant cache `render/PtPackVariants.*`. `PtPackIn` also carries `headPos`/`headScale`; `PtPackOut::terminator` = N.L edges of the ramp (hi <= lo: engine default), `shadowBias` = smoothed-normal offset, and every field must be assigned (`pack_check` warns). Online-gallery-only `nimble_toon` (sources in the website repo `shader-packs/`; Eternal Return MMD models) = soft cel look (low-contrast coloured shadows, lifted dark-material shadow floor, skull-sphere face normals, soft hair gloss, wide environment rim, tinted outlines via `PackEdge`); `surface.hlsl` (raster / RT) and `pt_surface.hlsl` (PT / GI) share `nimble_core.hlsli`; the offline renderer still draws the default outlines.
   API v3 effect packs (docs/shader_effect_api.md): `"type": "effect"`, `"stage": "post" | "pre-bloom"`, `effect.hlsl` implements
   `PackEffect(PackEffectInput)` (contract `shaders/effect_api.hlsli`, host `shaders/effect.hlsl`, DXC `ps_6_0` with `MMDX_PACK`).
   The user's ordered stack is `RenderSettings::packEffects` (`EffectStackEntry`; `AppSettings::effectStack`, ini `effect=`,
