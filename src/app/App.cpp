@@ -210,6 +210,8 @@ int App::Run(HINSTANCE instance, const AppOptions& options) {
     LOG_INFO("MMDX12 %s", MMDX12_VERSION);
     settingsPath_ = ExecutableDir() / L"mmdx12.ini";
     settings_.Load(settingsPath_);
+    for (const auto& [id, dir] : settings_.packTextureFolders)   // shader packs' user texture folders
+        ShaderPacks().SetTextureFolder(id, Utf8ToPath(dir));
     SetLanguage((Language)(options_.language >= 0 ? options_.language : settings_.language));
     const AppSettings persisted = settings_;  // CLI overrides below are for this run only
     if (options_.lighting >= 0) settings_.lighting = std::clamp(options_.lighting, 0, kLightingPresetCount - 1);

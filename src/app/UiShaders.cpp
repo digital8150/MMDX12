@@ -3,10 +3,12 @@
 #include "app/App.h"
 
 #include <Windows.h>
+#include <ShlObj.h>
 #include <shellapi.h>
 
 #include <algorithm>
 #include <cmath>
+#include <thread>
 
 #include "app/Icons.h"
 #include "app/UiKit.h"
@@ -468,6 +470,50 @@ void App::DrawShaderPackDetail(float x0, float y0, float x1, float y1) {
             Text(dl, Font::Regular, size::Caption, ImVec2(c.x + w - rs.x, c.y + Dp(1.0f)), p.ink3, range);
             ImGui::Dummy(ImVec2(w, Dp(22.0f)));
         }
+    }
+    if (!pk->textures.empty()) {
+        Caption(Tr("팩 텍스처"));
+        std::string list;
+        for (size_t i = 0; i < pk->textures.size(); ++i) {
+            if (i) list += ",  ";
+            list += pk->textures[i].file + (pk->textures[i].clamp ? " (clamp)" : "");
+        }
+        Para(list, p.ink3, size::Caption);
+        const uint32_t missing = reg.MissingTextures(pk->id, reg.TextureFolder(pk->id));
+        if (missing)
+            Para(std::to_string(missing) +
+                     Tr("개의 팩 텍스처가 없어 흰색으로 표시됩니다 - 텍스처 폴더를 지정하세요"),
+                 p.warn, size::Caption);
+        // the user texture folder: game textures that can't be redistributed (picker + clear)
+        const std::filesystem::path folder = reg.TextureFolder(pk->id);
+        ImGui::PushID("##packtexfolder");
+        {
+            const ImVec2 c = ImGui::GetCursorScreenPos();
+            const std::string shown =
+                std::string(Tr("텍스처 폴더")) + ": " + (folder.empty() ? std::string(Tr("없음")) : PathToUtf8(folder));
+            TextEllipsis(dl, Font::Regular, size::Small, ImVec2(c.x, c.y + Dp(6.0f)), c.x + w - Dp(96.0f), p.ink2,
+                         shown.c_str());
+            ImGui::SetCursorScreenPos(ImVec2(c.x + w - Dp(88.0f), c.y));
+            if (IconButton("##pick", icon::FolderOpen, Tr("텍스처 폴더 선택"))) {
+                const std::filesystem::path picked = PickPackTextureFolder(hwnd_);
+                if (!picked.empty()) {
+                    reg.SetTextureFolder(pk->id, picked);
+                    settings_.packTextureFolders[pk->id] = PathToUtf8(picked);
+                    settings_.Save(settingsPath_);
+                }
+            }
+            ImGui::SameLine();
+            ImGui::BeginDisabled(folder.empty());
+            if (IconButton("##clear", icon::X, Tr("텍스처 폴더 지우기"))) {
+                reg.SetTextureFolder(pk->id, {});
+                settings_.packTextureFolders.erase(pk->id);
+                settings_.Save(settingsPath_);
+            }
+            ImGui::EndDisabled();
+            ImGui::SetCursorScreenPos(ImVec2(c.x, c.y + Dp(30.0f)));
+            ImGui::Dummy(ImVec2(w, 0));
+        }
+        ImGui::PopID();
     }
     Caption(Tr("관리"));
     if (Button("##openpack", Tr("폴더 열기"), icon::FolderOpen, ButtonKind::Secondary)) OpenFolder(pk->dir);

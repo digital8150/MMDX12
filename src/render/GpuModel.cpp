@@ -264,7 +264,12 @@ bool GpuModel::Create(Dx12Context& ctx, UploadBatch& batch, const PmxModel& pmx,
     materialConsts_ = consts;
     baseConsts_ = consts;
     materialNames_.clear();
-    for (const PmxMaterial& m : pmx.materials) materialNames_.emplace_back(m.name, m.nameEn);
+    materialTextures_.clear();
+    for (const PmxMaterial& m : pmx.materials) {
+        materialNames_.emplace_back(m.name, m.nameEn);
+        const bool tex = m.textureIndex >= 0 && (size_t)m.textureIndex < pmx.textures.size();
+        materialTextures_.push_back(tex ? pmx.textures[(size_t)m.textureIndex] : std::string());
+    }
     headBone_ = -1;
     for (const char* name : {"\xE9\xA0\xAD", "\xE9\xA6\x96"}) {  // 頭, else 首
         for (size_t b = 0; b < pmx.bones.size() && headBone_ < 0; ++b)
@@ -275,7 +280,7 @@ bool GpuModel::Create(Dx12Context& ctx, UploadBatch& batch, const PmxModel& pmx,
         if (headBone_ >= 0) break;
     }
     packId_.clear();
-    materialBase_.assign(pmx.materials.size(), {});
+    packTextureFolder_.clear();    materialBase_.assign(pmx.materials.size(), {});
     std::vector<bool> morphable(pmx.materials.size(), false);
     for (const PmxMorph& mo : pmx.morphs) {
         if (mo.type != PmxMorphType::Material) continue;
@@ -455,18 +460,22 @@ void GpuModel::UpdateMaterials(uint64_t frame, const std::vector<PmxMorph::Mater
     for (size_t i = 0; i < n; ++i) materials_[i].constants = base + i * sizeof(MaterialConstants);
 }
 
-void GpuModel::SetShaderPack(const ShaderPack* pack, const PackParamValues& params) {
+void GpuModel::SetShaderPack(const ShaderPack* pack, const PackParamValues& params,
+                             const std::filesystem::path& textureFolder) {
     if (role_ == ModelRole::Stage) pack = nullptr;   // packs shade characters only
     const std::string id = pack ? pack->id : std::string();
     const uint32_t generation = ShaderPacks().Generation();
-    if (id == packId_ && (!pack || (generation == packGeneration_ && params == packParams_))) return;
+    if (id == packId_ && (!pack || (generation == packGeneration_ && params == packParams_ &&
+                                    textureFolder == packTextureFolder_)))
+        return;
     packId_ = id;
     packGeneration_ = generation;
+    packTextureFolder_ = pack ? textureFolder : std::filesystem::path();
     packParams_ = params;
     if (!pack) return;   // the default PSOs ignore the pack fields
     for (size_t i = 0; i < baseConsts_.size(); ++i) {
         const auto& names = materialNames_[i];
-        const PackClass cls = pack->Classify(names.first, names.second);
+        const PackClass cls = pack->Classify(names.first, names.second, materialTextures_[i]);
         for (MaterialConstants* c : {&baseConsts_[i], &materialConsts_[i]}) {
             c->packClass = (uint32_t)cls;
             c->packHeadBone = headBone_ >= 0 ? (uint32_t)headBone_ : 0u;

@@ -174,6 +174,21 @@ bool AppSettings::Load(const std::filesystem::path& file) {
                 characterShaders[value.substr(b + 1)] = std::move(c);
             }
         }
+        else if (key == "characterShaderTextures") {
+            // characterShaderTextures=<utf-8 folder>|<character id>: the shader choice's per-character
+            // texture folder (a separate line, the ids in characterShader= are already last)
+            const size_t bar = value.find('|');
+            if (bar != std::string::npos && bar > 0 && bar + 1 < value.size()) {
+                ShaderChoice& c = characterShaders[value.substr(bar + 1)];
+                c.textureFolder = value.substr(0, bar);
+            }
+        }
+        else if (key == "packTextureFolder") {
+            // packTextureFolder=<pack id>|<utf-8 folder>
+            const size_t bar = value.find('|');
+            if (bar != std::string::npos && bar > 0 && bar + 1 < value.size())
+                packTextureFolders[value.substr(0, bar)] = value.substr(bar + 1);
+        }
         else if (key == "lastCharacter") lastCharacter = value;
         else if (key == "lastStage") lastStage = value;
         else if (key == "lastSong") lastSong = value;
@@ -286,7 +301,11 @@ bool AppSettings::Save(const std::filesystem::path& file) const {
             list += (list.empty() ? "" : ",") + k + ":" + buf;
         }
         std::fprintf(f, "characterShader=%s|%s|%s\n", c.pack.c_str(), list.c_str(), id.c_str());
+        if (!c.textureFolder.empty())
+            std::fprintf(f, "characterShaderTextures=%s|%s\n", c.textureFolder.c_str(), id.c_str());
     }
+    for (const auto& [id, dir] : packTextureFolders)
+        std::fprintf(f, "packTextureFolder=%s|%s\n", id.c_str(), dir.c_str());
     std::fprintf(f, "lastCharacter=%s\n", lastCharacter.c_str());
     std::fprintf(f, "lastStage=%s\n", lastStage.c_str());
     std::fprintf(f, "lastSong=%s\n", lastSong.c_str());

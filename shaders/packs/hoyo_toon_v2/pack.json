@@ -1,0 +1,64 @@
+{
+  "format": 1,
+  "id": "hoyo_toon_v2",
+  "version": "2.0.0",
+  "apiVersion": 2,
+  "minAppVersion": "1.3.0",
+  "name": {
+    "ko": "호요 툰 v2",
+    "en": "HoYo Toon v2",
+    "ja": "HoYoトゥーン v2",
+    "zh": "HoYo卡通 v2"
+  },
+  "description": {
+    "ko": "게임의 라이트맵·섀도 램프·얼굴 SDF로 원신 셰이딩을 재현합니다. 텍스처는 팩에 들어 있지 않으니 캐릭터마다 텍스처 폴더를 지정하세요. 텍스처가 없는 부분은 호요 툰 v1 방식으로 그립니다.",
+    "en": "Genshin shading from the game's own light maps, shadow ramps and face SDF. The textures are not part of the pack: set a texture folder per character. Parts without textures fall back to HoYo Toon v1.",
+    "ja": "ゲームのライトマップ・シャドウランプ・顔SDFで原神のシェーディングを再現します。テクスチャはパックに含まれないため、キャラクターごとにテクスチャフォルダーを指定してください。テクスチャのない部分はHoYoトゥーン v1の方式で描きます。",
+    "zh": "使用游戏本身的 LightMap、阴影 Ramp 与脸部 SDF 还原原神着色。贴图不包含在包内：请为每个角色指定贴图目录。缺少贴图的部分按 HoYo卡通 v1 的方式绘制。"
+  },
+  "recommendedFor": {
+    "ko": "원신 공식 MMD 모델 + 같은 캐릭터의 게임 텍스처 (Body/Hair_Lightmap, Body/Hair_Shadow_Ramp, FaceLightmap)",
+    "en": "Official Genshin MMD models + that character's game textures (Body/Hair_Lightmap, Body/Hair_Shadow_Ramp, FaceLightmap)",
+    "ja": "原神公式MMDモデル + 同じキャラクターのゲームテクスチャ (Body/Hair_Lightmap, Body/Hair_Shadow_Ramp, FaceLightmap)",
+    "zh": "原神官方 MMD 模型 + 该角色的游戏贴图 (Body/Hair_Lightmap、Body/Hair_Shadow_Ramp、FaceLightmap)"
+  },
+  "authors": [
+    { "name": "MMDX12", "role": "shader" },
+    { "name": "zhangyan453", "role": "proposal (GitHub #2)", "url": "https://github.com/zhangyan453" }
+  ],
+  "license": "MIT",
+  "homepage": "https://github.com/digital8150/MMDX12/issues/2",
+  "tags": ["toon", "anime", "hoyoverse", "genshin", "game-textures"],
+  "classes": [
+    { "class": "eye",  "match": ["白目", "星目", "目星", "目", "眼", "瞳", "睫", "眉", "二重", "口舌", "齿", "齒", "歯", "eye", "Eye", "ハイライト", "高光"] },
+    { "class": "face", "match": ["面", "颜", "顔", "脸", "face", "Face", "表情"] },
+    { "class": "hair", "texture": ["发", "髮", "髪", "hair", "Hair"] },
+    { "class": "hair", "match": ["Mat_Hair"] },
+    { "class": "skin", "match": ["肌", "皮肤", "skin", "Skin"] }
+  ],
+  "textures": [
+    { "file": "Body_Lightmap.png", "srgb": false },
+    { "file": "Hair_Lightmap.png", "srgb": false },
+    { "file": "Body_Shadow_Ramp.png", "address": "clamp" },
+    { "file": "Hair_Shadow_Ramp.png", "address": "clamp" },
+    { "file": "FaceLightmap.png", "address": "clamp", "srgb": false },
+    { "file": "MetalMap.png", "address": "clamp", "srgb": false }
+  ],
+  "params": [
+    { "key": "softness",      "label": { "ko": "그림자 경계 부드러움", "en": "Shadow softness",      "ja": "影の境界の柔らかさ", "zh": "阴影边界柔和度" }, "default": 0.02, "min": 0.002, "max": 0.2 },
+    { "key": "night",         "label": { "ko": "밤 램프",            "en": "Night ramp",           "ja": "夜のランプ",       "zh": "夜间 Ramp" },     "default": 0.0,  "min": 0.0,   "max": 1.0 },
+    { "key": "specular",      "label": { "ko": "하이라이트 세기",     "en": "Specular strength",    "ja": "ハイライト強度",   "zh": "高光强度" },       "default": 0.5,  "min": 0.0,   "max": 2.0 },
+    { "key": "shininess",     "label": { "ko": "하이라이트 날카로움", "en": "Specular sharpness",   "ja": "ハイライトの鋭さ", "zh": "高光锐度" },       "default": 12.0, "min": 1.0,   "max": 64.0 },
+    { "key": "metal",         "label": { "ko": "금속 반사",          "en": "Metal reflection",     "ja": "金属反射",         "zh": "金属反射" },       "default": 1.0,  "min": 0.0,   "max": 2.0 },
+    { "key": "faceSoftness",  "label": { "ko": "얼굴 그림자 부드러움", "en": "Face shadow softness", "ja": "顔の影の柔らかさ", "zh": "脸部阴影柔和度" }, "default": 0.02, "min": 0.002, "max": 0.3 },
+    { "key": "faceCast",      "label": { "ko": "얼굴에 지는 그림자",  "en": "Face cast shadows",    "ja": "顔に落ちる影",     "zh": "脸部投影" },       "default": 0.6,  "min": 0.0,   "max": 1.0 },
+    { "key": "faceFlip",      "label": { "ko": "얼굴 SDF 좌우 반전",  "en": "Mirror face SDF",      "ja": "顔SDFの左右反転",  "zh": "脸部 SDF 左右翻转" }, "default": 0.0, "min": 0.0, "max": 1.0 },
+    { "key": "rimWidth",      "label": { "ko": "림 라이트 폭",        "en": "Rim light width",      "ja": "リムライト幅",     "zh": "边缘光宽度" },     "default": 0.1,  "min": 0.0,   "max": 0.5 },
+    { "key": "rimStrength",   "label": { "ko": "림 라이트 세기",      "en": "Rim light strength",   "ja": "リムライト強度",   "zh": "边缘光强度" },     "default": 0.3,  "min": 0.0,   "max": 2.0 },
+    { "key": "ambient",       "label": { "ko": "환경광",             "en": "Ambient",              "ja": "環境光",           "zh": "环境光" },         "default": 0.6,  "min": 0.0,   "max": 2.0 },
+    { "key": "eyeBrightness", "label": { "ko": "눈 밝기",            "en": "Eye brightness",       "ja": "目の明るさ",       "zh": "眼睛亮度" },       "default": 1.0,  "min": 0.5,   "max": 1.5 },
+    { "key": "fbDarkness",    "label": { "ko": "(텍스처 없음) 그림자 진하기", "en": "(no textures) Shadow darkness", "ja": "(テクスチャなし) 影の濃さ", "zh": "(无贴图) 阴影浓度" }, "default": 0.85, "min": 0.0, "max": 1.0 },
+    { "key": "fbWarmth",      "label": { "ko": "(텍스처 없음) 그림자 따뜻함", "en": "(no textures) Shadow warmth",   "ja": "(テクスチャなし) 影の暖かさ", "zh": "(无贴图) 阴影暖色" }, "default": 0.3, "min": 0.0, "max": 1.0 },
+    { "key": "fbFaceWidth",   "label": { "ko": "(텍스처 없음) 얼굴 폭",       "en": "(no textures) Face width",      "ja": "(テクスチャなし) 顔の幅",   "zh": "(无贴图) 脸部宽度" }, "default": 0.8, "min": 0.2, "max": 2.0 }
+  ]
+}

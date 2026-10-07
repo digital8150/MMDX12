@@ -11,7 +11,7 @@
 #define PACK_API_HLSLI
 
 // Must equal kPackApiVersion (render/ShaderPack.h).
-#define PACK_API_VERSION 1
+#define PACK_API_VERSION 2
 
 // Material classes: pack.json "classes" rules map PMX material names to these ids.
 #define PACK_BODY 0u
@@ -19,6 +19,7 @@
 #define PACK_FACE 2u
 #define PACK_EYE  3u
 #define PACK_HAIR 4u
+#define PACK_WEAPON 5u
 
 struct PackSurface {
     float3 worldPos;      // world space (MMD units, +Y up)
@@ -77,6 +78,62 @@ float3 PackSampleToon(float v) {
     return ApplyTexFactor3(gToon.Sample(gClamp, float2(0.5, v)).rgb, gToonMul, gToonAdd, 1.0);
 }
 
+// ---- pack textures (pack.json "textures") ------------------------------------------------------------
+// The engine uploads at most 16 textures per pack (DEFAULT heap, shared by every model using the
+// pack) into a fixed table (t0, space5, below) and compiles PSPack with the texture state as
+// defines; without textures declared the table is not bound and everything samples as white:
+//   PACK_TEX_COUNT       number of textures (0..16)
+//   PACK_TEX_CLAMP_MASK  bit i set: texture i uses clamp addressing (else wrap)
+//   PACK_TEX_SRGB_MASK   bit i set: texture i is sRGB; these SRVs use the _SRGB format, so
+//                        sampling returns LINEAR values - do not pass them through SrgbToLinear
+//                        again (s.tex / PackMmdLit stay gamma space as before). "srgb": false
+//                        textures return the stored values (data maps: light maps, SDF, LUTs).
+// Indices are 0-based in pack.json "textures" order. Textures missing on disk (the manager shows
+// the count) and out-of-range indices sample as white.
+
+#ifndef PACK_TEX_COUNT
+#define PACK_TEX_COUNT 0
+#endif
+#ifndef PACK_TEX_CLAMP_MASK
+#define PACK_TEX_CLAMP_MASK 0u
+#endif
+#ifndef PACK_TEX_SRGB_MASK
+#define PACK_TEX_SRGB_MASK 0u
+#endif
+
+Texture2D gPackTex[16] : register(t0, space5);
+
+// Texture i (0..15 in pack.json order) with its declared address mode. Returns LINEAR values for
+// sRGB textures (do not apply SrgbToLinear again), the stored values otherwise.
+float4 PackSampleTex(uint i, float2 uv) {
+    if (i >= (uint)PACK_TEX_COUNT) return float4(1, 1, 1, 1);
+    i &= 15u;
+    float4 c;
+    if ((PACK_TEX_CLAMP_MASK >> i) & 1u) c = gPackTex[i].Sample(gClamp, uv);
+    else c = gPackTex[i].Sample(gWrap, uv);
+    return c;
+}
+
+// Explicit-LOD variant (ramps and other data maps: sample at lod 0).
+float4 PackSampleTexLevel(uint i, float2 uv, float lod) {
+    if (i >= (uint)PACK_TEX_COUNT) return float4(1, 1, 1, 1);
+    i &= 15u;
+    float4 c;
+    if ((PACK_TEX_CLAMP_MASK >> i) & 1u) c = gPackTex[i].SampleLevel(gClamp, uv, lod);
+    else c = gPackTex[i].SampleLevel(gWrap, uv, lod);
+    return c;
+}
+
+// Level-0 size in pixels; a missing texture (0, 0).
+uint2 PackTexSize(uint i) {
+    if (i >= (uint)PACK_TEX_COUNT) return uint2(0, 0);
+    uint2 s;
+    gPackTex[i & 15u].GetDimensions(s.x, s.y);
+    return s;
+}
+
+uint PackTexCount() { return (uint)PACK_TEX_COUNT; }
+
 void PackHeadFrame(inout PackSurface s) {
     s.hasHead = gPackHead.w > 0.5;
     s.headPos = 0;
@@ -94,5 +151,20 @@ void PackHeadFrame(inout PackSurface s) {
     s.headForward = normalize(mul(float3(0, 0, -1), (float3x3)m));
     s.headPos = mul(float4(gPackHead.xyz, 1.0), m).xyz;
 }
+
+// ---- pack edges (optional) ---------------------------------------------------------------------------
+// A pack can also draw the model's outlines: it sets
+//
+//     #define PACK_HAS_EDGE 1
+//
+// at the top of surface.hlsl and implements the one function below. The engine then compiles a pack
+// variant of the edge pass: the vertex stage multiplies the outline width by widthScale, the pixel
+// stage takes the colour (converted to linear and scaled by the sun, as the default edge shading).
+// Without PACK_HAS_EDGE the edge pass is exactly the app's default.
+
+struct PackEdgeResult {
+    float4 color;      // outline colour, gamma space like the MMD edge colour (RGBA)
+    float widthScale;  // multiplies the MMD outline width in pixels (1.0 = MMD size, 0 = no outline)
+};
 
 #endif

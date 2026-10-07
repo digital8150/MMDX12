@@ -7,6 +7,7 @@
 #include "render/Upscaler.h"
 #include "render/ShaderInterop.h"
 #include "render/ShaderPack.h"
+#include "asset/ImageLoader.h"
 #include "core/TextUtil.h"
 #include "core/Log.h"
 #include <directx/d3dx12.h>
@@ -15,6 +16,8 @@
 namespace mmdx {
 
 namespace {
+
+namespace fs = std::filesystem;
 
 const D3D12_INPUT_ELEMENT_DESC kMmdLayout[] = {
     {"POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
@@ -44,11 +47,61 @@ bool CreateRootSignature(ID3D12Device* device, const CD3DX12_ROOT_SIGNATURE_DESC
                    what);
 }
 
-void BindModelBuffers(ID3D12GraphicsCommandList* cmd, const GpuModel& model, uint64_t frame) {
+bool BindModelBuffers(ID3D12GraphicsCommandList* cmd, const GpuModel& model, uint64_t frame) {
     D3D12_VERTEX_BUFFER_VIEW vbs[4] = {model.VertexBufferView(), model.MorphBufferView(frame),
                                        model.PrevMorphBufferView(frame), model.SdefBufferView()};
     cmd->IASetVertexBuffers(0, 4, vbs);
     cmd->IASetIndexBuffer(&model.IndexBufferView());
+    return true;
+}
+
+// ASCII-only lowercase (multibyte UTF-8/UTF-16 bytes are never folded): for the case-insensitive
+// pack texture file-name comparisons, which only need to match through the ASCII subset on Windows.
+std::wstring LowerAsciiWide(const std::wstring& s) {
+    std::wstring out = s;
+    for (wchar_t& c : out)
+        if (c >= L'A' && c <= L'Z') c += L'a' - L'A';
+    return out;
+}
+
+// pack.json "textures" lookup: the user texture folder first (same relative path, then the same
+// file name, then a file in that folder — not recursive — whose name ends with "_" + the declared
+// file name, case-insensitive: users drop their own game rips in), then the pack folder (exact
+// path only). False = missing (white).
+bool ResolvePackTextureFile(const ShaderPack& pack, const std::string& file, const std::filesystem::path& userFolder,
+                            std::filesystem::path& out) {
+    const std::filesystem::path rel = Utf8ToPath(file);
+    std::error_code ec;
+    if (!userFolder.empty()) {
+        for (const std::filesystem::path& c : {userFolder / rel, userFolder / rel.filename()})
+            if (fs::is_regular_file(c, ec)) {
+                out = c;
+                return true;
+            }
+        // suffix match: <anything>_<declared file name>, not recursive, shortest name wins, ties by name order
+        const std::wstring suffix = L"_" + rel.filename().wstring();
+        const std::wstring suffixLower = LowerAsciiWide(suffix);
+        std::filesystem::path best;
+        for (const std::filesystem::directory_entry& e : fs::directory_iterator(userFolder, ec)) {
+            if (ec) break;
+            const std::wstring name = e.path().filename().wstring();
+            if (name.size() <= suffix.size() || !e.is_regular_file(ec)) continue;
+            if (LowerAsciiWide(name.substr(name.size() - suffix.size())) != suffixLower) continue;
+            if (best.empty() || name.size() < best.filename().wstring().size() ||
+                (name.size() == best.filename().wstring().size() && name < best.filename().wstring()))
+                best = e.path();
+        }
+        if (!best.empty()) {
+            out = std::move(best);
+            return true;
+        }
+    }
+    const std::filesystem::path inPack = pack.dir / rel;
+    if (fs::is_regular_file(inPack, ec)) {
+        out = inPack;
+        return true;
+    }
+    return false;
 }
 
 } // namespace
@@ -171,7 +224,7 @@ void ShadowPass::Execute(PassContext& pc) {
 
 bool ScenePass::CreatePipelines(Dx12Context& ctx, const std::filesystem::path& shaderDir, uint32_t msaa) {
     ID3D12Device* device = ctx.Device();
-    CD3DX12_ROOT_PARAMETER params[12];
+    CD3DX12_ROOT_PARAMETER params[13];
     params[0].InitAsConstantBufferView(0, 0, D3D12_SHADER_VISIBILITY_ALL);   // SceneConstants
     params[1].InitAsConstantBufferView(1, 0, D3D12_SHADER_VISIBILITY_ALL);   // MaterialConstants
     params[2].InitAsShaderResourceView(0, 0, D3D12_SHADER_VISIBILITY_ALL);    // bones (shader packs read the head)
@@ -193,14 +246,20 @@ bool ScenePass::CreatePipelines(Dx12Context& ctx, const std::filesystem::path& s
     CD3DX12_DESCRIPTOR_RANGE spotTable;
     spotTable.Init(D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 1, 7);
     params[11].InitAsDescriptorTable(1, &spotTable, D3D12_SHADER_VISIBILITY_PIXEL);  // spot shadow maps
+    // pack textures (pack.json "textures", pack_api.hlsli gPackTex): a fixed 16-SRV table in its
+    // own space, bound only when a model uses a pack
+    CD3DX12_DESCRIPTOR_RANGE packTexTable;
+    packTexTable.Init(D3D12_DESCRIPTOR_RANGE_TYPE_SRV, kPackMaxTextures, 0, 5);
+    params[12].InitAsDescriptorTable(1, &packTexTable, D3D12_SHADER_VISIBILITY_ALL);
 
     CD3DX12_STATIC_SAMPLER_DESC samplers[4];
     samplers[0].Init(0, D3D12_FILTER_ANISOTROPIC, D3D12_TEXTURE_ADDRESS_MODE_WRAP,
                      D3D12_TEXTURE_ADDRESS_MODE_WRAP, D3D12_TEXTURE_ADDRESS_MODE_WRAP, 0, 8);
+    // s1 (gClamp) is ALL: the pack's edge vertex stage may sample pack textures with it (PackEdge)
     samplers[1].Init(1, D3D12_FILTER_MIN_MAG_MIP_LINEAR, D3D12_TEXTURE_ADDRESS_MODE_CLAMP,
                      D3D12_TEXTURE_ADDRESS_MODE_CLAMP, D3D12_TEXTURE_ADDRESS_MODE_CLAMP, 0, 16,
                      D3D12_COMPARISON_FUNC_NEVER, D3D12_STATIC_BORDER_COLOR_TRANSPARENT_BLACK,
-                     D3D12_SHADER_VISIBILITY_PIXEL);
+                     D3D12_SHADER_VISIBILITY_ALL);
     samplers[2].Init(2, D3D12_FILTER_COMPARISON_MIN_MAG_LINEAR_MIP_POINT, D3D12_TEXTURE_ADDRESS_MODE_BORDER,
                      D3D12_TEXTURE_ADDRESS_MODE_BORDER, D3D12_TEXTURE_ADDRESS_MODE_BORDER, 0, 1,
                      D3D12_COMPARISON_FUNC_LESS_EQUAL, D3D12_STATIC_BORDER_COLOR_OPAQUE_WHITE,
@@ -211,7 +270,7 @@ bool ScenePass::CreatePipelines(Dx12Context& ctx, const std::filesystem::path& s
                      D3D12_SHADER_VISIBILITY_PIXEL);
 
     CD3DX12_ROOT_SIGNATURE_DESC rs;
-    rs.Init(12, params, 4, samplers, D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT);
+    rs.Init(13, params, 4, samplers, D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT);
     if (!CreateRootSignature(device, rs, rootSig_, "ScenePass: CreateRootSignature")) return false;
 
     const std::filesystem::path file = shaderDir / L"mmd.hlsl";
@@ -266,7 +325,7 @@ bool ScenePass::CreatePipelines(Dx12Context& ctx, const std::filesystem::path& s
     vs_ = vs;
     vsRt_.Reset();
     vsDxc_.Reset();
-    packPsos_.clear();
+    ReleasePackPsos(ctx);
     if (!CheckHr(device->CreateGraphicsPipelineState(&pso, IID_PPV_ARGS(&psoCullBack_)), "ScenePass: PSO back"))
         return false;
     pso.RasterizerState.CullMode = D3D12_CULL_MODE_NONE;
@@ -364,12 +423,20 @@ bool ScenePass::CreatePipelines(Dx12Context& ctx, const std::filesystem::path& s
     return okFloor;
 }
 
-const ScenePass::PackPipelines* ScenePass::PackPsos(Dx12Context& ctx, const std::string& id, bool rt) {
+namespace {
+
+// packPsos_ texture-set key for one resolved per-model folder ("" = the pack folder only).
+std::string PackSetKey(const std::filesystem::path& folder) {
+    return PathToUtf8(folder);
+}
+
+} // namespace
+
+const ScenePass::PackPipelines* ScenePass::PackPsos(Dx12Context& ctx, const std::string& id,
+                                                    const std::filesystem::path& textureFolder, bool rt) {
     ShaderPackRegistry& reg = ShaderPacks();
     if (reg.Generation() != packGeneration_) {
-        // reload: the old PSOs may still be in flight
-        if (!packPsos_.empty()) ctx.WaitForGpu();
-        packPsos_.clear();
+        ReleasePackPsos(ctx);   // reload: the old PSOs / pack textures may still be in flight
         packGeneration_ = reg.Generation();
     }
     const ShaderPack* pack = reg.Find(id);
@@ -387,17 +454,35 @@ const ScenePass::PackPipelines* ScenePass::PackPsos(Dx12Context& ctx, const std:
     const auto fail = [&](const char* what) -> const PackPipelines* {
         LOG_ERROR("shader pack '%s': %s failed, the model uses the default shading", id.c_str(), what);
         reg.ReportError(id, what);
+        for (auto& [key, set] : p.sets)
+            if (set.srv != DescriptorHeap::kInvalid) {
+                ctx.SrvHeap().Free(set.srv, kPackMaxTextures);
+                set.srv = DescriptorHeap::kInvalid;
+            }
         p = {};
         p.failed = true;
         return nullptr;
     };
     ID3D12Device* device = ctx.Device();
+    // the pack's textures (pack.json "textures"): uploaded once per texture set (pack id + resolved
+    // folder, so game texture sets can differ per character), state as compile defines
+    PackPipelines::TextureSet& set = p.sets[PackSetKey(textureFolder)];
+    if (!set.loaded && !EnsurePackTextures(ctx, *pack, set, textureFolder)) return fail("pack textures");
+    const uint32_t texCount = (uint32_t)std::min<size_t>(pack->textures.size(), kPackMaxTextures);
+    uint32_t clampMask = 0, srgbMask = 0;
+    for (uint32_t i = 0; i < texCount; ++i) {
+        if (pack->textures[i].clamp) clampMask |= 1u << i;
+        if (pack->textures[i].srgb) srgbMask |= 1u << i;
+    }
+    ShaderDefines packDefines = {{"MMDX_PACK", incDefine},
+                                 {"PACK_TEX_COUNT", std::to_string(texCount)},
+                                 {"PACK_TEX_CLAMP_MASK", std::to_string(clampMask) + "u"},
+                                 {"PACK_TEX_SRGB_MASK", std::to_string(srgbMask) + "u"}};
     if (!p.back) {
         // DXC (FXC cannot #include a macro): shader model 6.0, so the VS is a DXC build of VSMain as well
         if (!vsDxc_) vsDxc_ = CompileShaderDxc(file, "VSMain", "vs_6_0");
         std::string errors;
-        ComPtr<ID3DBlob> ps =
-            vsDxc_ ? CompileShaderDxc(file, "PSPack", "ps_6_0", {{"MMDX_PACK", incDefine}}, &errors) : nullptr;
+        ComPtr<ID3DBlob> ps = vsDxc_ ? CompileShaderDxc(file, "PSPack", "ps_6_0", packDefines, &errors) : nullptr;
         if (!ps) return fail(errors.empty() ? "shader compile" : errors.c_str());
         D3D12_GRAPHICS_PIPELINE_STATE_DESC d = litDesc_;
         d.VS = {vsDxc_->GetBufferPointer(), vsDxc_->GetBufferSize()};
@@ -409,10 +494,27 @@ const ScenePass::PackPipelines* ScenePass::PackPsos(Dx12Context& ctx, const std:
         reg.ReportCompiled(id);
         LOG_INFO("shader pack '%s': compiled (%s)", id.c_str(), inc.c_str());
     }
+    if (pack->hasEdge && !p.edge) {
+        // pack outlines (PACK_HAS_EDGE + PackEdge in surface.hlsl): a pack variant of the edge pass;
+        // without it the model draws with the default edge PSOs
+        std::string errors;
+        ComPtr<ID3DBlob> vsE = CompileShaderDxc(file, "VSEdge", "vs_6_0", packDefines, &errors);
+        ComPtr<ID3DBlob> psE = vsE ? CompileShaderDxc(file, "PSEdgePack", "ps_6_0", packDefines, &errors) : nullptr;
+        if (vsE && psE) {
+            D3D12_GRAPHICS_PIPELINE_STATE_DESC d = litDesc_;
+            d.VS = {vsE->GetBufferPointer(), vsE->GetBufferSize()};
+            d.PS = {psE->GetBufferPointer(), psE->GetBufferSize()};
+            d.RasterizerState.CullMode = D3D12_CULL_MODE_FRONT;
+            if (FAILED(device->CreateGraphicsPipelineState(&d, IID_PPV_ARGS(&p.edge)))) p.edge.Reset();
+        }
+        if (!p.edge) LOG_ERROR("shader pack '%s': edge variant failed, using the default edges", id.c_str());
+    }
     if (rt && !p.rtTried && vsRt_) {
         // ray-traced sun shadows: DXC variant; without it the raster pack PSOs draw (shadow maps)
         p.rtTried = true;
-        ComPtr<ID3DBlob> ps = CompileShaderDxc(file, "PSPack", "ps_6_5", {{"RT_SHADOWS", "1"}, {"MMDX_PACK", incDefine}});
+        ShaderDefines rtDefines = packDefines;
+        rtDefines.push_back({"RT_SHADOWS", "1"});
+        ComPtr<ID3DBlob> ps = CompileShaderDxc(file, "PSPack", "ps_6_5", rtDefines);
         if (ps) {
             D3D12_GRAPHICS_PIPELINE_STATE_DESC d = litDesc_;
             d.VS = {vsRt_->GetBufferPointer(), vsRt_->GetBufferSize()};
@@ -426,6 +528,91 @@ const ScenePass::PackPipelines* ScenePass::PackPsos(Dx12Context& ctx, const std:
         if (!p.backRt) LOG_ERROR("shader pack '%s': ray-traced variant failed, using shadow maps", id.c_str());
     }
     return &p;
+}
+
+void ScenePass::ReleasePackPsos(Dx12Context& ctx) {
+    if (!packPsos_.empty()) ctx.WaitForGpu();
+    for (auto& [id, p] : packPsos_)
+        for (auto& [key, set] : p.sets)
+            if (set.srv != DescriptorHeap::kInvalid) ctx.SrvHeap().Free(set.srv, kPackMaxTextures);
+    packPsos_.clear();
+}
+
+// pack.json "textures" for one texture set: loaded with the image loader, uploaded in one batch per
+// set (DEFAULT heap) and shared by every model resolving to the same folder. A missing / unusable
+// texture falls back to white ([W] per texture, once per load; the manager shows the pack-level
+// folder's count). Runs once per set per generation (registry reload), right before the pack's PSOs
+// are (re)compiled.
+bool ScenePass::EnsurePackTextures(Dx12Context& ctx, const ShaderPack& pack, PackPipelines::TextureSet& set,
+                                   const std::filesystem::path& folder) {
+    set.loaded = true;
+    const uint32_t count = (uint32_t)std::min<size_t>(pack.textures.size(), kPackMaxTextures);
+    if (count == 0) return true;   // no textures: the table is not bound (PackSampleTex returns white)
+    ShaderPackRegistry& reg = ShaderPacks();
+    set.tex.assign(kPackMaxTextures, {});
+    set.srv = ctx.SrvHeap().Allocate(kPackMaxTextures);
+    if (set.srv == DescriptorHeap::kInvalid) {
+        LOG_ERROR("shader pack '%s': out of SRV descriptors for pack textures", pack.id.c_str());
+        set.tex.clear();
+        return false;
+    }
+    UploadBatch batch(ctx);
+    ImageRGBA8 white;
+    white.mips.push_back({1, 1, {255, 255, 255, 255}});
+    set.white = batch.CreateTexture(white, L"packtex.white");   // kept alive: SRVs point at it
+    const ComPtr<ID3D12Resource>& whiteRes = set.white;
+    uint32_t missing = 0;
+    const std::filesystem::path userFolder = folder;
+    ImageRGBA8 img;
+    std::string loadError;
+    for (uint32_t i = 0; i < count; ++i) {
+        const PackTexture& t = pack.textures[i];   // address mode / srgb are compile defines; the data is the file's
+        std::filesystem::path path;
+        if (!ResolvePackTextureFile(pack, t.file, userFolder, path)) {
+            LOG_WARN("shader pack '%s': texture '%s' not found, white is used", pack.id.c_str(), t.file.c_str());
+            ++missing;
+            continue;
+        }
+        img = {};
+        loadError.clear();
+        if (LoadImageRGBA8(path, img, &loadError) && img.Width() <= kPackMaxTextureSize &&
+            img.Height() <= kPackMaxTextureSize) {
+            set.tex[i] = batch.CreateTextureTyped(img, DXGI_FORMAT_R8G8B8A8_TYPELESS, L"packtex.texture");
+            if (!set.tex[i])
+                LOG_WARN("shader pack '%s': texture '%s' upload failed, white is used", pack.id.c_str(),
+                         t.file.c_str());
+        } else if (!img.Empty()) {
+            LOG_WARN("shader pack '%s': texture '%s' is %ux%u (max %u), white is used", pack.id.c_str(),
+                     t.file.c_str(), img.Width(), img.Height(), kPackMaxTextureSize);
+        } else {
+            LOG_WARN("shader pack '%s': texture '%s' cannot be decoded (%s), white is used", pack.id.c_str(),
+                     t.file.c_str(), loadError.c_str());
+        }
+        if (!set.tex[i]) ++missing;
+    }
+    batch.Submit();
+    reg.ReportMissingTextures(pack.id, folder, missing);
+    if (missing) LOG_WARN("shader pack '%s': %u of %u textures missing (white is used)", pack.id.c_str(), missing, count);
+    if (!whiteRes) {
+        LOG_ERROR("shader pack '%s': pack texture upload failed", pack.id.c_str());
+        ctx.SrvHeap().Free(set.srv, kPackMaxTextures);
+        set.srv = DescriptorHeap::kInvalid;
+        set.tex.clear();
+        return false;
+    }
+
+    ID3D12Device* device = ctx.Device();
+    D3D12_SHADER_RESOURCE_VIEW_DESC srv{};
+    srv.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+    srv.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+    srv.Texture2D.MipLevels = UINT(-1);
+    for (uint32_t i = 0; i < kPackMaxTextures; ++i) {
+        // sRGB textures sample as linear values (the _SRGB view format); others as stored (UNORM)
+        srv.Format = i < count && pack.textures[i].srgb ? DXGI_FORMAT_R8G8B8A8_UNORM_SRGB : DXGI_FORMAT_R8G8B8A8_UNORM;
+        ID3D12Resource* res = i < count && set.tex[i] ? set.tex[i].Get() : whiteRes.Get();
+        device->CreateShaderResourceView(res, &srv, ctx.SrvHeap().Cpu(set.srv + i));
+    }
+    return true;
 }
 
 void ScenePass::Execute(PassContext& pc) {
@@ -508,8 +695,13 @@ void ScenePass::Execute(PassContext& pc) {
             // shader pack: lit camera view only (unlit / wireframe / the flat ortho views keep the default shading)
             const PackPipelines* pack = nullptr;
             if (!model->ShaderPackId().empty() && !wire && !vd.ortho && pc.settings.shading == ViewShading::Lit)
-                pack = PackPsos(ctx, model->ShaderPackId(), rt);
+                pack = PackPsos(ctx, model->ShaderPackId(), model->ShaderTextureFolder(), rt);
             const bool packRt = pack && rt && pack->backRt;
+            if (pack) {   // the model's texture set (pack id + resolved folder), material AND edge draws
+                const auto it = pack->sets.find(PackSetKey(model->ShaderTextureFolder()));
+                if (it != pack->sets.end() && it->second.srv != DescriptorHeap::kInvalid)   // pack_api.hlsli gPackTex
+                    cmd->SetGraphicsRootDescriptorTable(12, ctx.SrvHeap().Gpu(it->second.srv));
+            }
             for (const GpuModel::Material& m : model->Materials()) {
                 if (m.indexCount == 0 || !m.visible) continue;   // MMD skips materials with alpha 0
                 ID3D12PipelineState* want;
@@ -530,7 +722,7 @@ void ScenePass::Execute(PassContext& pc) {
             }
 
             if (pc.settings.drawEdges && !wire) {   // wireframe: the model is drawn as edges already
-                cmd->SetPipelineState(psoEdge_.Get());
+                cmd->SetPipelineState(pack && pack->edge ? pack->edge.Get() : psoEdge_.Get());
                 for (const GpuModel::Material& m : model->Materials()) {
                     if (!m.drawEdge || m.indexCount == 0) continue;
                     cmd->SetGraphicsRootConstantBufferView(1, m.constants);

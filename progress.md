@@ -627,3 +627,42 @@ Workers: antigravity (first attempt, 30 min timeout, no output), opencode (M1 pa
   (zips are served as immutable in the example nginx config).
 - New pack dialog, delete, drag & drop on a real window, play-bar popup and the studio row were built but not clicked through.
 - PT / offline GI ignore packs (by design for now). Face width is in model units (slider for other head sizes).
+
+## 2026-10-07 (8) — Shader pack API 2: pack textures, per-character texture folders, PackEdge, hoyo_toon_v2 (issue #2) — 1.3.0
+
+GitHub issue #2 (a Chinese user) asked for pack textures + a sampling API so game-style shading (light maps, ramps, face SDF)
+can be a pack, outlines from the pack, a weapon class, and textures supplied by the user (game rips can't be redistributed).
+Workers: opencode (API 2 core: the first run stopped on an interactive question — resumed in the same session with
+`delegate.py --session`; then the per-character folders). Claude: review fixes, hoyo_toon_v2 shading, docs, release.
+
+### Done
+- API 2 (`kPackApiVersion` 2, v1 packs load): pack.json `"textures"` (<= 16, wrap/clamp, srgb), `PackSampleTex` /
+  `PackSampleTexLevel` / `PackTexSize` / `PackTexCount` (16-SRV table t0 space5, root param 12, compile defines for count /
+  clamp / sRGB masks); `PACK_HAS_EDGE` + `PackEdge` (pack variant of the edge pass: colour + width scale); `PACK_WEAPON`.
+- Texture lookup: character folder -> pack-level folder (manager screen) -> pack folder -> white; inside a folder: relative
+  path, file name, then any file ending in `_<declared name>` (so game files keep their names). Texture sets per (pack,
+  folder) in ScenePass. Per-character folder in `ShaderChoice` (ini `characterShaderTextures=`, `.mmdxproj`, UI row under
+  the pack sliders). Class rules can match the diffuse texture path (`"texture"`).
+- pack_check: textures (format / count / size / total / paths; missing = warning), literal `PackSampleTex(N)` indices.
+- hoyo_toon_v2 (built-in, gallery): Genshin light map (G shadow bias, A ramp row, R/B specular, metal matcap), day/night
+  shadow ramps, face SDF from the head frame; lit colour from the MMD colour model; v1 fallback per missing map.
+- Website: manifest / shader API docs (4 languages) for textures, user / per-character folders, suffix matching, texture
+  class rules, PackEdge; hoyo_toon_v2 gallery entry.
+
+### Fixed in review (worker output)
+- sRGB textures were decoded twice (`_SRGB` SRV + `SrgbToLinear` in the shader).
+- `UploadBatch::CreateTexture` had been changed to create every texture TYPELESS (only pack textures need it).
+- `PACK_HAS_EDGE` was detected in comments (the template mentions it: every template pack would have built a broken edge PSO).
+- The worker's own find: the white fallback texture was a local ComPtr freed while SRVs used it (GPU hang 0x887A0006).
+
+### Verified
+- Real Genshin maps (Hu Tao, Raiden; kept locally, never committed): the official MMD models use the game UV layout
+  (diffuse sheets identical). Hu Tao with hoyo_toon_v2 + a character folder: all maps found by suffix, no [W]/[E];
+  before/after (docs/media/issue2_before_after.png): no geometric nose / cheek shading on the face, painted fold shadows.
+- Debug views (light term, light map G) checked in the runtime shader copy. studio_project_test 69/69, pack_check OK for
+  hoyo_toon / hoyo_toon_v2 / template. Missing-texture + edge case (the old hang) renders.
+
+### Not verified / notes
+- Ramp row order (alpha 1.0 / 0.7 / 0.5 / 0.3 / 0 -> rows 0..4) and the face SDF side are from community notes + one look;
+  `faceFlip` exists for mirrored models. Furina's third sheet (Dress) maps to body. Star Rail / ZZZ map layouts differ.
+- Texture sets of old folders stay allocated until the next registry rescan.

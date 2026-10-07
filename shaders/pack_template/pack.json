@@ -2,7 +2,7 @@
   "format": 1,
   "id": "my_pack",
   "version": "0.1.0",
-  "apiVersion": 1,
+  "apiVersion": 2,
   "name": { "ko": "내 팩", "en": "My pack" },
   "description": {
     "ko": "새 팩의 설명입니다. 팩 선택 칩에 마우스를 올리면 보입니다.",

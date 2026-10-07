@@ -15,6 +15,35 @@
 // ---- parameters (pack.json "params", same order) ---------------------------------------------------------------------
 #define P_MY_PARAM PackParam(0)   // your first slider (0..1); add more #defines in pack.json order
 
+// ---- pack textures (pack.json "textures", optional) ------------------------------------------------------------------
+// Declare extra textures in pack.json and sample them with the pack texture API:
+//
+//     "textures": [
+//         { "file": "textures/ramp.png", "address": "clamp" },
+//         { "file": "textures/tint.png" }
+//     ]
+//
+//     PackSampleTex(i, uv)             i-th texture with its declared address mode (wrap default)
+//     PackSampleTexLevel(i, uv, lod)   explicit LOD (ramps and data maps: lod 0)
+//     PackTexSize(i) / PackTexCount()  level-0 size in pixels / declared count
+//
+// sRGB textures (default) sample as LINEAR values - do not apply SrgbToLinear again; "srgb": false
+// returns the stored values (data maps: light maps, face SDFs, LUTs). Missing textures sample white.
+
+// ---- pack edges (optional) -------------------------------------------------------------------------------------------
+// A pack can also draw the model's outline: define PACK_HAS_EDGE at the top of this file...
+// #define PACK_HAS_EDGE 1
+// ...and implement the one function below. The engine then draws this model's outlines with a pack
+// variant of the edge pass (colour from e.color, width from the MMD size * e.widthScale); without
+// PACK_HAS_EDGE the edges are exactly the app's default.
+//
+//     PackEdgeResult PackEdge(uint materialClass, float4 mmdEdgeColor, float mmdEdgeSize) {
+//         PackEdgeResult e;
+//         e.color = mmdEdgeColor;       // gamma space RGBA, like the MMD edge colour
+//         e.widthScale = 1.5;           // multiply the MMD outline width in pixels
+//         return e;
+//     }
+
 PackResult PackShade(PackSurface s) {
     PackResult r;
     r.alpha = s.alpha;

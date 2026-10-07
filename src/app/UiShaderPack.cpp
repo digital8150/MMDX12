@@ -2,8 +2,12 @@
 // library panel, the play bar and the studio inspector. The pack manager screen is UiShaders.cpp.
 #include "app/App.h"
 
+#include <Windows.h>
+#include <ShlObj.h>
+
 #include <algorithm>
 #include <cmath>
+#include <thread>
 
 #include "app/Icons.h"
 #include "app/UiKit.h"
@@ -17,6 +21,44 @@
 namespace mmdx {
 
 using namespace ui;
+
+// Folder picker (FOS_PICKFOLDERS): runs on its own STA thread like studio::FileDialog, keeping the
+// owner's messages pumped so the enable ping-pong cannot deadlock. Declared in App.h, shared with
+// the shader manager screen (UiShaders.cpp).
+std::filesystem::path PickPackTextureFolder(HWND owner) {
+    std::filesystem::path result;
+    std::thread t([&] {
+        if (FAILED(CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE))) return;
+        {
+            ComPtr<IFileOpenDialog> dlg;
+            if (SUCCEEDED(CoCreateInstance(CLSID_FileOpenDialog, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&dlg)))) {
+                DWORD opts = 0;
+                dlg->GetOptions(&opts);
+                dlg->SetOptions(opts | FOS_FORCEFILESYSTEM | FOS_PICKFOLDERS);
+                if (SUCCEEDED(dlg->Show(owner))) {
+                    ComPtr<IShellItem> item;
+                    PWSTR path = nullptr;
+                    if (SUCCEEDED(dlg->GetResult(&item)) && SUCCEEDED(item->GetDisplayName(SIGDN_FILESYSPATH, &path))) {
+                        result = path;
+                        CoTaskMemFree(path);
+                    }
+                }
+            }
+        }
+        CoUninitialize();
+    });
+    // Keep pumping the owner's messages while waiting (see studio/FileDialog.cpp).
+    HANDLE h = (HANDLE)t.native_handle();
+    while (MsgWaitForMultipleObjects(1, &h, FALSE, INFINITE, QS_ALLINPUT) == WAIT_OBJECT_0 + 1) {
+        MSG msg;
+        while (PeekMessageW(&msg, nullptr, 0, 0, PM_REMOVE)) {
+            TranslateMessage(&msg);
+            DispatchMessageW(&msg);
+        }
+    }
+    t.join();
+    return result;
+}
 
 std::string PackAuthorLine(const std::vector<PackAuthor>& authors) {
     std::string s;
@@ -38,14 +80,24 @@ bool PackMatches(const std::string& needle, const std::string& id, const Localiz
 void App::ApplyShaderChoice(GpuModel& gpu, const ShaderChoice& choice) {
     const ShaderPack* pack = choice.pack.empty() ? nullptr : ShaderPacks().Find(choice.pack);
     if (pack && !pack->Selectable()) pack = nullptr;
-    gpu.SetShaderPack(pack, pack ? pack->Resolve(choice.params) : PackParamValues{});
+    if (!pack) {
+        gpu.SetShaderPack(nullptr, PackParamValues{}, {});
+        return;
+    }
+    // per-character texture folder: the choice's folder, else the pack-level one (registry setting)
+    const std::filesystem::path folder =
+        choice.textureFolder.empty() ? ShaderPacks().TextureFolder(choice.pack) : Utf8ToPath(choice.textureFolder);
+    gpu.SetShaderPack(pack, pack->Resolve(choice.params), folder);
 }
 
 ShaderChoice App::PlayShaderChoice() const {
     if (!scene_ || screen_ == Screen::BenchRun || screen_ == Screen::BenchRender) return {};  // fixed workload
     ShaderChoice c = scene_->characterId.empty() ? ShaderChoice{} : settings_.CharacterShader(scene_->characterId);
     if (options_.shaderPackSet) {   // --shader-pack: this run only
-        if (c.pack != options_.shaderPack) c.params.clear();
+        if (c.pack != options_.shaderPack) {
+            c.params.clear();
+            c.textureFolder.clear();
+        }
         c.pack = options_.shaderPack;
     }
     return c;
@@ -207,6 +259,7 @@ bool App::DrawShaderSelector(const char* id, ShaderChoice& choice, float width) 
             if (row(rid.c_str(), &pk, choice.pack == pk.id) && choice.pack != pk.id) {
                 choice.pack = pk.id;
                 choice.params.clear();
+                choice.textureFolder.clear();
                 changed = true;
                 ImGui::CloseCurrentPopup();
             }
@@ -228,9 +281,49 @@ bool App::DrawShaderSelector(const char* id, ShaderChoice& choice, float width) 
 
 bool App::DrawShaderPackParams(ShaderChoice& choice) {
     const ShaderPack* pack = choice.pack.empty() ? nullptr : ShaderPacks().Find(choice.pack);
-    if (!pack || pack->params.empty()) return false;
+    if (!pack) return false;
     bool changed = false;
     const std::string lang = PackLanguage();
+    const Palette& p = P();
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    ShaderPackRegistry& reg = ShaderPacks();
+    // per-character texture folder (pack.json "textures" packs): the folder this model's set loads from, picker +
+    // clear + the set's missing count; edits the ShaderChoice (the callers save it)
+    if (!pack->textures.empty()) {
+        const float w = ImGui::GetContentRegionAvail().x;
+        const std::filesystem::path folder =
+            choice.textureFolder.empty() ? std::filesystem::path() : Utf8ToPath(choice.textureFolder);
+        const std::string shown = folder.empty() ? std::string(Tr("팩 설정 사용"))
+                                                 : std::string(Tr("텍스처 폴더")) + ": " + PathToUtf8(folder);
+        const uint32_t missing = reg.MissingTextures(pack->id, folder);
+        const ImVec2 c = ImGui::GetCursorScreenPos();
+        TextEllipsis(dl, Font::Regular, size::Small, ImVec2(c.x, c.y + Dp(6.0f)), c.x + w - Dp(96.0f),
+                     missing ? p.warn : p.ink2, shown.c_str());
+        ImGui::SetCursorScreenPos(ImVec2(c.x + w - Dp(88.0f), c.y));
+        if (IconButton("##choiceTexPick", icon::FolderOpen, Tr("텍스처 폴더 선택"))) {
+            const std::filesystem::path picked = PickPackTextureFolder(hwnd_);
+            if (!picked.empty()) {
+                choice.textureFolder = PathToUtf8(picked);
+                changed = true;
+            }
+        }
+        ImGui::SameLine();
+        ImGui::BeginDisabled(folder.empty());
+        if (IconButton("##choiceTexClear", icon::X, Tr("텍스처 폴더 지우기"))) {
+            choice.textureFolder.clear();
+            changed = true;
+        }
+        ImGui::EndDisabled();
+        ImGui::SetCursorScreenPos(ImVec2(c.x, c.y + Dp(30.0f)));
+        if (missing) {
+            Text(dl, Font::Regular, size::Caption, ImGui::GetCursorScreenPos(), p.warn,
+                 (std::to_string(missing) + Tr("개의 팩 텍스처가 없어 흰색으로 표시됩니다")).c_str());
+            ImGui::Dummy(ImVec2(w, Dp(18.0f)));
+        }
+        ImGui::Dummy(ImVec2(w, 0));
+        Gap(4.0f);
+    }
+    if (pack->params.empty()) return changed;
     const PackParamValues values = pack->Resolve(choice.params);
     for (size_t i = 0; i < pack->params.size(); ++i) {
         const ShaderPackParam& sp = pack->params[i];

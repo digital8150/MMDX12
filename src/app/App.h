@@ -148,6 +148,10 @@ struct AppOptions {
 };
 AppOptions ParseCommandLine(int argc, wchar_t** argv);  // unknown args are logged and ignored
 
+// Folder picker for a pack's user texture folder (FOS_PICKFOLDERS): runs on its own STA thread,
+// keeping the owner's messages pumped. Defined in UiShaderPack.cpp, also used by UiShaders.cpp.
+std::filesystem::path PickPackTextureFolder(HWND owner);
+
 class App {
 public:
     int Run(HINSTANCE instance, const AppOptions& options);  // returns process exit code

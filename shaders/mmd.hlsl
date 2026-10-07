@@ -322,6 +322,11 @@ PSOut PSMain(VSOut i, bool front : SV_IsFrontFace) {
 #include "pack_api.hlsli"
 #include MMDX_PACK
 
+// The pack sets PACK_HAS_EDGE itself (surface.hlsl); without it the edge pass is unchanged.
+#ifndef PACK_HAS_EDGE
+#define PACK_HAS_EDGE 0
+#endif
+
 PSOut PSPack(VSOut i, bool front : SV_IsFrontFace) {
     PackSurface s;
     s.N = normalize(i.nrm);
@@ -365,6 +370,10 @@ EdgeOut VSEdge(VSIn v) {
     float4 wp = float4(wp3, 1.0);
     float4 pwp = float4(PrevSkinPosition(v), 1.0);
     float px = gEdgeSize * v.edge * gEdgeScale;                           // outline width in pixels
+#if PACK_HAS_EDGE
+    // pack outlines (PackEdge): per-material width scale
+    px *= max(PackEdge(gPackClass, gEdgeColor, gEdgeSize).widthScale, 0.0);
+#endif
     o.pos = ExpandEdge(mul(wp, gViewProj), wn, px);
     o.curClip = ExpandEdge(mul(wp, gViewProjNoJitter), wn, px);
     o.prevClip = ExpandEdge(mul(pwp, gPrevViewProjNoJitter), wn, px);
@@ -378,6 +387,19 @@ PSOut PSEdge(EdgeOut i) {
     o.velocity = Velocity(i.curClip, i.prevClip);
     return o;
 }
+
+// Pack outlines (PACK_HAS_EDGE in the pack's surface.hlsl): PackEdge sets the colour and width scale.
+// Compiled only for the pack's edge PSO (MMDX_PACK); otherwise the default PSEdge above draws.
+#if PACK_HAS_EDGE
+PSOut PSEdgePack(EdgeOut i) {
+    PackEdgeResult e = PackEdge(gPackClass, gEdgeColor, gEdgeSize);
+    PSOut o;
+    o.color = float4(SrgbToLinear(saturate(e.color.rgb)) * gSunIntensity * 0.85, saturate(e.color.a));
+    o.normal = float4(OctEncode(float3(0, 0, -1)), 0.0, saturate(e.color.a));
+    o.velocity = Velocity(i.curClip, i.prevClip);
+    return o;
+}
+#endif
 
 // ---- sky backdrop -----------------------------------------------------------------
 

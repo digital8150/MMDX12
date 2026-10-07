@@ -143,6 +143,10 @@ public:
     // DEFAULT-heap R8G8B8A8_UNORM texture with all mips of `image`; final state
     // PIXEL_SHADER_RESOURCE. `image` must not be empty.
     ComPtr<ID3D12Resource> CreateTexture(const ImageRGBA8& image, const wchar_t* debugName = nullptr);
+    // Same with another resource format of the same layout (R8G8B8A8_TYPELESS: the caller creates
+    // sRGB and UNORM SRVs on one texture).
+    ComPtr<ID3D12Resource> CreateTextureTyped(const ImageRGBA8& image, DXGI_FORMAT format,
+                                              const wchar_t* debugName = nullptr);
     // Closes, executes on ctx.Queue(), waits for completion, frees staging buffers.
     void Submit();
 

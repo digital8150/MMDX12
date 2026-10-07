@@ -476,10 +476,16 @@ ComPtr<ID3D12Resource> UploadBatch::CreateBuffer(const void* data, size_t bytes,
 }
 
 ComPtr<ID3D12Resource> UploadBatch::CreateTexture(const ImageRGBA8& image, const wchar_t* debugName) {
+    return CreateTextureTyped(image, DXGI_FORMAT_R8G8B8A8_UNORM, debugName);
+}
+
+// `format` R8G8B8A8_TYPELESS lets the caller create sRGB and UNORM SRVs on one texture (shader packs).
+ComPtr<ID3D12Resource> UploadBatch::CreateTextureTyped(const ImageRGBA8& image, DXGI_FORMAT format,
+                                                       const wchar_t* debugName) {
     if (!ctx_.Device() || !list_ || image.Empty()) return {};
     const UINT mipCount = (UINT)image.mips.size();
     CD3DX12_RESOURCE_DESC desc =
-        CD3DX12_RESOURCE_DESC::Tex2D(DXGI_FORMAT_R8G8B8A8_UNORM, image.Width(), image.Height(), 1,
+        CD3DX12_RESOURCE_DESC::Tex2D(format, image.Width(), image.Height(), 1,
                                      (UINT16)mipCount, 1, 0, D3D12_RESOURCE_FLAG_NONE);
     D3D12_HEAP_PROPERTIES def{D3D12_HEAP_TYPE_DEFAULT};
     ComPtr<ID3D12Resource> res;

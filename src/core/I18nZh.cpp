@@ -767,6 +767,12 @@ const Entry kChinese[] = {
     {"템플릿을 복사하지 못했습니다", "无法复制模板"},
     {"템플릿의 pack.json을 읽지 못했습니다", "无法读取模板的 pack.json"},
     {"pack.json을 쓰지 못했습니다", "无法写入 pack.json"},
+    // shader pack textures (api 2)
+    {"팩 텍스처", "包纹理"},
+    {"개의 팩 텍스처가 없어 흰색으로 표시됩니다 - 텍스처 폴더를 지정하세요", " 个包纹理缺失（显示为白色）。请指定纹理文件夹"},
+    {"텍스처 폴더", "纹理文件夹"},
+    {"텍스처 폴더 선택", "选择纹理文件夹"},
+    {"텍스처 폴더 지우기", "清除纹理文件夹"},
 };
 const int kChineseCount = (int)(sizeof(kChinese) / sizeof(kChinese[0]));
 

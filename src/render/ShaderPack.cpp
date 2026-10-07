@@ -25,7 +25,7 @@ constexpr const char* kManifestName = "pack.json";
 bool ParseClass(const std::string& s, PackClass& out) {
     static const std::pair<const char*, PackClass> kNames[] = {
         {"body", PackClass::Body}, {"skin", PackClass::Skin}, {"face", PackClass::Face},
-        {"eye", PackClass::Eye},   {"hair", PackClass::Hair},
+        {"eye", PackClass::Eye},   {"hair", PackClass::Hair}, {"weapon", PackClass::Weapon},
     };
     for (const auto& [name, cls] : kNames)
         if (s == name) { out = cls; return true; }
@@ -95,7 +95,8 @@ uint64_t FolderStamp(const fs::path& dir) {
     return h;
 }
 
-// pack.json / *.hlsl / *.hlsli / preview.* of every pack folder, plus the folder list: cheap, stat only.
+// pack.json / *.hlsl / *.hlsli / *.png / *.jpg / preview.* of every pack folder, plus the folder list: cheap, stat only.
+// Textures live in subfolders ("textures/x.png"), so this walks the pack recursively.
 uint64_t PollStamp(const fs::path roots[2]) {
     uint64_t h = 1469598103934665603ull;
     std::error_code ec;
@@ -113,21 +114,27 @@ uint64_t PollStamp(const fs::path roots[2]) {
         std::sort(dirs.begin(), dirs.end());
         for (const fs::path& d : dirs) {
             FnvString(h, PathToUtf8(d.filename()));
+            const std::string rel = PathToUtf8(d);
             std::vector<fs::path> watched;
-            for (const auto& e : fs::directory_iterator(d, ec)) {
-                std::error_code e2;
-                if (!e.is_regular_file(e2)) continue;
-                const std::string name = PathToUtf8(e.path().filename());
-                const std::string ext = PathToUtf8(e.path().extension());
-                if (name == kManifestName || ext == ".hlsl" || ext == ".hlsli" || name == "preview.png" ||
-                    name == "preview.jpg")
-                    watched.push_back(e.path());
+            std::error_code e2;
+            fs::recursive_directory_iterator it(d, fs::directory_options::skip_permission_denied, e2), end;
+            while (!e2 && it != end) {
+                std::error_code e3;
+                if (it->is_regular_file(e3) && !e3) {
+                    const std::string name = PathToUtf8(it->path().filename());
+                    const std::string ext = ToLowerAscii(PathToUtf8(it->path().extension()));
+                    if (name == kManifestName || ext == ".hlsl" || ext == ".hlsli" || name == "preview.png" ||
+                        name == "preview.jpg" || ext == ".png" || ext == ".jpg" || ext == ".jpeg")
+                        watched.push_back(it->path());
+                }
+                it.increment(e3);
+                e2 = e3;
             }
             std::sort(watched.begin(), watched.end());
             for (const fs::path& f : watched) {
-                std::error_code e2;
-                FnvString(h, PathToUtf8(f.filename()));
-                const auto t = fs::last_write_time(f, e2).time_since_epoch().count();
+                std::error_code e3;
+                FnvString(h, PathToUtf8(fs::relative(f, d, e3)));
+                const auto t = fs::last_write_time(f, e3).time_since_epoch().count();
                 h = Fnv(h, &t, sizeof(t));
             }
         }
@@ -237,6 +244,35 @@ bool LoadPackFolder(const fs::path& dir, PackSource source, ShaderPack& out) {
             // a broken marker is ignored: the pack still installs as a user pack
         }
     }
+    // PACK_HAS_EDGE: the pack opts in to the pack variant of the edge pass (PackEdge in surface.hlsl)
+    std::ifstream surf(dir / L"surface.hlsl", std::ios::binary);
+    if (surf) {
+        std::string line;
+        // only a "#define PACK_HAS_EDGE" line counts (a mention in a comment must not opt in)
+        while (std::getline(surf, line)) {
+            size_t p = line.find_first_not_of(" \t");
+            if (p == std::string::npos || line[p] != '#') continue;
+            p = line.find_first_not_of(" \t", p + 1);
+            if (p != std::string::npos && line.compare(p, 6, "define") == 0) {
+                p = line.find_first_not_of(" \t", p + 6);
+                if (p != std::string::npos && line.compare(p, 13, "PACK_HAS_EDGE") == 0) {
+                    out.hasEdge = true;
+                    break;
+                }
+            }
+        }
+    }
+    return true;
+}
+
+// A pack texture path: relative to the pack, no "..", no drive / root (the pack is copied and the
+// file name ends up in an #include path's sibling folder).
+bool ValidPackTexturePath(const std::string& file) {
+    if (file.empty() || file.front() == '/' || file.front() == '\\') return false;
+    if (file.find(':') != std::string::npos) return false;   // drive letter
+    const fs::path p = Utf8ToPath(file);
+    for (const auto& part : p)
+        if (PathToUtf8(part) == "..") return false;
     return true;
 }
 
@@ -274,10 +310,13 @@ std::string PackLanguage() {
 
 // ---- ShaderPack -------------------------------------------------------------------------------------------------------
 
-PackClass ShaderPack::Classify(const std::string& name, const std::string& nameEn) const {
-    for (const Rule& r : rules)
+PackClass ShaderPack::Classify(const std::string& name, const std::string& nameEn, const std::string& texture) const {
+    for (const Rule& r : rules) {
         for (const std::string& m : r.match)
             if (name.find(m) != std::string::npos || nameEn.find(m) != std::string::npos) return r.cls;
+        for (const std::string& t : r.texture)
+            if (texture.find(t) != std::string::npos) return r.cls;
+    }
     return PackClass::Body;
 }
 
@@ -313,6 +352,8 @@ bool ParseShaderPackManifest(const std::string& json, const std::filesystem::pat
     out.tags.clear();
     out.rules.clear();
     out.params.clear();
+    out.textures.clear();
+    out.hasEdge = false;
     out.status = PackStatus::Ready;
     out.statusMessage.clear();
 
@@ -421,7 +462,10 @@ bool ParseShaderPackManifest(const std::string& json, const std::filesystem::pat
             if (auto m = r.find("match"); m != r.end() && m->is_array())
                 for (const auto& s : *m)
                     if (s.is_string() && !s.get<std::string>().empty()) rule.match.push_back(s.get<std::string>());
-            if (!rule.match.empty()) out.rules.push_back(std::move(rule));
+            if (auto m = r.find("texture"); m != r.end() && m->is_array())
+                for (const auto& s : *m)
+                    if (s.is_string() && !s.get<std::string>().empty()) rule.texture.push_back(s.get<std::string>());
+            if (!rule.match.empty() || !rule.texture.empty()) out.rules.push_back(std::move(rule));
         }
     }
 
@@ -456,6 +500,50 @@ bool ParseShaderPackManifest(const std::string& json, const std::filesystem::pat
             }
             out.params.push_back(std::move(sp));
         }
+    }
+
+    // textures: at most kPackMaxTextures, optional extra textures the pack's shading samples
+    if (auto it = j.find("textures"); it != j.end()) {
+        if (!it->is_array())
+            problems.push_back("textures must be an array");
+        else
+            for (const auto& x : *it) {
+                if (!x.is_object()) {
+                    problems.push_back("textures entries must be objects");
+                    continue;
+                }
+                if (out.textures.size() == kPackMaxTextures) {
+                    LOG_WARN("shader pack %s: more than %u textures, the rest are ignored", out.id.c_str(),
+                             kPackMaxTextures);
+                    break;
+                }
+                PackTexture t;
+                t.file = Str(x, "file");
+                if (t.file.empty()) {
+                    problems.push_back("a texture entry has no file");
+                    continue;
+                }
+                const std::string address = ToLowerAscii(Str(x, "address"));
+                if (address.empty() || address == "wrap")
+                    t.clamp = false;
+                else if (address == "clamp")
+                    t.clamp = true;
+                else {
+                    problems.push_back("texture '" + t.file + "': address must be wrap or clamp");
+                    continue;
+                }
+                if (auto s = x.find("srgb"); s != x.end() && s->is_boolean()) t.srgb = s->get<bool>();
+                const std::string ext = ToLowerAscii(PathToUtf8(fs::path(Utf8ToPath(t.file)).extension()));
+                if (ext != ".png" && ext != ".jpg" && ext != ".jpeg") {
+                    problems.push_back("texture '" + t.file + "' must be a png / jpg / jpeg file");
+                    continue;
+                }
+                if (!ValidPackTexturePath(t.file)) {
+                    problems.push_back("texture '" + t.file + "' must be a path inside the pack (no '..', no drive)");
+                    continue;
+                }
+                out.textures.push_back(std::move(t));
+            }
     }
 
     // optional preview
@@ -809,6 +897,42 @@ ShaderPackRegistry& ShaderPacks() {
         return r;
     }();
     return registry;
+}
+
+namespace {
+
+// The missingTexBySet_ key for one (pack id, texture folder) set.
+std::string SetKey(const std::string& id, const std::filesystem::path& folder) {
+    return id + "\n" + PathToUtf8(folder);
+}
+
+} // namespace
+
+void ShaderPackRegistry::SetTextureFolder(const std::string& id, const std::filesystem::path& dir) {
+    if (dir.empty()) {
+        if (textureFolders_.erase(id)) ++generation_;   // pack textures reload on the next draw
+        return;
+    }
+    const auto it = textureFolders_.find(id);
+    if (it != textureFolders_.end() && it->second == dir) return;
+    textureFolders_[id] = dir;
+    ++generation_;
+}
+
+std::filesystem::path ShaderPackRegistry::TextureFolder(const std::string& id) const {
+    const auto it = textureFolders_.find(id);
+    return it == textureFolders_.end() ? std::filesystem::path() : it->second;
+}
+
+void ShaderPackRegistry::ReportMissingTextures(const std::string& id, const std::filesystem::path& folder,
+                                               uint32_t missing) {
+    missingTexById_[id] = missing;   // pack-level: the manager screen (the pack folder's set)
+    missingTexBySet_[SetKey(id, folder)] = missing;
+}
+
+uint32_t ShaderPackRegistry::MissingTextures(const std::string& id, const std::filesystem::path& folder) const {
+    const auto it = missingTexBySet_.find(SetKey(id, folder));
+    return it == missingTexBySet_.end() ? 0 : it->second;
 }
 
 bool ValidShaderPackId(const std::string& id) {

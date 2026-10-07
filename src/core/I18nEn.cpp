@@ -767,6 +767,12 @@ const Entry kEnglish[] = {
     {"템플릿을 복사하지 못했습니다", "Could not copy the template"},
     {"템플릿의 pack.json을 읽지 못했습니다", "Could not read the template's pack.json"},
     {"pack.json을 쓰지 못했습니다", "Could not write pack.json"},
+    // shader pack textures (api 2)
+    {"팩 텍스처", "Pack textures"},
+    {"개의 팩 텍스처가 없어 흰색으로 표시됩니다 - 텍스처 폴더를 지정하세요", " pack textures are missing (shown white) - set the pack's texture folder"},
+    {"텍스처 폴더", "Texture folder"},
+    {"텍스처 폴더 선택", "Choose the texture folder"},
+    {"텍스처 폴더 지우기", "Clear the texture folder"},
 };
 const int kEnglishCount = (int)(sizeof(kEnglish) / sizeof(kEnglish[0]));
 

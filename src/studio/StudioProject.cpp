@@ -260,6 +260,8 @@ bool SaveProject(const std::filesystem::path& file, const ProjectData& data, std
                 nlohmann::json params = nlohmann::json::object();
                 for (const auto& [k, v] : m.shader.params) params[k] = v;
                 jm["shader"] = {{"pack", m.shader.pack}, {"params", params}};
+                if (!m.shader.textureFolder.empty())
+                    jm["shader"]["textureFolder"] = m.shader.textureFolder;
             }
             if (m.kind == ModelKind::Prop) {  // "attach" is written for props only
                 const PropAttach& a = m.attach;
@@ -414,6 +416,7 @@ bool LoadProject(const std::filesystem::path& file, ProjectData& out, std::strin
                     if (sh.contains("params") && sh["params"].is_object())
                         for (const auto& [k, v] : sh["params"].items())
                             if (v.is_number()) pm.shader.params[k] = v.get<float>();
+                    pm.shader.textureFolder = ReadString(sh, "textureFolder", "");
                 }
                 if (kind == ModelKind::Prop && m.contains("attach") && m["attach"].is_object()) {
                     const nlohmann::json& a = m["attach"];  // "attach" is read for props only

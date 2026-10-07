@@ -67,6 +67,9 @@ static void TestRoundTrip() {
         m.place.translation = {2.5f, 0.0f, -3.0f};  // world placement of a character
         m.place.rotationDeg = {0.0f, 45.0f, 0.0f};
         m.place.scale = 1.25f;
+        m.shader.pack = "test_pack";                                                   // shader pack choice
+        m.shader.params["threshold"] = 0.5f;
+        m.shader.textureFolder = "F:/tex/miku";                                        // per-character texture folder
         b0 = BoneKf{};
         b0.frame = 0;
         b0.t = {1, 2, 3};
@@ -177,6 +180,7 @@ static void TestRoundTrip() {
         Check(text.find("\"../models/miku.pmx\"") != std::string::npos, "stored model path is \"../models/miku.pmx\"");
         Check(text.find("\"\\u521D\\u97F3\\u30DF\\u30AF\"") == std::string::npos,
               "JSON is UTF-8, not \\u escaped");
+        Check(text.find("\"textureFolder\"") != std::string::npos, "stored shader textureFolder key");
     }
 
     ProjectData loaded;
@@ -210,6 +214,7 @@ static void TestRoundTrip() {
         Check(b.motion.ik.size() == 1 && b.motion.ik.at("\xE5\x8F\xB3\xE8\x85\x95").size() == 2 &&
                   b.motion.ik.at("\xE5\x8F\xB3\xE8\x85\x95")[1].enabled == false,
               "IK track kept");
+        Check(b.shader == a.shader, "shader choice kept (pack, params, textureFolder)");
 
         Check(b.place == data.models[0].place, "character placement kept (t/r/s)");
         const ProjectModel& st = loaded.models[1];

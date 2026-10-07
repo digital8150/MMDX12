@@ -146,6 +146,26 @@ progress.md is the session log. Read its latest entry first.
   falls back to the default PSOs on errors (`[E]` + toast). Lit raster / RT camera view only; PT, offline GI, unlit / wire /
   ortho views use the default. A negative normal-target reflectivity (`nt.z < 0`) = "no AO" (composite). Choice is saved per
   character (`characterShader=` ini) / per studio model (`.mmdxproj` "shader"); `--shader-pack <id|none>` overrides a run.
+  API v2 (`kPackApiVersion` 2; apiVersion 1 packs still load): a pack may declare `"textures"` in pack.json (at most 16:
+  `{ "file": "textures/x.png", "address": "wrap"|"clamp", "srgb": true }`, png/jpg/jpeg, paths inside the pack), uploaded
+  once per pack (DEFAULT heap, `ScenePass::EnsurePackTextures`) and shared by every model using it; sampled with
+  `PackSampleTex` / `PackSampleTexLevel` / `PackTexSize` / `PackTexCount` (pack_api.hlsli, a fixed 16-SRV table at
+  `t0, space5`, bound as root param 12). sRGB textures use `_SRGB` SRVs and sample as LINEAR values (no SrgbToLinear in
+  the pack); `"srgb": false` returns stored values (data maps). Missing textures sample white (`[W]` per load; the
+  manager shows the count). Game textures can't be redistributed: each pack gets a user "texture folder" (shader manager
+  screen, picker + clear, saved as `packTextureFolder=<id>|<path>` ini lines, registry `TextureFolder`); lookup order:
+  user folder (same relative path, then the same file name, then a file ending in `_<declared name>`, case-insensitive,
+  shortest wins) → pack folder → white. The folder is per character too (`ShaderChoice::textureFolder`: ini
+  `characterShaderTextures=<folder>|<character id>`, `.mmdxproj` "shader"."textureFolder", the "텍스처 폴더" row under the
+  pack's sliders); it wins over the pack-level folder, and ScenePass keeps one texture set per (pack id, folder).
+  Class rules can match the material's diffuse texture path (`"texture": [...]`), not only its names: game texture
+  sets follow the texture sheet (hoyo_toon_v2 picks hair maps for anything on the hair sheet). A pack with all textures missing
+  still compiles and renders. `PACK_HAS_EDGE` + `PackEdge` in surface.hlsl wire the pack into the edge pass (per-material
+  outline colour + width scale; `PSEdgePack` / a `VSEdge` width-scale build from `PackPsos`, root param 12 bound there
+  too); otherwise the edge pass is unchanged. `PACK_WEAPON` = 5 joins the material classes; built-in `hoyo_toon_v2` (issue #2) = Genshin light maps / ramps / face SDF
+  from a user texture folder, v1 fallback per missing map; `tools/pack_check` validates
+  textures (format / count / size / total ≤ 32 MB / bad paths; missing files are warnings) and literal
+  `PackSampleTex(N)` indices against the declared count.
 - `OfflineRenderer` (render/OfflineRenderer.h) is independent of `RenderSettings`: `Renderer::BeginOffline` builds the TLAS,
   then `Renderer::RenderOffline` replaces `Render` each frame (GPU-time-budgeted iterations, preview present) until Done.
   Motion blur: each iteration re-skins the character at its shutter time (`RtScene::Build(..., time)`) from the models'

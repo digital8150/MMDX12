@@ -67,8 +67,10 @@ public:
     // Shader pack (render/ShaderPack.h): nullptr = the default shading. Writes the material class, head bone and
     // parameters into the material constants; a no-op when nothing changed, so call it every frame before
     // UpdateMaterials. The scene pass draws the model with the pack's PSOs while ShaderPackId() is not empty.
-    void SetShaderPack(const ShaderPack* pack, const PackParamValues& params);
+    // `textureFolder` is the model's resolved per-character texture folder (empty = the pack folder only).
+    void SetShaderPack(const ShaderPack* pack, const PackParamValues& params, const std::filesystem::path& textureFolder);
     const std::string& ShaderPackId() const { return packId_; }
+    const std::filesystem::path& ShaderTextureFolder() const { return packTextureFolder_; }
 
     const std::string& Name() const { return name_; }
     ModelRole Role() const { return role_; }
@@ -153,10 +155,12 @@ private:
     RtResources rt_;
     // shader pack state
     std::vector<std::pair<std::string, std::string>> materialNames_;  // (name, nameEn) per material
+    std::vector<std::string> materialTextures_;                       // diffuse texture path per material (pack classes)
     int32_t headBone_ = -1;
     DirectX::XMFLOAT3 headPos_{};
     std::string packId_;
     uint32_t packGeneration_ = 0;
+    std::filesystem::path packTextureFolder_;
     PackParamValues packParams_{};
 };
 

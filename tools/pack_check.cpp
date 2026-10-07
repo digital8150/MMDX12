@@ -5,6 +5,7 @@
 // Usage: pack_check <pack dir | pack.zip> [--compile]
 #include "core/NetUtil.h"
 #include "core/TextUtil.h"
+#include "asset/ImageLoader.h"
 #include "render/RenderPass.h"
 #include "render/ShaderPack.h"
 
@@ -12,8 +13,10 @@
 
 #include <algorithm>
 #include <cstdio>
+#include <cstring>
 #include <filesystem>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -92,6 +95,22 @@ void PrintText(const char* label, const LocalizedText& t) {
         printf("  %s[%s]: %s\n", label, lang.c_str(), text.c_str());
 }
 
+constexpr uint32_t kMaxTextures = 16;
+constexpr uint32_t kMaxTextureSize = 4096;
+
+// Prints the textures the manifest declared; also validates them below.
+void PrintTextures(const ShaderPack& pack) {
+    if (pack.textures.empty()) {
+        printf("  textures: (none)\n");
+        return;
+    }
+    for (size_t i = 0; i < pack.textures.size(); ++i) {
+        const mmdx::PackTexture& t = pack.textures[i];
+        printf("  texture %zu: %s (%s, %s)\n", i, t.file.c_str(), t.clamp ? "clamp" : "wrap",
+               t.srgb ? "srgb" : "raw");
+    }
+}
+
 // Prints every field ParseShaderPackManifest read; false when it reported problems.
 bool PrintManifest(const ShaderPack& pack, const std::string& error) {
     printf(" pack.json:\n");
@@ -122,13 +141,15 @@ bool PrintManifest(const ShaderPack& pack, const std::string& error) {
     if (pack.rules.empty()) {
         printf("  classes: (none)\n");
     } else {
-        static const char* kClasses[] = {"body", "skin", "face", "eye", "hair"};
+        static const char* kClasses[] = {"body", "skin", "face", "eye", "hair", "weapon"};
         for (const ShaderPack::Rule& r : pack.rules) {
             printf("  class %s:", kClasses[(size_t)r.cls]);
             for (const std::string& m : r.match) printf(" \"%s\"", m.c_str());
+            for (const std::string& t : r.texture) printf(" texture:\"%s\"", t.c_str());
             printf("\n");
         }
     }
+    PrintTextures(pack);
     if (pack.params.empty()) {
         printf("  params: (none)\n");
     } else {
@@ -145,6 +166,97 @@ bool PrintManifest(const ShaderPack& pack, const std::string& error) {
         return false;
     }
     return true;
+}
+
+// The pack's texture files: format, size, dims, total bytes. Missing files are a warning (they may
+// be user-supplied); bad paths / formats / dims are problems. False on any problem.
+bool CheckTextures(const ShaderPack& pack, const fs::path& dir) {
+    if (pack.textures.empty()) return true;
+    bool ok = true;
+    if (pack.textures.size() > kMaxTextures) {
+        printf("  [problem] more than %u textures (%zu)\n", kMaxTextures, pack.textures.size());
+        ok = false;
+    }
+    constexpr const char* kExts[] = {".png", ".jpg", ".jpeg"};
+    uint64_t total = 0;
+    for (size_t i = 0; i < pack.textures.size(); ++i) {
+        const mmdx::PackTexture& t = pack.textures[i];
+        const std::string ext = mmdx::ToLowerAscii(mmdx::PathToUtf8(fs::path(mmdx::Utf8ToPath(t.file)).extension()));
+        bool extOk = false;
+        for (const char* k : kExts) extOk |= ext == k;
+        if (!extOk) {
+            printf("  [problem] texture %zu (%s): not a png / jpg / jpeg file\n", i, t.file.c_str());
+            ok = false;
+        }
+        const fs::path rel = mmdx::Utf8ToPath(t.file);
+        if (t.file.find(':') != std::string::npos || t.file.front() == '/' || t.file.front() == '\\') {
+            printf("  [problem] texture %zu (%s): absolute path\n", i, t.file.c_str());
+            ok = false;
+        }
+        for (const auto& part : rel)
+            if (mmdx::PathToUtf8(part) == "..") {
+                printf("  [problem] texture %zu (%s): path escapes the pack folder\n", i, t.file.c_str());
+                ok = false;
+            }
+        const fs::path path = dir / rel;
+        std::error_code ec;
+        if (!fs::is_regular_file(path, ec)) {
+            printf("  [warn] texture %zu (%s): file not found (may be user-supplied)\n", i, t.file.c_str());
+            continue;
+        }
+        const uint64_t bytes = (uint64_t)fs::file_size(path, ec);
+        if (!ec) total += bytes;
+        mmdx::ImageRGBA8 img;
+        std::string err;
+        if (!mmdx::LoadImageRGBA8(path, img, &err)) {
+            printf("  [problem] texture %zu (%s): cannot decode (%s)\n", i, t.file.c_str(), err.c_str());
+            ok = false;
+        } else if (img.Width() > kMaxTextureSize || img.Height() > kMaxTextureSize) {
+            printf("  [problem] texture %zu (%s): %ux%u (max %u)\n", i, t.file.c_str(), img.Width(), img.Height(),
+                   kMaxTextureSize);
+            ok = false;
+        } else {
+            printf("  texture %zu: %ux%u (%.2f MB)\n", i, img.Width(), img.Height(), (double)bytes / (1024.0 * 1024.0));
+        }
+    }
+    printf("  textures: %zu, %.2f MB total\n", pack.textures.size(), (double)total / (1024.0 * 1024.0));
+    if (total > 32ull << 20) {
+        printf("  [problem] textures larger than 32 MB (%.1f MB)\n", (double)total / (1024.0 * 1024.0));
+        ok = false;
+    }
+    return ok;
+}
+
+// PackSampleTex(N) / PackSampleTexLevel(N, ...) literal indices in surface.hlsl must be < the
+// declared texture count (best effort: literal indices only).
+void CheckTextureIndices(const ShaderPack& pack, const fs::path& dir, bool& ok) {
+    if (pack.textures.empty()) return;
+    std::error_code ec;
+    if (!fs::is_regular_file(dir / L"surface.hlsl", ec)) return;
+    FILE* f = _wfopen((dir / L"surface.hlsl").c_str(), L"rb");
+    if (!f) return;
+    std::string hlsl;
+    char buf[4096];
+    size_t n;
+    while ((n = fread(buf, 1, sizeof(buf), f)) > 0) hlsl.append(buf, n);
+    fclose(f);
+    const uint32_t count = (uint32_t)pack.textures.size();
+    for (const char* fn : {"PackSampleTex(", "PackSampleTexLevel("}) {
+        for (size_t pos = hlsl.find(fn); pos != std::string::npos; pos = hlsl.find(fn, pos + 1)) {
+            size_t i = pos + strlen(fn);
+            while (i < hlsl.size() && (hlsl[i] == ' ' || hlsl[i] == '\t')) ++i;
+            size_t digits = i;
+            while (digits < hlsl.size() && hlsl[digits] >= '0' && hlsl[digits] <= '9') ++digits;
+            if (digits == i) continue;   // not a literal index
+            while (digits < hlsl.size() && (hlsl[digits] == ' ' || hlsl[digits] == '\t')) ++digits;
+            if (digits >= hlsl.size() || (hlsl[digits] != ',' && hlsl[digits] != ')')) continue;
+            const unsigned long index = strtoul(hlsl.c_str() + i, nullptr, 10);
+            if (index >= count) {
+                printf("  [problem] surface.hlsl: %s%lu but the pack declares %u textures\n", fn, index, count);
+                ok = false;
+            }
+        }
+    }
 }
 
 } // namespace
@@ -246,6 +358,8 @@ int wmain(int argc, wchar_t** argv) {
     }
     ok = PrintManifest(pack, error) && ok;
     ok = CheckFiles(dir) && ok;
+    ok = CheckTextures(pack, dir) && ok;
+    CheckTextureIndices(pack, dir, ok);
 
     if (compile) {
         const fs::path mmdHlsl = mmdx::ExecutableDir() / L"shaders" / L"mmd.hlsl";
@@ -259,10 +373,22 @@ int wmain(int argc, wchar_t** argv) {
         std::string inc = mmdx::PathToUtf8(rel);
         std::replace(inc.begin(), inc.end(), '\\', '/');
         const std::string incDefine = "\"" + inc + "\"";
-        printf("compile: PSPack of %s (ps_6_0, MMDX_PACK = %s)\n", mmdx::PathToUtf8(mmdHlsl.filename()).c_str(),
-               incDefine.c_str());
+        // the pack texture state, as the app compiles it (pack_api.hlsli PACK_TEX_*)
+        uint32_t clampMask = 0, srgbMask = 0;
+        const uint32_t texCount = (uint32_t)std::min<size_t>(pack.textures.size(), kMaxTextures);
+        for (uint32_t i = 0; i < texCount; ++i) {
+            if (pack.textures[i].clamp) clampMask |= 1u << i;
+            if (pack.textures[i].srgb) srgbMask |= 1u << i;
+        }
+        const std::vector<std::pair<std::string, std::string>> defines = {
+            {"MMDX_PACK", incDefine},
+            {"PACK_TEX_COUNT", std::to_string(texCount)},
+            {"PACK_TEX_CLAMP_MASK", std::to_string(clampMask) + "u"},
+            {"PACK_TEX_SRGB_MASK", std::to_string(srgbMask) + "u"}};
+        printf("compile: PSPack of %s (ps_6_0, MMDX_PACK = %s, %u textures)\n",
+               mmdx::PathToUtf8(mmdHlsl.filename()).c_str(), incDefine.c_str(), texCount);
         std::string errors;
-        const mmdx::ComPtr blob = mmdx::CompileShaderDxc(mmdHlsl, "PSPack", "ps_6_0", {{"MMDX_PACK", incDefine}}, &errors);
+        const mmdx::ComPtr blob = mmdx::CompileShaderDxc(mmdHlsl, "PSPack", "ps_6_0", defines, &errors);
         if (!errors.empty()) printf("%s\n", errors.c_str());
         if (!blob) {
             printf("[problem] shader compile failed\n");

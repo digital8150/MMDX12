@@ -29,6 +29,8 @@
 
 namespace mmdx {
 
+struct ShaderPack;
+
 // Spot shadow maps are rendered (and sampled by the scene / volumetric shaders) when shadows are on
 // and something reads them: the raster and RT scene shaders, or the volumetric march.
 inline bool SpotShadowsWanted(const RenderSettings& s, RenderPath path, bool offscreen) {
@@ -63,13 +65,27 @@ private:
     ComPtr<ID3D12RootSignature> rootSig_;
 
     // Shader packs (render/ShaderPack.h): PSOs compiled on first use from mmd.hlsl's PSPack with the pack's surface,
-    // keyed by pack id, dropped when the registry generation changes (reload). failed = compile error: the model
-    // falls back to the default PSOs.
+    // PSOs keyed by pack id (compile defines depend only on the manifest), dropped when the registry generation
+    // changes (reload). failed = compile error: the model falls back to the default PSOs. edge = the pack's outline
+    // PSO (PACK_HAS_EDGE). The pack's textures (pack.json "textures") live in one texture set per (pack id,
+    // resolved folder): each set uploads the pack's textures out of its folder (Game texture sets differ per
+    // character) with its own 16-SRV range + white fallback, dropped with the PSOs on reload.
     struct PackPipelines {
-        ComPtr<ID3D12PipelineState> back, noCull, backRt, noCullRt;
+        ComPtr<ID3D12PipelineState> back, noCull, backRt, noCullRt, edge;
         bool failed = false, rtTried = false;
+        struct TextureSet {
+            bool loaded = false;
+            uint32_t srv = DescriptorHeap::kInvalid;   // kPackMaxTextures consecutive SRVs in ctx.SrvHeap()
+            ComPtr<ID3D12Resource> white;              // 1x1 neutral fallback (kept alive with the SRVs)
+            std::vector<ComPtr<ID3D12Resource>> tex;
+        };
+        std::map<std::string, TextureSet> sets;        // resolved folder (utf-8, "" = pack folder) -> its set
     };
-    const PackPipelines* PackPsos(Dx12Context& ctx, const std::string& id, bool rt);
+    const PackPipelines* PackPsos(Dx12Context& ctx, const std::string& id, const std::filesystem::path& textureFolder,
+                                  bool rt);
+    bool EnsurePackTextures(Dx12Context& ctx, const ShaderPack& pack, PackPipelines::TextureSet& set,
+                            const std::filesystem::path& folder);
+    void ReleasePackPsos(Dx12Context& ctx);   // waits for the GPU, frees the pack texture SRVs and PSOs
     std::map<std::string, PackPipelines> packPsos_;
     uint32_t packGeneration_ = 0;
     std::filesystem::path shaderDir_;

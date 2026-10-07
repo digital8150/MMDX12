@@ -52,6 +52,10 @@ struct AppSettings {
     std::map<std::string, ShaderChoice> characterShaders;  // character id -> shader pack (absent = default shading)
     ShaderChoice CharacterShader(const std::string& id) const;
     void SetCharacterShader(const std::string& id, const ShaderChoice& choice);  // empty pack removes the entry
+    // Persisted as "characterShaderTextures=<utf-8 folder>|<character id>" ini lines: the choice's
+    // per-character texture folder (a separate line: the ids in characterShader= are already last).
+    // Old ini files without it load unchanged.
+    std::map<std::string, std::string> packTextureFolders;  // pack id -> user texture folder (game textures), UTF-8
     int windowWidth = 1600, windowHeight = 900;
     std::vector<std::string> recentProjects;         // studio projects (UTF-8 absolute paths), newest first, max 8
     void AddRecentProject(const std::string& path);  // moves it to the front (case-insensitive match)

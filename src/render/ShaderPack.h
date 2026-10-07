@@ -17,18 +17,22 @@ namespace mmdx {
 
 // The PackShade contract version (pack_api.hlsli PACK_API_VERSION). A pack declares the version it was written for;
 // packs with a higher version are listed as incompatible and never compiled.
-inline constexpr int kPackApiVersion = 1;
+inline constexpr int kPackApiVersion = 2;
 inline constexpr uint32_t kPackMaxParams = 16;
+inline constexpr uint32_t kPackMaxTextures = 16;   // pack.json "textures" entries (one SRV each)
+inline constexpr uint32_t kPackMaxTextureSize = 4096;   // per-texture width / height cap
 using PackParamValues = std::array<float, kPackMaxParams>;
 
 // Material classes, as the PACK_* ids in pack_api.hlsli.
-enum class PackClass : uint32_t { Body = 0, Skin = 1, Face = 2, Eye = 3, Hair = 4 };
+enum class PackClass : uint32_t { Body = 0, Skin = 1, Face = 2, Eye = 3, Hair = 4, Weapon = 5 };
 
-// A model's shader pack choice: pack id (empty = the default shading) and the parameter values the user changed
-// (key -> value; the rest use the pack's defaults). Saved per character (settings) and per studio model (project).
+// A model's shader pack choice: pack id (empty = the default shading), the parameter values the user changed
+// (key -> value; the rest use the pack's defaults) and an optional per-character texture folder (UTF-8, empty =
+// the pack-level folder). Saved per character (settings) and per studio model (project).
 struct ShaderChoice {
     std::string pack;
     std::map<std::string, float> params;
+    std::string textureFolder;
     bool operator==(const ShaderChoice&) const = default;
 };
 
@@ -52,6 +56,16 @@ struct ShaderPackParam {
     std::string key;
     LocalizedText label;          // "label": string or localized object; empty -> key
     float def = 0.0f, min = 0.0f, max = 1.0f;
+};
+
+// A pack.json "textures" entry: an extra texture the pack's shading samples (light maps, ramps,
+// face SDFs, matcaps, LUTs). `file` is relative to the pack folder (png/jpg/jpeg). Address mode and
+// the sampled space: sRGB textures (default) get an _SRGB SRV and sample as LINEAR values, others
+// are UNORM (raw values; data maps).
+struct PackTexture {
+    std::string file;    // required, relative to the pack, no "..", no drive / root
+    bool clamp = false;  // "address": "clamp" (else "wrap")
+    bool srgb = true;    // "srgb"
 };
 
 enum class PackSource : uint8_t { BuiltIn, User, Online };
@@ -85,16 +99,20 @@ struct ShaderPack {
     // shading
     struct Rule {
         PackClass cls = PackClass::Body;
-        std::vector<std::string> match;   // UTF-8 substrings of the PMX material name (or its English name)
+        std::vector<std::string> match;     // UTF-8 substrings of the PMX material name (or its English name)
+        std::vector<std::string> texture;   // "texture": UTF-8 substrings of the material's diffuse texture path
     };
     std::vector<Rule> rules;              // first match wins; no match: Body
     std::vector<ShaderPackParam> params;  // at most kPackMaxParams
+    std::vector<PackTexture> textures;    // at most kPackMaxTextures; optional extra textures (PackSampleTex)
+    bool hasEdge = false;                 // surface.hlsl sets PACK_HAS_EDGE: the pack draws the outlines too (PackEdge)
     // state
     PackStatus status = PackStatus::Ready;
     std::string statusMessage;            // English, for the log / the pack details (compiler output may be long)
 
     bool Selectable() const { return status == PackStatus::Ready || status == PackStatus::Compiled; }
-    PackClass Classify(const std::string& name, const std::string& nameEn) const;
+    // `texture` = the material's diffuse texture path as stored in the PMX (empty without one).
+    PackClass Classify(const std::string& name, const std::string& nameEn, const std::string& texture) const;
     // Parameter values in manifest order: `values` (key -> value) over the defaults, clamped to the ranges.
     PackParamValues Resolve(const std::map<std::string, float>& values) const;
 };
@@ -142,11 +160,25 @@ public:
     bool CreateFromTemplate(const std::string& id, const std::string& name, const std::string& author,
                             std::filesystem::path& dir, std::string& error);
 
+    // Per-pack user texture folder: game textures that can't be redistributed live outside the pack. Set from the
+    // shader manager screen and saved in the ini (AppSettings::packTextureFolders); empty `dir` = clear. Changing it
+    // bumps Generation(), so the pack's textures reload on the next draw. Used from the renderer.
+    void SetTextureFolder(const std::string& id, const std::filesystem::path& dir);
+    std::filesystem::path TextureFolder(const std::string& id) const;
+    // Missing-texture count per (pack id, texture folder) set: ScenePass reports how many of the pack's textures
+    // were missing on the last load of that set (white is used); the manager keeps showing the pack-level folder's
+    // count. Survives Scan().
+    void ReportMissingTextures(const std::string& id, const std::filesystem::path& folder, uint32_t missing);
+    uint32_t MissingTextures(const std::string& id, const std::filesystem::path& folder) const;
+
 private:
     std::vector<ShaderPack> packs_;
     uint32_t generation_ = 0;
     uint32_t errorCount_ = 0;
     std::string lastErrorPack_;
+    std::map<std::string, std::filesystem::path> textureFolders_;   // pack id -> user texture folder
+    std::map<std::string, uint32_t> missingTexById_;                // pack id -> missing texture count (last load)
+    std::map<std::string, uint32_t> missingTexBySet_;               // pack id + "\n" + folder -> count per set
     // PollChanges / status carry-over state (implementation detail)
     double nextPoll_ = 0;
     uint64_t stamp_ = 0;
