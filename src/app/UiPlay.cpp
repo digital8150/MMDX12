@@ -294,7 +294,9 @@ void App::DrawPlayOverlay() {
     }
 
     // right cluster: volume icon + slider, offline still, camera, lighting, divider, exit
-    const float rightW = Dp(36.0f + 4.0f + 88.0f + 12.0f + 44.0f + 44.0f + 44.0f + 50.0f + 11.0f + 40.0f + 16.0f);
+    // (volume, still, camera, light, [size], [shader], effects, divider, exit)
+    const int optionalButtons = s->characterId.empty() ? 1 : 3;   // size + shader only with a character; effects always
+    const float rightW = Dp(36.0f + 4.0f + 88.0f + 12.0f + 44.0f + 44.0f + 50.0f + 44.0f * optionalButtons + 11.0f + 40.0f + 16.0f);
     const float seekW = std::max(Dp(120.0f), bb.x - rightW - x - Dp(20.0f));
     ImGui::SetCursorScreenPos(ImVec2(x, cy - Dp(14.0f)));
     double t = playTime_;
