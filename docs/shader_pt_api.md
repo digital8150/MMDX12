@@ -53,7 +53,7 @@ PtPackOut PackEvaluate(PtPackIn i);
   where `terminator` is the engine's smoothstep shape shifted by `shadowBias`, and `flatFace` reuses the engine's `s.flat` path.
 - **Diffuse bounces (`diffuseChain`)**: Uses `PtPackOut.albedo` as the surface albedo. Toon terms do not run on GI gather rays.
 - **Cache prepass**: The irradiance cache prepass keeps default albedo.
-- **Denoiser note**: In real-time path tracing, the pack's stylized direct light goes through the same temporal / a-trous filtering as the default toon light (`radiance / a` demodulation, temporal accumulation, a-trous filter, modulation). Hard-edged cel steps will soften; a later phase may split them out.
+- **Denoiser note**: In real-time path tracing, the pack's stylized direct light goes through the same temporal / a-trous filtering as the default toon light (`radiance / a` demodulation, temporal accumulation, a-trous filter, modulation). A test pack with a hard `step()` highlight band kept crisp edges in a still capture, but fast motion was not checked; a later phase may split the stylized term out of the denoiser if ghosting shows up.
 
 ## Verification & tooling
 
