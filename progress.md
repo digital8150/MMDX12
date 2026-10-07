@@ -761,3 +761,60 @@ finished by Claude.
 ### Not verified / notes
 - A stale `build/bin/shaders/packs/<effect>` copy is not removed by `copy_shaders` (deleted by hand): a dev build dir keeps old built-ins.
 - The in-app online install of an effect pack was not clicked through (zip extraction path only).
+
+## 2026-10-08 — shader packs in path tracing / offline GI, Nimble Toon, per-pack settings memory, release 1.5.0
+
+Request: find out why custom shader packs do not work in PT / offline GI; then (the real goal) leave the door open for PT / GI specific
+shaders and modding; build a real pack ("nimble_toon") for the official Eternal Return MMD models for raster, RT, PT and GI; refresh the
+stale "PT / GI use the default shading" label (4 languages); remember a pack's texture folder when switching packs; release and deploy,
+with nimble_toon online-gallery only. Workers: Antigravity (agy, Gemini) for the investigation and three implementation phases, each
+reviewed by Claude (smoke); Claude wrote nimble_toon, the contract v2, the memory feature, labels, docs, release.
+
+### Done
+- Why packs did not run in PT / GI: raster packs are per-model graphics PSOs (`PSPack`); `CSPathTrace` / `CSRender` are single compute
+  shaders with inline ray queries, `RtGeometry` had no pack data, no `space5` table, `Sample` needs quad derivatives, `PackShade`
+  returns a lit colour (not a BSDF). `ScenePass::Execute` returns early in PT.
+- New contract (docs/shader_pt_api.md): optional `pt_surface.hlsl` next to `surface.hlsl`, `PtPackOut PackEvaluate(PtPackIn)`; the
+  integrator keeps the light transport. Phase 1 offline GI, phase 2 real-time PT, phase 3 pack textures (`render/PackTextures.*`,
+  `PtPackSampleTex*`). One compiled variant per pack via the `MMDX_PT_PACK` include define (`render/PtPackVariants.*`, no callable
+  shaders in cs_6_5). `RtGeometry::_pad` = `packSrv` (size kept), records read through `gBindlessBuf`; camera / specular chain uses the
+  pack's direct term, diffuse bounces use `albedo` only. Contract v2 (this session): `PtPackIn::headPos/headScale`, `PtPackOut::terminator`
+  (N.L ramp edges); `pack_check` warns on unassigned `PtPackOut` fields.
+- Shader cache key now covers the pack folder for `MMDX_PT_PACK` too (editing `pt_surface.hlsl` used to hit a stale cache).
+- `nimble_toon` 1.0.0 (website repo `shader-packs/`, not built in): `surface.hlsl` (PackShade + PackEdge), `pt_surface.hlsl`,
+  `nimble_core.hlsli` shared by both. Soft low-contrast cel ramp, coloured shadows (cool cloth / warm skin), lifted blue shadow floor for
+  dark materials, skull-sphere face normals, soft hair gloss, three-band metal sheen, wide environment rim, tinted outlines. The ER
+  textures are flat painted colour (no light maps), so all form is procedural.
+- `ShaderChoice::SwitchPack` + `remembered` (per character, per studio model): switching packs or the default shading keeps each pack's
+  params and texture folder. ini `characterShaderMemo=`, project JSON `shader.remembered`. New `tools/shader_choice_test` (13 checks).
+- Labels: the shader picker says which render paths the pack covers (`hasPtSurface`), the manager detail lists the supported paths; en /
+  ja / zh tables updated; website docs overview fixed and a new "PT / GI Packs" page in ko / en / ja / zh (`src/data/docs.ts` slug list).
+- Release 1.5.0: GitHub release v1.5.0 (cover image `docs/media/nimble-1.5.0.jpg`, notes in 4 languages, asset SHA-256 = local zip),
+  website deployed (latest.json -> 1.5.0, gallery index has nimble_toon 1.0.0 `minAppVersion` 1.5.0, zip SHA-256 checked live, docs and
+  pack pages 200 in all four languages), the packaged exe's online gallery lists the six packs.
+
+### Verified
+- Packless DXIL of `CSPathTrace` / `CSRender` is byte-identical to the previous commit after every phase (dxc, same flags).
+- Offline GI stills with and without a pack are byte-identical to the previous build (deterministic); a red-albedo test pack turns the
+  character red in offline GI and in PT; head frame axes checked with a diagnostic pack; checker texture visible in both paths, a missing
+  texture samples white; a hard `step()` highlight band stays crisp through the PT denoiser in a still.
+- `pack_check --compile` on the released nimble zip (raster, offline GI, PT variants) with the packaged exe; studio tests pass.
+- Packaged exe: version 1.5.0, hoyo_toon raster, nimble_toon raster / PT / offline GI, no `[E]`.
+- The settings-memory flow clicked through in the lobby (nimble -> hoyo_toon_v2 restored the folder and the changed slider).
+
+### Not verified / notes
+- Real-time PT and raster captures are not deterministic (playback clock), so only DXIL identity covers "packless PT unchanged"; the
+  `ScenePass` texture-loading move (now `PackTextures::Upload`) was reviewed, not diffed by pixels. RT camera view of nimble_toon not rendered.
+- Head frame in the offline renderer was not checked by a render (same `RtScene::Build` code as PT). PT denoiser vs fast motion not tested.
+- Offline GI still draws the app's default outlines (no `PSEdgePack`); PT / GI pack textures are a second GPU copy next to ScenePass's.
+- The online gallery cards do not show PT / GI support (the index has no such field).
+- Magnus / Vanya were only seen in cuts that frame the body or the top of the head; faces not compared with the official renders side by side.
+- `pack_check <relative zip>` fails ("tar.exe failed"), absolute paths work (pre-existing, not fixed in 1.5.0).
+- Pitfalls: headless runs need `--autoplay` or the app waits in the lobby (this looked like a hang twice); deleting `CMakeCache.txt` of a
+  dev build dir breaks `build.cmd` (it only re-configures when `build.ninja` is missing); `pack_check` run from Git Bash picks GNU tar for
+  zips; python heredocs with quotes broke several shell commands (write files with the Write tool instead); the website's docs order comes
+  from `src/data/docs.ts`, not the frontmatter `order`.
+
+### Next
+- `PSEdgePack` in the offline renderer, PT / GI badge in the gallery index, a faster-motion check of the PT denoiser with hard cel edges,
+  side-by-side comparison of nimble_toon with the official renders on all four models, fix `pack_check` for relative zip paths.
