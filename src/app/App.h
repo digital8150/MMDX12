@@ -126,6 +126,8 @@ struct AppOptions {
     std::string shaderPack;    // --shader-pack <id|none>: the character's shader pack for this run (play and studio)
     bool shaderPackSet = false;
     std::string packIndex;     // --pack-index <url|path>: the online shader pack gallery index (testing)
+    std::vector<EffectStackEntry> effectStack;  // --effect <id>[,<id>...] / none: the effect stack, this run
+    bool effectSet = false;
     int dof = -1, volumetric = -1, bloomConv = -1;  // --dof/--volumetric/--bloom-conv <0|1>: override for this run
     int motionLighting = -1;   // --motion-lighting <0|1>: camera VMD light/self-shadow tracks in play mode, this run
     float volumetricDensity = -1.0f;                 // --volumetric-density (< 0 = settings)
@@ -151,6 +153,10 @@ AppOptions ParseCommandLine(int argc, wchar_t** argv);  // unknown args are logg
 // Folder picker for a pack's user texture folder (FOS_PICKFOLDERS): runs on its own STA thread,
 // keeping the owner's messages pumped. Defined in UiShaderPack.cpp, also used by UiShaders.cpp.
 std::filesystem::path PickPackTextureFolder(HWND owner);
+
+// Popup width for the pack parameter grid (columns from the pack's param count), clamped to the viewport.
+// Defined in UiShaderPack.cpp, also used by UiPlay.cpp.
+float PackParamsPopupWidth(const ShaderChoice& choice);
 
 class App {
 public:
@@ -297,6 +303,9 @@ private:
     static void ApplyLightShadowTracks(const std::vector<studio::LightKf>& light,
                                        const std::vector<studio::ShadowKf>& shadow, float frame, FrameView& view);  // light / self-shadow tracks -> the frame's light and shadows
     studio::LightKf StudioCurrentLight() const;      // the key light in effect now (track or preset)
+    void DrawStudioLightSourceSection(float w, bool compact);  // the source chips + preset / rig controls
+    void StudioBeginRigEdit();                      // light-rig fields: one undo step per drag (spot list snapshot)
+    void StudioEndRigEdit(const char* undoName);     // pushes the spot-list edit when the values changed
     void StudioKeyCameraFromView();                  // camera key at the current frame from the view being shown
     // The part of the viewport the 3D image fills: the whole rect, or its 16:9 fit when the motion camera is the view.
     void StudioRenderRect(float x0, float y0, float x1, float y1, float out[4]) const;
@@ -492,12 +501,15 @@ private:
     void DrawNewPackDialog();
     void InstallPackPath(const std::filesystem::path& path);             // .zip or a pack folder (drop / dialog)
     void PollShaderPacks();                                              // every frame: hot reload, store, drops
+    // The effect stack editor (UiShaders.cpp): add / remove / reorder (up/down) / enable + per-effect
+    // sliders. Edits `stack` in place; true = changed. `widths` = the content width for layout.
+    bool DrawEffectStackEditor(std::vector<EffectStackEntry>& stack);
     bool shaderParamsOpen_ = false;                                      // select screen: pack settings disclosure
     ShaderPackStore shaderStore_;
     int shaderTab_ = 0;                                                  // 0 installed, 1 online
     char shaderFilter_[128] = {};
     std::string shaderSelInstalled_, shaderSelRemote_;
-    bool newPackOpen_ = false;
+    bool newPackOpen_ = false, newPackEffect_ = false;
     char newPackId_[64] = {}, newPackName_[96] = {}, newPackAuthor_[96] = {};
     std::vector<std::filesystem::path> droppedFiles_;
     void DrawStudioShaderRow(float w);                                   // inspector: the selected character's pack
@@ -696,6 +708,9 @@ private:
     bool studioKeyChanged_ = false;                  // ... and its value changed (else no undo step)
     bool studioKeyLive_ = false;                     // ... through the playhead fields (independent of the key selection)
     std::vector<studio::TrackState> studioKeyBefore_;
+    int studioLightSpot_ = -1;                       // the light rig's selected spot (camera panel, Custom mode)
+    bool studioRigEdit_ = false;                     // a light-rig field is being dragged (one undo step per edit)
+    std::vector<studio::SpotLight> studioRigBefore_;
     std::vector<studio::CameraPathPoint> studioCamPath_;  // motion camera samples (per frame, strided when long)
     std::vector<DirectX::XMFLOAT3> studioCamKeys_;   // eye at each camera key
     uint64_t studioCamPathVersion_ = 0;

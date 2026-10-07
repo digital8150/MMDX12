@@ -147,7 +147,10 @@ bool Renderer::Initialize(Dx12Context& ctx, const std::filesystem::path& shaderD
     passes_.push_back(std::make_unique<UpscalePass>());
     passes_.push_back(std::make_unique<DofPass>());
     passes_.push_back(std::make_unique<BloomPass>());
+    // "pre-bloom" effect packs: linear HDR, before Bloom. The "post" share runs after PostPass (below).
+    passes_.push_back(std::make_unique<PackEffectPass>(true));
     passes_.push_back(std::make_unique<PostPass>());
+    passes_.push_back(std::make_unique<PackEffectPass>(false));
     passes_.push_back(std::make_unique<BackdropPass>());
     passes_.push_back(std::make_unique<PresentPass>());
 
@@ -468,6 +471,9 @@ void Renderer::RecordScene(ID3D12GraphicsCommandList* cmd, const FrameView& view
         frameSettings.volumetric = false;
         frameSettings.bloom = false;
     }
+    // Wireframe / unlit (and quad views) skip the effect packs: flat frames have nothing for them to read
+    // (RunStack checks the same conditions per frame; this also skips their target allocation).
+    if (nonLit || quad) frameSettings.packEffects.clear();
 
     stats_.drawCalls = 0;
     stats_.triangles = 0;

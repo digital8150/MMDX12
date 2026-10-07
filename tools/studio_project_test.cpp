@@ -159,6 +159,40 @@ static void TestRoundTrip() {
     data.editor.camDistance = 30.0f;
     data.editor.camFovDeg = 40.0f;
     data.editor.useLightTrack = false;
+    // the studio's lighting source + spot rig
+    data.editor.lighting.source = LightSource::Custom;
+    data.editor.lighting.presetIndex = 2;  // Concert
+    data.editor.lighting.key.enabled = true;
+    data.editor.lighting.key.direction = {0.2f, -0.9f, 0.4f};
+    data.editor.lighting.key.color = {1.0f, 0.85f, 0.7f};
+    data.editor.lighting.key.intensity = 1.2f;
+    data.editor.lighting.key.rimStrength = 0.5f;
+    {
+        SpotLight s;
+        s.name = "스팟 1";
+        s.mode = 3;  // manual aim
+        s.position = {10.0f, 40.0f, -12.0f};
+        s.aim = {2.0f, 0.0f, 0.0f};
+        s.color = {0.22f, 0.77f, 0.73f};
+        s.intensity = 2.6f;
+        s.coneOuter = 0.30f;
+        s.enabled = true;
+        s.swingPhase = 1.3f;
+        s.keys = {SpotKf{0, {10.0f, 40.0f, -12.0f}, {2.0f, 0.0f, 0.0f}, 2.6f, 0.30f, {0.22f, 0.77f, 0.73f}},
+                  SpotKf{30, {6.0f, 38.0f, -8.0f}, {-2.0f, 2.0f, 1.0f}, 3.2f, 0.24f, {0.95f, 0.35f, 0.62f}}};
+        data.editor.lighting.spots.push_back(s);
+        SpotLight s2;
+        s2.name = "스팟 2";
+        s2.mode = 1;  // follow the centre
+        s2.position = {-8.0f, 40.0f, -12.0f};
+        s2.aim = {-6.0f, 0.0f, 0.0f};
+        s2.color = {0.95f, 0.35f, 0.62f};
+        s2.intensity = 2.0f;
+        s2.coneOuter = 0.24f;
+        s2.enabled = false;  // disabled spot round-trips too
+        data.editor.lighting.spots.push_back(s2);
+    }
+    data.editor.lighting.frontFill = true;
 
     std::string err;
     Check(SaveProject(projFile, data, &err), "SaveProject round trip", "%s", err.c_str());
@@ -253,6 +287,110 @@ static void TestRoundTrip() {
               ed.camFovDeg == 40.0f && !ed.useLightTrack && ed.useMotionCamera && ed.useShadowTrack &&
               ed.showCameraPath && ed.physics && Vec3Eq(ed.camTarget, {1, 2, 3}, 0),
           "editor state kept");
+    // ---- the light rig (source, preset, key override, spots, front fill) ----
+    Check(ed.lighting.source == LightSource::Custom && ed.lighting.presetIndex == 2 && ed.lighting.frontFill,
+          "lighting source / preset / frontFill kept");
+    Check(ed.lighting.key.enabled && Vec3Eq(ed.lighting.key.direction, {0.2f, -0.9f, 0.4f}, 0) &&
+              Vec3Eq(ed.lighting.key.color, {1.0f, 0.85f, 0.7f}, 0) && ed.lighting.key.intensity == 1.2f &&
+              ed.lighting.key.rimStrength == 0.5f,
+          "key override kept");
+    Check(ed.lighting.spots.size() == 2, "spot count kept", "size=%zu", ed.lighting.spots.size());
+    if (ed.lighting.spots.size() == 2) {
+        const SpotLight& a = data.editor.lighting.spots[0];
+        const SpotLight& b = loaded.editor.lighting.spots[0];
+        Check(b.name == a.name && b.mode == 3 && b.enabled && std::fabs(b.swingPhase - 1.3f) < 1e-6,
+              "spot 0 name / mode / enabled / phase kept");
+        Check(Vec3Eq(b.position, a.position, 0) && Vec3Eq(b.aim, a.aim, 0) && Vec3Eq(b.color, a.color, 0) &&
+                  b.intensity == a.intensity && std::fabs(b.coneOuter - 0.30f) < 1e-6,
+              "spot 0 values kept");
+        Check(b.keys.size() == 2 && b.keys[0].frame == 0 && b.keys[1].frame == 30 &&
+                  Vec3Eq(b.keys[1].position, a.keys[1].position, 0) && Vec3Eq(b.keys[1].aim, a.keys[1].aim, 0) &&
+                  b.keys[1].intensity == 3.2f && std::fabs(b.keys[1].coneOuter - 0.24f) < 1e-6 &&
+                  Vec3Eq(b.keys[1].color, a.keys[1].color, 0),
+              "spot 0 keys kept");
+        // keyed sample: halfway between the keys
+        const SpotKf mid = SampleSpotKeys(b, 15);
+        Check(std::fabs(mid.intensity - 2.9f) < 1e-4 && Vec3Eq(mid.position, {8.0f, 39.0f, -10.0f}, 1e-4),
+              "spot keys interpolate linearly");
+        const SpotLight& s2 = loaded.editor.lighting.spots[1];
+        Check(s2.name == "스팟 2" && s2.mode == 1 && !s2.enabled && s2.keys.empty(),
+              "spot 1 (disabled, keyless, mode 1) kept");
+    }
+    Check(data.editor.lighting == loaded.editor.lighting, "light rig round-trips exactly");
+}
+
+// A legacy v1 project without the "lighting" object: useLightTrack true + keys -> VmdTrack,
+// useLightTrack true without a camera VMD light track -> Preset, false -> Preset.
+static void TestLegacyLightMigration() {
+    const std::filesystem::path projDir = kTemp / "legacy";
+    std::filesystem::create_directories(projDir);
+    const std::filesystem::path projFile = projDir / "scene.mmdxproj";
+    std::string err;
+    std::vector<std::string> warnings;
+
+    // a minimal v1 project with an editor block; camera VMD referenced when it has light keys
+    const auto writeV1 = [&](const char* editor) {
+        std::ofstream f(projFile, std::ios::binary);
+        f << "{\"format\":\"mmdx12-studio-project\",\"version\":1,\"models\":[],\"camera\":null,"
+             "\"audio\":null,\"editor\":" << editor << "}";
+    };
+
+    // (a) useLightTrack: true but no camera VMD (no light keys) -> Preset (the brief's migration rule)
+    {
+        writeV1("{\"frame\":0,\"useLightTrack\":true}");
+        ProjectData loaded;
+        Check(LoadProject(projFile, loaded, &err, &warnings), "legacy (a): LoadProject", "%s", err.c_str());
+        Check(loaded.editor.lighting.source == LightSource::Preset && !loaded.editor.useLightTrack,
+              "legacy true without light keys -> Preset");
+    }
+    // (b) useLightTrack: false -> Preset
+    {
+        writeV1("{\"frame\":0,\"useLightTrack\":false}");
+        ProjectData loaded;
+        Check(LoadProject(projFile, loaded, &err, &warnings), "legacy (b): LoadProject", "%s", err.c_str());
+        Check(loaded.editor.lighting.source == LightSource::Preset && !loaded.editor.useLightTrack,
+              "legacy false -> Preset");
+    }
+    // (b) useLightTrack: true and a camera VMD that carries a light key -> VmdTrack
+    {
+        // a camera VMD with one non-default light key (SaveVmd -> the project references it)
+        ProjectData data;
+        LightKf l;
+        l.frame = 0;
+        l.color = {0.7f, 0.8f, 0.9f};
+        l.direction = {0.1f, -1.0f, 0.2f};
+        data.camera.light = {l};
+        writeV1("{\"frame\":0,\"useLightTrack\":true}");
+        // append the "camera" reference to the v1 JSON by rewriting it with the camera file present
+        VmdMotion cam = data.camera.ToVmd();
+        cam.modelName = "\xE3\x82\xAB\xE3\x83\xA1\xE3\x83\xA9\xE3\x83\xBB\xE7\x85\xA7\xE6\x98\x8E";
+        SaveVmd(projDir / "scene - camera.vmd", cam);
+        {
+            std::ofstream f(projFile, std::ios::binary);
+            f << "{\"format\":\"mmdx12-studio-project\",\"version\":1,\"models\":[],"
+                 "\"camera\":\"scene - camera.vmd\",\"audio\":null,\"editor\":{\"frame\":0,\"useLightTrack\":true}}";
+        }
+        ProjectData loaded;
+        Check(LoadProject(projFile, loaded, &err, &warnings), "legacy (b2): LoadProject", "%s", err.c_str());
+        Check(loaded.editor.lighting.source == LightSource::VmdTrack && loaded.editor.useLightTrack,
+              "legacy true with light keys -> VmdTrack");
+        Check(!loaded.camera.light.empty(), "legacy (b2): light track loaded");
+    }
+    // (c) an editor without any light field: the default VmdTrack stays
+    {
+        writeV1("{\"frame\":3}");
+        ProjectData loaded;
+        Check(LoadProject(projFile, loaded, &err, &warnings), "legacy (c): LoadProject", "%s", err.c_str());
+        Check(loaded.editor.lighting.source == LightSource::VmdTrack, "legacy plain project -> VmdTrack default");
+    }
+    // (d) a broken "lighting" source string keeps the default
+    {
+        writeV1("{\"frame\":0,\"lighting\":{\"source\":\"alien\",\"spots\":[]}}");
+        ProjectData loaded;
+        Check(LoadProject(projFile, loaded, &err, &warnings), "legacy (d): LoadProject", "%s", err.c_str());
+        Check(loaded.editor.lighting.source == LightSource::VmdTrack && loaded.editor.lighting.spots.empty(),
+              "broken lighting source keeps the default");
+    }
 }
 
 static void TestDuplicateNamesAndCleanup() {
@@ -413,6 +551,7 @@ int main() {
     std::filesystem::create_directories(kTemp, ec);
 
     TestRoundTrip();
+    TestLegacyLightMigration();
     TestDuplicateNamesAndCleanup();
     TestMissingAndBad();
     TestUnknownKindRemap();

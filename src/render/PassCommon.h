@@ -2,8 +2,11 @@
 // Small helpers shared by the pass implementations (Passes.cpp, Pass*.cpp). Internal to render/.
 #include "render/RenderPass.h"
 #include <algorithm>
+#include <filesystem>
+#include <string>
 
 namespace mmdx {
+
 
 inline constexpr D3D12_RESOURCE_STATES kSrv = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
 inline constexpr D3D12_RESOURCE_STATES kRt = D3D12_RESOURCE_STATE_RENDER_TARGET;

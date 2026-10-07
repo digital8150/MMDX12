@@ -1,10 +1,13 @@
 #pragma once
-// Shader packs: opt-in, per-model replacements of the scene pass's material shading, made by anyone.
-// A pack is a folder with pack.json (manifest: metadata, material class rules, parameters), surface.hlsl (PackShade, the
-// contract in shaders/pack_api.hlsli, versioned by kPackApiVersion) and an optional preview.png.
+// Shader packs: opt-in, per-model replacements of the scene pass's material shading ("type": "surface", default) or
+// whole-screen post effects ("type": "effect", one entry of the user's effect stack), made by anyone.
+// A pack is a folder with pack.json (manifest: metadata, material class rules / injection stage, parameters),
+// surface.hlsl (PackShade) or effect.hlsl (PackEffect, the contracts in pack_api.hlsli / effect_api.hlsli, versioned
+// by kPackApiVersion) and an optional preview.png.
 //   built-in   <exe>/shaders/packs/<id>      shipped with the app, read-only
 //   installed  <exe>/shader_packs/<id>       user / downloaded packs (online installs carry .mmdx_install.json)
-// The renderer compiles a pack's PSOs on first use (ScenePass); a model opts in with GpuModel::SetShaderPack.
+// The renderer compiles a surface pack's PSOs on first use (ScenePass) and an effect pack's PSO on first frame
+// (PackEffectPass); a model opts in with GpuModel::SetShaderPack, the effect stack is RenderSettings::packEffects.
 // The registry is used from the main thread only.
 #include <array>
 #include <cstdint>
@@ -15,13 +18,31 @@
 
 namespace mmdx {
 
-// The PackShade contract version (pack_api.hlsli PACK_API_VERSION). A pack declares the version it was written for;
-// packs with a higher version are listed as incompatible and never compiled.
-inline constexpr int kPackApiVersion = 2;
+// The PackShade / PackEffect contract version (pack_api.hlsli / effect_api.hlsli PACK_API_VERSION). A pack declares
+// the version it was written for; packs with a higher version are listed as incompatible and never compiled.
+inline constexpr int kPackApiVersion = 3;
 inline constexpr uint32_t kPackMaxParams = 16;
 inline constexpr uint32_t kPackMaxTextures = 16;   // pack.json "textures" entries (one SRV each)
 inline constexpr uint32_t kPackMaxTextureSize = 4096;   // per-texture width / height cap
 using PackParamValues = std::array<float, kPackMaxParams>;
+
+// What a pack does: replace the character material shading (surface.hlsl, default; every v1/v2 pack) or a whole-screen
+// effect (effect.hlsl, PackEffect in effect_api.hlsli, one entry of the user's effect stack).
+enum class PackType : uint8_t { Surface = 0, Effect };
+// Where an effect pack injects ("stage"): "pre-bloom" (linear HDR before BloomPass) or "post" (default; after
+// PostPass / tonemap, display-referred sRGB into the LDR target).
+enum class PackEffectStage : uint8_t { Post = 0, PreBloom };
+
+// One entry of the user's effect stack: an effect pack, whether it runs, its parameter values (key -> value, the
+// rest use the pack defaults) and an optional texture folder (empty = the pack-level folder). Carried by
+// RenderSettings::packEffects, persisted as AppSettings::effectStack (ini) and edited in the shader screens.
+struct EffectStackEntry {
+    std::string pack;
+    bool enabled = true;
+    std::map<std::string, float> params;
+    std::string textureFolder;
+    bool operator==(const EffectStackEntry&) const = default;
+};
 
 // Material classes, as the PACK_* ids in pack_api.hlsli.
 enum class PackClass : uint32_t { Body = 0, Skin = 1, Face = 2, Eye = 3, Hair = 4, Weapon = 5 };
@@ -96,6 +117,9 @@ struct ShaderPack {
     std::filesystem::path dir;          // holds pack.json and surface.hlsl
     PackSource source = PackSource::User;
     std::string installedFrom;          // online installs: the index URL they came from (.mmdx_install.json)
+    // "type": "surface" (default; material shading) or "effect" (PackEffect; pack.json "stage" = pre-bloom / post)
+    PackType type = PackType::Surface;
+    PackEffectStage stage = PackEffectStage::Post;   // effect packs only
     // shading
     struct Rule {
         PackClass cls = PackClass::Body;
@@ -120,6 +144,13 @@ struct ShaderPack {
 // Parses a manifest. `dir` is the pack folder (for preview / surface checks). Never throws. On failure returns false
 // with `error` set, and `out` still holds whatever could be read (at least id from the folder name) so the UI can list it.
 bool ParseShaderPackManifest(const std::string& json, const std::filesystem::path& dir, ShaderPack& out, std::string& error);
+
+// pack.json "textures" lookup: the user texture folder first (same relative path, then the same file
+// name, then a file whose name ends with "_" + the declared name, case-insensitive, shortest wins),
+// then the pack folder (exact path). False = missing (white is used). Used from the scene pass and
+// the effect pass (Passes.cpp, shared helper).
+bool ResolvePackTextureFile(const ShaderPack& pack, const std::string& file, const std::filesystem::path& userFolder,
+                            std::filesystem::path& out);
 
 class ShaderPackRegistry {
 public:
@@ -155,10 +186,10 @@ public:
     bool InstallZip(const std::filesystem::path& zip, const std::string& installedFrom, std::string& id, std::string& error);
     // Deletes an installed (User / Online) pack's folder. Built-in packs cannot be removed. Rescans.
     bool Uninstall(const std::string& id, std::string& error);
-    // New pack for authors: copies <exe>/shaders/pack_template into UserRoot()/<id> and sets its id / name / author
+    // New pack for authors: copies <exe>/shaders/pack_template (effect: pack_template_effect) into UserRoot()/<id> and sets its id / name / author
     // in pack.json. `id` must be valid and unused. Rescans. Returns the new folder.
     bool CreateFromTemplate(const std::string& id, const std::string& name, const std::string& author,
-                            std::filesystem::path& dir, std::string& error);
+                            std::filesystem::path& dir, std::string& error, bool effect = false);
 
     // Per-pack user texture folder: game textures that can't be redistributed live outside the pack. Set from the
     // shader manager screen and saved in the ini (AppSettings::packTextureFolders); empty `dir` = clear. Changing it

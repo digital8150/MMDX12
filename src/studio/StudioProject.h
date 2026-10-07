@@ -6,6 +6,7 @@
 // target, so a crash mid-save never leaves a half-written project.
 // Independent of the App and the renderer (unit-tested by tools/studio_project_test.cpp).
 #include "render/ShaderPack.h"
+#include "studio/LightRig.h"
 #include "studio/StudioMotion.h"
 #include <DirectXMath.h>
 #include <cstdint>
@@ -58,7 +59,10 @@ struct ProjectModel {
 struct ProjectEditor {
     int frame = 0;
     int selectedModel = -1;            // index into models, -1 = camera
-    bool useMotionCamera = true, useLightTrack = true, useShadowTrack = true, showCameraPath = true;
+    bool useMotionCamera = true, useShadowTrack = true, showCameraPath = true;
+    // legacy light setting (v1 projects); migrated by LoadProject into `lighting` (see below)
+    bool useLightTrack = true;
+    LightRig lighting;                 // the studio's lighting source + spot rig ("lighting", absent: from useLightTrack)
     bool loop = false, physics = true;
     int rangeStart = -1, rangeEnd = -1;
     float pxPerFrame = 6.0f;

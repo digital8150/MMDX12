@@ -30,6 +30,7 @@
 namespace mmdx {
 
 struct ShaderPack;
+class EffectPipeline;   // PassEffect.cpp: one effect pack's pipeline (root signature + PSO)
 
 // Spot shadow maps are rendered (and sampled by the scene / volumetric shaders) when shadows are on
 // and something reads them: the raster and RT scene shaders, or the volumetric march.
@@ -266,6 +267,53 @@ public:
 
 private:
     FullscreenPipeline pipe_;
+};
+
+// The shader packs' whole-screen effects (render/ShaderPack.h, pack.json "type": "effect"): the ordered stack of
+// enabled entries from RenderSettings::packEffects at output resolution with ping-pong targets. Two instances
+// live in the pass list: preBloom_ = true, before Bloom (its entries are the packs with "stage": "pre-bloom",
+// linear HDR, RGBA16F ping-pong), and preBloom_ = false, after Post (the rest, display-referred sRGB into
+// targets.ldr, RGBA8 ping-pong). Each entry's PSO is compiled lazily (effect.hlsl + the pack's effect.hlsl
+// through MMDX_PACK, DXC ps_6_0 like the surface packs); a compile error marks the pack failed, the entry is
+// skipped ([E] + toast). Zero enabled entries: nothing allocates, nothing runs (byte-identical frame).
+class PackEffectPass final : public IRenderPass {
+public:
+    explicit PackEffectPass(bool preBloom);
+    ~PackEffectPass() override;
+    const char* Name() const override { return preBloom_ ? "PackEffect(pre)" : "PackEffect(post)"; }
+    bool CreatePipelines(Dx12Context& ctx, const std::filesystem::path& shaderDir, uint32_t msaa) override;
+    void OnResize(Dx12Context& ctx, RenderTargets& targets) override;
+    void ReleaseTargets(Dx12Context& ctx) override;
+    void Execute(PassContext& pc) override;
+
+private:
+    // Per-entry GPU state, keyed by pack id: its PSO plus one texture set per resolved folder (pack.json
+    // "textures", the v2 API; the white fallback is kept alive with the SRVs).
+    struct EffectPipelines {
+        std::unique_ptr<EffectPipeline> pipe;   // null until first use / after a reload
+        bool failed = false;
+        bool texLoaded = false;
+        uint32_t texSrv = DescriptorHeap::kInvalid;   // kPackMaxTextures consecutive SRVs in ctx.SrvHeap()
+        ComPtr<ID3D12Resource> white;
+        std::vector<ComPtr<ID3D12Resource>> tex;
+    };
+    // `preBloom` = compile / return only the packs whose manifest stage matches this instance's share.
+    const EffectPipelines* Pipelines(Dx12Context& ctx, const std::string& id, const std::filesystem::path& folder,
+                                     bool preBloom);
+    bool EnsurePackTextures(Dx12Context& ctx, const ShaderPack& pack, EffectPipelines& p,
+                            const std::filesystem::path& folder);
+    void ReleasePackPsos(Dx12Context& ctx);   // waits for the GPU, frees the pack texture SRVs and PSOs
+    void RunStack(PassContext& pc, bool preBloom);
+
+    bool AllocTargets(Dx12Context& ctx, uint32_t w, uint32_t h);
+    bool AllocPostTargets(Dx12Context& ctx, uint32_t w, uint32_t h);
+
+    bool preBloom_;           // this instance's share: pre-bloom (HDR) or post (LDR) entries
+    Texture ping_[2];         // RGBA16F ping-pong, outWidth x outHeight (pre-bloom share)
+    Texture post_[2];         // RGBA8 ping-pong, outWidth x outHeight (post share)
+    uint32_t generation_ = 0;
+    std::filesystem::path shaderDir_;
+    std::map<std::string, EffectPipelines> psos_;
 };
 
 class BackdropPass final : public IRenderPass {

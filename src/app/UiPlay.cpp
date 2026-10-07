@@ -403,7 +403,10 @@ void App::DrawPlayOverlay() {
         if (IconButton("##shader", icon::Diamond, Tr("셰이더"), !PlayShaderChoice().pack.empty(), 40.0f))
             ImGui::OpenPopup("##shaderpopup");
         ImGui::SetNextWindowPos(ImVec2(btn.x + Dp(20.0f), btn.y - Dp(10.0f)), ImGuiCond_Always, ImVec2(0.5f, 1.0f));
-        ImGui::SetNextWindowSize(ImVec2(Dp(300.0f), 0));
+        ImGui::SetNextWindowSize(ImVec2(PackParamsPopupWidth(choice), 0));
+        // cap the height to the space above the button so the popup never runs off the top of the screen
+        const float maxH = std::max(Dp(60.0f), (btn.y - Dp(10.0f)) - ImGui::GetMainViewport()->WorkPos.y - Dp(12.0f));
+        ImGui::SetNextWindowSizeConstraints(ImVec2(0, 0), ImVec2(FLT_MAX, maxH));
         ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(Dp(16.0f), Dp(14.0f)));
         if (ImGui::BeginPopup("##shaderpopup")) {
             SectionLabel(Tr("셰이더"));
@@ -413,6 +416,27 @@ void App::DrawPlayOverlay() {
             if (changed) {
                 settings_.SetCharacterShader(s->characterId, choice);
                 settings_.Save(settingsPath_);
+            }
+            ImGui::EndPopup();
+        }
+        ImGui::PopStyleVar();
+        x += Dp(44.0f);
+    }
+    // screen effect packs (the ordered stack, render/ShaderPack.h "type": "effect")
+    {
+        ImGui::SetCursorScreenPos(ImVec2(x, cy - Dp(20.0f)));
+        const ImVec2 btn = ImGui::GetCursorScreenPos();
+        if (IconButton("##effects", icon::Sparkle, Tr("화면 효과"), !settings_.effectStack.empty(), 40.0f))
+            ImGui::OpenPopup("##effectspopup");
+        ImGui::SetNextWindowPos(ImVec2(btn.x + Dp(20.0f), btn.y - Dp(10.0f)), ImGuiCond_Always, ImVec2(0.5f, 1.0f));
+        ImGui::SetNextWindowSize(ImVec2(Dp(320.0f), 0));
+        ImGui::SetNextWindowSizeConstraints(
+            ImVec2(0, 0), ImVec2(FLT_MAX, std::max(Dp(60.0f), (btn.y - Dp(10.0f)) - ImGui::GetMainViewport()->WorkPos.y - Dp(12.0f))));
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(Dp(16.0f), Dp(14.0f)));
+        if (ImGui::BeginPopup("##effectspopup")) {
+            if (DrawEffectStackEditor(settings_.effectStack)) {
+                settings_.Save(settingsPath_);
+                ApplyRenderSettings();
             }
             ImGui::EndPopup();
         }

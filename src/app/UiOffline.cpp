@@ -787,6 +787,7 @@ RenderSettings App::VideoRealtimeSettings(const VideoRenderConfig& cfg) const {
     rs.volumetricDensity = cfg.volumetricDensity;
     rs.dof = cfg.dof;
     rs.dofAperture = cfg.dofAperture;
+    rs.packEffects = settings_.effectStack;   // effect packs apply to the real-time renderers' frames
     return rs;
 }
 

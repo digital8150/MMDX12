@@ -64,6 +64,12 @@ TrackState CaptureTrack(StudioDoc& doc, int model, RowKind kind, const std::stri
         else s.cameras = doc.camera.camera;
         return s;
     }
+    if (kind == RowKind::Spot) {
+        const SpotLight* spot = doc.lighting.Spot(name);
+        s.existed = spot != nullptr;
+        if (spot) s.spots = spot->keys;
+        return s;
+    }
     MotionData& m = doc.models[model]->motion;
     if (kind == RowKind::Bone) {
         auto it = m.bones.find(name);
@@ -82,7 +88,16 @@ void RestoreTrack(StudioDoc& doc, const TrackState& s) {
         if (s.kind == RowKind::Light) doc.camera.light = s.lights;
         else if (s.kind == RowKind::Shadow) doc.camera.shadow = s.shadows;
         else doc.camera.camera = s.cameras;
-    } else if (s.model >= 0 && s.model < (int)doc.models.size()) {
+        doc.TouchModel(-1);
+        return;
+    }
+    if (s.kind == RowKind::Spot) {
+        SpotLight* spot = doc.lighting.Spot(s.name);
+        if (spot) spot->keys = s.spots;  // an emptied track keeps the spot (its values drive it again)
+        doc.rowsKey = ~0ull;
+        return;
+    }
+    if (s.model >= 0 && s.model < (int)doc.models.size()) {
         MotionData& m = doc.models[s.model]->motion;
         // A track that ends up empty is removed, so an undone insert leaves no empty track behind.
         if (s.kind == RowKind::Bone) {
@@ -93,7 +108,7 @@ void RestoreTrack(StudioDoc& doc, const TrackState& s) {
             else m.morphs[s.name] = s.morphs;
         }
     }
-    doc.TouchModel(IsCameraKind(s.kind) ? -1 : s.model);
+    doc.TouchModel(s.model);  // spot rows returned above
 }
 
 } // namespace mmdx::studio

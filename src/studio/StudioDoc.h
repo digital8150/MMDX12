@@ -6,6 +6,7 @@
 #include "asset/ImageLoader.h"
 #include "asset/PmxModel.h"
 #include "studio/CommandStack.h"
+#include "studio/LightRig.h"
 #include "studio/StudioMotion.h"
 #include "studio/StudioPose.h"
 #include "studio/StudioProject.h"
@@ -59,7 +60,7 @@ struct StudioModel {
 };
 
 // Timeline row ids: kind in the top byte, then a 24-bit group and a 32-bit index.
-enum class RowKind : uint8_t { Group = 1, Bone = 2, Morph = 3, Camera = 4, Light = 5, Shadow = 6 };
+enum class RowKind : uint8_t { Group = 1, Bone = 2, Morph = 3, Camera = 4, Light = 5, Shadow = 6, Spot = 7 };
 inline uint64_t MakeRowId(RowKind k, uint32_t group, uint32_t index) {
     return ((uint64_t)k << 56) | ((uint64_t)(group & 0xFFFFFF) << 32) | index;
 }
@@ -80,7 +81,7 @@ using KeyId = std::pair<uint64_t, int>;
 struct ClipboardKey {
     uint64_t row = 0;
     int offset = 0;  // frame relative to the first copied key
-    BoneKf bone; MorphKf morph; CameraKf camera; LightKf light; ShadowKf shadow;
+    BoneKf bone; MorphKf morph; CameraKf camera; LightKf light; ShadowKf shadow; SpotKf spot;
 };
 
 struct StudioDoc {
@@ -110,7 +111,8 @@ struct StudioDoc {
     bool playing = false;
     float physicsFrame = -1;    // frame of the last physics step (-1: reset)
     bool useMotionCamera = true;
-    bool useLightTrack = true;      // the light track drives the renderer's key light (else the lighting preset)
+    LightRig lighting;              // studio lighting source (LightRig.h): VmdTrack / Preset / Custom + the spot rig
+    bool useLightTrack = true;      // legacy view of lighting.source (VmdTrack); kept for the ui-script log
     bool useShadowTrack = true;     // the self-shadow track drives the shadows (else the render settings)
     bool showCameraPath = true;     // camera path overlay in the viewport (free camera only)
     bool modelGizmo = false;        // viewport gizmo moves / rotates the selected character / stage (no bone picked)
@@ -175,23 +177,47 @@ struct StudioDoc {
 // every operation (move, delete, paste, curve, insert) trivially reversible.
 struct TrackState {
     int model = -1;                // -1 camera
-    RowKind kind = RowKind::Bone;  // Bone, Morph, Camera, Light or Shadow
-    std::string name;              // bone/morph name (unused for the camera)
+    RowKind kind = RowKind::Bone;  // Bone, Morph, Camera, Light, Shadow or Spot
+    std::string name;              // bone/morph name (spot: the spot's name); unused for the camera
     bool existed = false;          // the track existed (absent tracks are erased again)
     std::vector<BoneKf> bones;
     std::vector<MorphKf> morphs;
     std::vector<CameraKf> cameras;
     std::vector<LightKf> lights;
     std::vector<ShadowKf> shadows;
+    std::vector<SpotKf> spots;
 
     size_t Bytes() const {
         return sizeof(TrackState) + name.size() + bones.capacity() * sizeof(BoneKf) + morphs.capacity() * sizeof(MorphKf) +
                cameras.capacity() * sizeof(CameraKf) + lights.capacity() * sizeof(LightKf) +
-               shadows.capacity() * sizeof(ShadowKf);
+               shadows.capacity() * sizeof(ShadowKf) + spots.capacity() * sizeof(SpotKf);
     }
 };
 TrackState CaptureTrack(StudioDoc& doc, int model, RowKind kind, const std::string& name);
 void RestoreTrack(StudioDoc& doc, const TrackState& s);
+
+// Adds / removes a spot of the light rig (undoable): VecSpotCommand holds the whole spot list.
+class VecSpotCommand : public Command {
+public:
+    VecSpotCommand(StudioDoc& doc, std::string name, std::vector<SpotLight> before, std::vector<SpotLight> after)
+        : doc_(doc), name_(std::move(name)), before_(std::move(before)), after_(std::move(after)) {}
+    void Do() override { doc_.lighting.spots = after_; }
+    void Undo() override { doc_.lighting.spots = before_; }
+    std::string Name() const override { return name_; }
+    size_t Bytes() const override {
+        const auto list = [](const std::vector<SpotLight>& v) {
+            size_t n = 0;
+            for (const SpotLight& s : v) n += sizeof(SpotLight) + s.name.size() + s.keys.capacity() * sizeof(SpotKf);
+            return n;
+        };
+        return sizeof(*this) + name_.size() + list(before_) + list(after_);
+    }
+
+private:
+    StudioDoc& doc_;
+    std::string name_;
+    std::vector<SpotLight> before_, after_;
+};
 
 class TrackEditCommand : public Command {
 public:

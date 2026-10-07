@@ -669,3 +669,42 @@ Workers: opencode (API 2 core: the first run stopped on an interactive question 
 - Released 1.3.0 (GitHub release v1.3.0, asset SHA-256 = local zip; the packaged exe reported 1.3.0 and compiled
   hoyo_toon_v2 with no [E]). Website deployed: /latest.json -> 1.3.0, gallery index has hoyo_toon_v2 2.0.0 (live zip
   SHA-256 checked), docs in four languages. Issue #2 answered with the before/after image (docs/media).
+
+## 2026-10-07 (9) — studio lighting source + concert spot rig, shader pack effects (API 3)
+
+Request: (1) the studio must let the user choose VMD light track / preset (which one) / custom, (2) control over the preset's
+key light and a keyframeable concert spot rig (count, position, colour, follow modes), (3) shader packs beyond character
+shading: screen effects (chromatic aberration etc.). Workers: opencode GLM, one per scope (A lighting, B effects); both stalled
+reading files for 15 min (explore guard / a socket error), were resumed with decisions, then B was taken over by Claude and A
+finished by Claude.
+
+### Done
+- Lighting (`studio/LightRig.*`, `StudioDoc::lighting`, `.mmdxproj` "lighting", `BuildStudioLighting` in app/Lighting.cpp):
+  source VmdTrack / Preset / Custom, own preset choice per project, key-light override (dir, colour, intensity, rim), spot rig
+  (add / delete undoable, modes auto swing / centre / head / manual, front fill), `RowKind::Spot` timeline rows with keys,
+  `studiolight` / `studiokeyspot` ui-script commands. Play mode / lobby / benchmark lighting unchanged.
+- Effect packs (docs/shader_effect_api.md): pack.json `"type": "effect"`, `"stage"`, `effect.hlsl` `PackEffect`, `PackEffectPass`
+  (two instances, ping-pong targets only while an entry is enabled), `RenderSettings::packEffects`, ini `effect=`, `--effect`,
+  stack editor (shader manager + play bar button), template `pack_template_effect`, built-ins chromatic_aberration /
+  film_grain / crt_scanlines, `pack_check` handles effect packs. `kPackApiVersion` 3.
+
+### Fixed in review (worker output)
+- Effect pass: `PackEffectPass` was missing its closing namespace, `EffectPipeline` was in an anonymous namespace while forward
+  declared in mmdx (incomplete type in unique_ptr), `ResolvePackTextureFile` was file-local, copy-back skipped for an even number
+  of effects, time / frame constants were never filled, the input SRV table was space 0 while the shader declared space 6
+  (PSO E_INVALIDARG), `Icons::CaretUp` was the CaretDown glyph, stack editor returned void / used checkbox + wrong layout.
+- Lighting UI: `##ko_dir` / `##spotpos` ids shown as labels, colour / intensity / cone controls overlapping.
+- A killed worker kept running inside the opencode server and overwrote fixes (duplicate class, `FullscreenPipeline` changes,
+  a broken `pack_api.hlsli`, effect_api without space6): reverted by hand, then `opencode session delete`.
+
+### Verified
+- Build clean; studio_project_test 89, studio_edit_test 15, studio_pose_test 38, studio_gizmo_test 15 pass; pack_check --compile OK
+  for the three effects and hoyo_toon_v2.
+- Play captures with all three effects, an offline raster video (grain + CRT), `--effect none` leaves no PackEffect log lines;
+  shader manager (badges, stack editor with params) and studio captures (source chips, key override, 4 spots, keyed spot rows).
+
+### Not verified / notes
+- Effects are not applied to PT / offline GI, studio projects don't store the stack (app setting), online gallery install of
+  effect packs and the play-bar popup / new-pack dialog were not clicked through. Spot viewport handles not built.
+- The saved ini can keep a stale `effect=` line after scripted UI runs; delete it if the viewport shows an unexpected effect.
+- Skill `opencode-delegate` updated: unique run folders, per-worker build dirs, `opencode session delete` to really stop a worker.

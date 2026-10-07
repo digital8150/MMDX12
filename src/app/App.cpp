@@ -129,6 +129,21 @@ AppOptions ParseCommandLine(int argc, wchar_t** argv) {
             opt.shaderPack = WideToUtf8(next());
             if (opt.shaderPack == "none") opt.shaderPack.clear();
             opt.shaderPackSet = true;
+        } else if (arg == L"--effect") {
+            // --effect <id>[,<id>...] / --effect none: the effect stack for this run (overrides the settings)
+            const std::string v = WideToUtf8(next());
+            opt.effectSet = true;
+            opt.effectStack.clear();
+            if (v != "none" && !v.empty()) {
+                size_t pos = 0;
+                while (pos <= v.size()) {
+                    size_t end = v.find(',', pos);
+                    if (end == std::string::npos) end = v.size();
+                    const std::string id = v.substr(pos, end - pos);
+                    if (!id.empty()) opt.effectStack.push_back({id, true, {}, {}});
+                    pos = end + 1;
+                }
+            }
         } else if (arg == L"--offline-still") {
             opt.offlineStill = next();
         } else if (arg == L"--offline-video") {
@@ -225,6 +240,7 @@ int App::Run(HINSTANCE instance, const AppOptions& options) {
     if (options_.volumetricDensity > 0.0f) settings_.volumetricDensity = std::clamp(options_.volumetricDensity, 0.25f, 4.0f);
     if (options_.bloomConv >= 0) settings_.bloomConvolution = options_.bloomConv != 0;
     if (options_.motionLighting >= 0) settings_.motionLighting = options_.motionLighting != 0;
+    if (options_.effectSet) settings_.effectStack = options_.effectStack;   // --effect, this run only
 
     ImGui_ImplWin32_EnableDpiAwareness();
     startupPhase("settle");
@@ -344,6 +360,7 @@ int App::Run(HINSTANCE instance, const AppOptions& options) {
     if (options_.bloomConv >= 0) settings_.bloomConvolution = persisted.bloomConvolution;
     if (options_.motionLighting >= 0) settings_.motionLighting = persisted.motionLighting;
     if (!options_.lut.empty()) settings_.colorLut = persisted.colorLut;
+    if (options_.effectSet) settings_.effectStack = persisted.effectStack;   // --effect, that run only
     settings_.Save(settingsPath_);
 
     ctx_.Shutdown();
@@ -973,6 +990,7 @@ void App::ApplyRenderSettings() {
     rs.volumetricDensity = settings_.volumetricDensity;
     rs.bloomConvolution = settings_.bloomConvolution;
     rs.lutIntensity = settings_.lutIntensity;
+    rs.packEffects = settings_.effectStack;   // effect packs (the shader screens edit it)
     rs.fixedResolution = false;
     rs.headless = false;
     renderer_.SetSettings(rs);
@@ -1173,6 +1191,7 @@ void App::PollLoad() {
     rs.volumetric = false;
     rs.bloomConvolution = false;
     rs.lutIntensity = 0.0f;
+    rs.packEffects.clear();   // fixed workload: no effect packs
     renderer_.SetSettings(rs);
 
     benchStartTime_ = timeSeconds_;

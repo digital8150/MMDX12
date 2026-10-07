@@ -1,5 +1,7 @@
+#include "anim/Motion.h"
 #include "core/I18n.h"
 #include "app/Lighting.h"
+#include <algorithm>
 #include <cmath>
 
 namespace mmdx {
@@ -22,6 +24,18 @@ const char* LightingPresetName(LightingPreset p) {
     }
     return "";
 }
+
+namespace {
+
+// The concert spots' animated sway target (shared with the studio rig's AutoSwing mode): a truss
+// above the stage, the beams sweep with the song time. `phase` staggers the spots.
+DirectX::XMFLOAT3 SwayTarget(double t, float phase, const DirectX::XMFLOAT3& focus) {
+    const float sway = (float)std::sin(t * 0.9 + phase) * 16.0f;
+    const float swayZ = (float)std::cos(t * 0.7 + phase * 0.6) * 10.0f;
+    return {focus.x + sway * 0.8f, 0.0f, focus.z + swayZ};
+}
+
+} // namespace
 
 void BuildLighting(LightingPreset preset, double t, const DirectX::XMFLOAT3& focus, LightParams& out) {
     out = LightParams{};
@@ -77,9 +91,8 @@ void BuildLighting(LightingPreset preset, double t, const DirectX::XMFLOAT3& foc
             const float phase = (float)i * 1.3f;
             PunctualLight s;
             s.position = {focus.x + px, 58.0f, focus.z - 18.0f + 6.0f * (float)(i / 2)};
-            const float sway = (float)std::sin(t * 0.9 + phase) * 16.0f;
-            const float swayZ = (float)std::cos(t * 0.7 + phase * 0.6) * 10.0f;
-            DirectX::XMFLOAT3 target{focus.x + sway * 0.8f - px * 0.25f, 0.0f, focus.z + swayZ};
+            DirectX::XMFLOAT3 target = SwayTarget(t, phase, focus);
+            target.x -= px * 0.25f;
             s.direction = {target.x - s.position.x, target.y - s.position.y, target.z - s.position.z};
             s.range = 140.0f;
             s.color = colors[i % 3];
@@ -97,6 +110,64 @@ void BuildLighting(LightingPreset preset, double t, const DirectX::XMFLOAT3& foc
         out.punctual.push_back(fill);
         break;
     }
+    }
+}
+
+void BuildStudioLighting(const studio::LightRig& rig, const std::vector<studio::LightKf>& vmdTrack, double t,
+                         const DirectX::XMFLOAT3& focus, const DirectX::XMFLOAT3& head, LightParams& out) {
+    const auto preset = (LightingPreset)std::clamp(rig.presetIndex, 0, kLightingPresetCount - 1);
+    BuildLighting(preset, t, focus, out);
+
+    // VmdTrack source: the camera VMD's light track overrides the key light (empty track: the preset)
+    if (rig.source == studio::LightSource::VmdTrack) {
+        if (!vmdTrack.empty()) {
+            const studio::LightKf k = studio::SampleLight(vmdTrack, (float)(t * kMmdFps));
+            // a zero direction (broken file) keeps the preset's
+            if (std::fabs(k.direction.x) + std::fabs(k.direction.y) + std::fabs(k.direction.z) > 1e-4f)
+                out.direction = k.direction;
+            out.color = k.color;
+        }
+        return;  // the VMD track never drives the rig's spots
+    }
+
+    // Preset / Custom: the manual key override on top of the preset's key light and rim
+    if (rig.key.enabled) {
+        out.direction = rig.key.direction;
+        out.color = rig.key.color;
+        out.sunIntensity = rig.key.intensity;
+        out.rimStrength = rig.key.rimStrength;
+        out.rimColor = rig.key.rimColor;
+    }
+    if (rig.source != studio::LightSource::Custom) return;
+
+    // Custom: the spot rig replaces the preset's automatic spots
+    out.punctual.clear();
+    int used = 0;
+    for (const studio::SpotLight& s : rig.spots) {
+        if (!s.enabled || used >= (int)studio::kMaxRigSpots - 1) continue;  // -1: keep room for the front fill
+        const studio::SpotKf kf = studio::SampleSpotKeys(s, (int)std::floor(t * kMmdFps));
+        DirectX::XMFLOAT3 target = kf.aim;
+        if (s.mode == 1) target = focus;        // FollowCenter: the performer's centre
+        else if (s.mode == 2) target = head;    // FollowHead: the performer's head
+        else if (s.mode == 0) target = SwayTarget(t, s.swingPhase, kf.aim);  // auto swing about the aim point
+        PunctualLight l;
+        l.position = kf.position;
+        l.direction = {target.x - kf.position.x, target.y - kf.position.y, target.z - kf.position.z};
+        l.range = 140.0f;
+        l.color = kf.color;
+        l.intensity = kf.intensity;
+        l.spotCosOuter = std::cos(std::clamp(kf.coneOuter, 0.02f, 1.5f));
+        l.spotCosInner = std::cos(std::clamp(s.coneInner, 0.01f, kf.coneOuter));
+        out.punctual.push_back(l);
+        ++used;
+    }
+    if (rig.frontFill) {
+        PunctualLight fill;
+        fill.position = {focus.x, focus.y + 22.0f, focus.z - 40.0f};
+        fill.range = 120.0f;
+        fill.color = {0.917f, 0.83f, 0.72f};  // Srgb(1.0, 0.92, 0.86) like the concert preset's fill
+        fill.intensity = 0.55f;
+        out.punctual.push_back(fill);
     }
 }
 

@@ -289,7 +289,7 @@ bool SaveProject(const std::filesystem::path& file, const ProjectData& data, std
             ed["frame"] = data.editor.frame;
             ed["selectedModel"] = data.editor.selectedModel;
             ed["useMotionCamera"] = data.editor.useMotionCamera;
-            ed["useLightTrack"] = data.editor.useLightTrack;
+            ed["useLightTrack"] = data.editor.useLightTrack;  // also for older readers (the lighting object wins)
             ed["useShadowTrack"] = data.editor.useShadowTrack;
             ed["showCameraPath"] = data.editor.showCameraPath;
             ed["loop"] = data.editor.loop;
@@ -304,6 +304,52 @@ bool SaveProject(const std::filesystem::path& file, const ProjectData& data, std
                 {"distance", data.editor.camDistance},
                 {"fov", data.editor.camFovDeg},
             };
+            // the studio's lighting source + spot rig (LightRig); older readers ignore it
+            {
+                const LightRig& rig = data.editor.lighting;
+                nlohmann::json li;
+                li["source"] = LightSourceName(rig.source);
+                li["preset"] = rig.presetIndex;
+                if (rig.key.enabled) {
+                    li["key"] = {
+                        {"direction", {rig.key.direction.x, rig.key.direction.y, rig.key.direction.z}},
+                        {"color", {rig.key.color.x, rig.key.color.y, rig.key.color.z}},
+                        {"intensity", rig.key.intensity},
+                        {"rimStrength", rig.key.rimStrength},
+                        {"rimColor", {rig.key.rimColor.x, rig.key.rimColor.y, rig.key.rimColor.z}},
+                    };
+                }
+                if (!rig.spots.empty()) {
+                    nlohmann::json spots = nlohmann::json::array();
+                    for (const SpotLight& s : rig.spots) {
+                        nlohmann::json js;
+                        js["name"] = s.name;
+                        js["mode"] = SpotModeName(s.mode);
+                        js["position"] = {s.position.x, s.position.y, s.position.z};
+                        js["aim"] = {s.aim.x, s.aim.y, s.aim.z};
+                        js["color"] = {s.color.x, s.color.y, s.color.z};
+                        js["intensity"] = s.intensity;
+                        js["cone"] = s.coneOuter;
+                        js["enabled"] = s.enabled;
+                        js["phase"] = s.swingPhase;
+                        if (!s.keys.empty()) {
+                            nlohmann::json keys = nlohmann::json::array();
+                            for (const SpotKf& k : s.keys)
+                                keys.push_back({{"frame", k.frame},
+                                                {"position", {k.position.x, k.position.y, k.position.z}},
+                                                {"aim", {k.aim.x, k.aim.y, k.aim.z}},
+                                                {"color", {k.color.x, k.color.y, k.color.z}},
+                                                {"intensity", k.intensity},
+                                                {"cone", k.coneOuter}});
+                            js["keys"] = std::move(keys);
+                        }
+                        spots.push_back(std::move(js));
+                    }
+                    li["spots"] = std::move(spots);
+                }
+                li["frontFill"] = rig.frontFill;
+                ed["lighting"] = std::move(li);
+            }
             j["editor"] = std::move(ed);
         }
         if (!data.recoveryOf.empty())
@@ -466,8 +512,10 @@ bool LoadProject(const std::filesystem::path& file, ProjectData& out, std::strin
             ProjectEditor ed;  // defaults, then overwrite what the file carries
             ed.frame = ReadInt(e, "frame", ed.frame);
             ed.selectedModel = ReadInt(e, "selectedModel", ed.selectedModel);
+            bool legacyUseLightTrack = true;
+            const bool hadLegacy = e.contains("useLightTrack") && (*e.find("useLightTrack")).is_boolean();
             ed.useMotionCamera = ReadBool(e, "useMotionCamera", ed.useMotionCamera);
-            ed.useLightTrack = ReadBool(e, "useLightTrack", ed.useLightTrack);
+            legacyUseLightTrack = ReadBool(e, "useLightTrack", legacyUseLightTrack);
             ed.useShadowTrack = ReadBool(e, "useShadowTrack", ed.useShadowTrack);
             ed.showCameraPath = ReadBool(e, "showCameraPath", ed.showCameraPath);
             ed.loop = ReadBool(e, "loop", ed.loop);
@@ -486,6 +534,67 @@ bool LoadProject(const std::filesystem::path& file, ProjectData& out, std::strin
                 ed.camPitch = (float)ReadDouble(fc, "pitch", ed.camPitch);
                 ed.camDistance = (float)ReadDouble(fc, "distance", ed.camDistance);
                 ed.camFovDeg = (float)ReadDouble(fc, "fov", ed.camFovDeg);
+            }
+            // ---- lighting source: the "lighting" object, else the legacy useLightTrack bool ----
+            const auto liIt = e.find("lighting");
+            if (liIt != e.end() && liIt->is_object()) {
+                const nlohmann::json& li = *liIt;
+                ParseLightSource(ReadString(li, "source", "vmd"), ed.lighting.source);
+                ed.lighting.presetIndex = ReadInt(li, "preset", ed.lighting.presetIndex);
+                ed.lighting.frontFill = ReadBool(li, "frontFill", ed.lighting.frontFill);
+                const auto keyIt = li.find("key");
+                if (keyIt != li.end() && keyIt->is_object()) {
+                    ed.lighting.key.enabled = true;
+                    const nlohmann::json& k = *keyIt;
+                    ed.lighting.key.direction = ReadVec3(k, "direction", ed.lighting.key.direction);
+                    ed.lighting.key.color = ReadVec3(k, "color", ed.lighting.key.color);
+                    ed.lighting.key.intensity = (float)ReadDouble(k, "intensity", ed.lighting.key.intensity);
+                    ed.lighting.key.rimStrength = (float)ReadDouble(k, "rimStrength", ed.lighting.key.rimStrength);
+                    ed.lighting.key.rimColor = ReadVec3(k, "rimColor", ed.lighting.key.rimColor);
+                }
+                const auto spotsIt = li.find("spots");
+                if (spotsIt != li.end() && spotsIt->is_array()) {
+                    for (const auto& sp : *spotsIt) {
+                        if (!sp.is_object()) continue;
+                        SpotLight s;
+                        s.name = ReadString(sp, "name", "");
+                        ParseSpotMode(ReadString(sp, "mode", "auto"), s.mode);
+                        s.position = ReadVec3(sp, "position", s.position);
+                        s.aim = ReadVec3(sp, "aim", s.aim);
+                        s.color = ReadVec3(sp, "color", s.color);
+                        s.intensity = (float)ReadDouble(sp, "intensity", s.intensity);
+                        s.coneOuter = (float)ReadDouble(sp, "cone", s.coneOuter);
+                        s.coneInner = std::min(s.coneOuter * 0.6f, s.coneOuter);
+                        s.enabled = ReadBool(sp, "enabled", s.enabled);
+                        s.swingPhase = (float)ReadDouble(sp, "phase", s.swingPhase);
+                        const auto keysIt = sp.find("keys");
+                        if (keysIt != sp.end() && keysIt->is_array()) {
+                            for (const auto& kk : *keysIt) {
+                                if (!kk.is_object()) continue;
+                                SpotKf kf;
+                                kf.frame = ReadInt(kk, "frame", 0);
+                                kf.position = ReadVec3(kk, "position", kf.position);
+                                kf.aim = ReadVec3(kk, "aim", kf.aim);
+                                kf.color = ReadVec3(kk, "color", kf.color);
+                                kf.intensity = (float)ReadDouble(kk, "intensity", kf.intensity);
+                                kf.coneOuter = (float)ReadDouble(kk, "cone", kf.coneOuter);
+                                s.keys.push_back(kf);
+                            }
+                            std::sort(s.keys.begin(), s.keys.end(),
+                                      [](const SpotKf& a, const SpotKf& b) { return a.frame < b.frame; });
+                        }
+                        if (!s.name.empty() && !ed.lighting.Spot(s.name)) ed.lighting.spots.push_back(std::move(s));
+                    }
+                }
+                ed.useLightTrack = ed.lighting.source == LightSource::VmdTrack;  // keep the legacy view in step
+            } else if (hadLegacy) {
+                // v1 project: true -> VmdTrack only when the camera VMD actually carries light keys, else Preset;
+                // false -> Preset (the user had turned the light track off)
+                ed.lighting.source = legacyUseLightTrack && !out.camera.light.empty() ? LightSource::VmdTrack
+                                                                                      : LightSource::Preset;
+                ed.useLightTrack = ed.lighting.source == LightSource::VmdTrack;
+            } else {
+                ed.useLightTrack = legacyUseLightTrack;
             }
             out.editor = ed;
         }

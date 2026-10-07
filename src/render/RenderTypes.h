@@ -1,11 +1,13 @@
 #pragma once
 #include <DirectXMath.h>
 #include <cstdint>
+#include <string>
 #include <vector>
 
 namespace mmdx {
 
 class GpuModel;
+struct EffectStackEntry;
 
 // Temporal upscalers behind IUpscaler (see Upscaler.h).
 enum class UpscalerKind : uint8_t { None = 0, DLSS, FSR, XeSS };
@@ -64,6 +66,9 @@ struct RenderSettings {
     float fog = 0.35f;               // 0 = off; distance haze toward the horizon colour
     bool transparentBackground = false;  // thumbnails: no sky, alpha = coverage
     bool headless = false;               // render without touching the back buffer (background sample renders)
+    // Effect packs ("type": "effect"), the user's ordered stack: PackEffectPass runs the enabled entries
+    // (PackEffectStage from each pack's manifest) before Bloom / after Post. Empty = no cost, no targets.
+    std::vector<EffectStackEntry> packEffects;
     // Output area in the back buffer (Studio viewport between its panels). viewportW/H == 0: the whole window.
     // The output resolution follows the area's size; the image is letterboxed into it.
     uint32_t viewportX = 0, viewportY = 0, viewportW = 0, viewportH = 0;

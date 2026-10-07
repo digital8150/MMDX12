@@ -189,6 +189,34 @@ bool AppSettings::Load(const std::filesystem::path& file) {
             if (bar != std::string::npos && bar > 0 && bar + 1 < value.size())
                 packTextureFolders[value.substr(0, bar)] = value.substr(bar + 1);
         }
+        else if (key == "effect") {
+            // effect=<pack id>|<enabled 0/1>|<key>:<value>,<key>:<value>|<texture folder or ->
+            const size_t a = value.find('|');
+            const size_t b = a == std::string::npos ? a : value.find('|', a + 1);
+            const size_t c = b == std::string::npos ? b : value.find('|', b + 1);
+            if (a != std::string::npos && a > 0 && b != std::string::npos) {
+                EffectStackEntry e;
+                e.pack = value.substr(0, a);
+                int en = 1;
+                if (ParseInt(value.substr(a + 1, b - a - 1), en)) e.enabled = en != 0;
+                if (c != std::string::npos) {
+                    const std::string list = value.substr(b + 1, c - b - 1);
+                    size_t pos = 0;
+                    while (pos < list.size()) {
+                        size_t end = list.find(',', pos);
+                        if (end == std::string::npos) end = list.size();
+                        const std::string item = list.substr(pos, end - pos);
+                        const size_t colon = item.find(':');
+                        if (colon != std::string::npos && ParseFloat(item.substr(colon + 1), f) && std::isfinite(f))
+                            e.params[item.substr(0, colon)] = f;
+                        pos = end + 1;
+                    }
+                    const std::string folder = value.substr(c + 1);
+                    if (!folder.empty() && folder != "-") e.textureFolder = folder;
+                }
+                effectStack.push_back(std::move(e));
+            }
+        }
         else if (key == "lastCharacter") lastCharacter = value;
         else if (key == "lastStage") lastStage = value;
         else if (key == "lastSong") lastSong = value;
@@ -306,6 +334,16 @@ bool AppSettings::Save(const std::filesystem::path& file) const {
     }
     for (const auto& [id, dir] : packTextureFolders)
         std::fprintf(f, "packTextureFolder=%s|%s\n", id.c_str(), dir.c_str());
+    for (const EffectStackEntry& e : effectStack) {
+        std::string list;
+        for (const auto& [k, v] : e.params) {
+            char buf[64];
+            std::snprintf(buf, sizeof(buf), "%.4g", v);
+            list += (list.empty() ? "" : ",") + k + ":" + buf;
+        }
+        std::fprintf(f, "effect=%s|%d|%s|%s\n", e.pack.c_str(), e.enabled ? 1 : 0, list.c_str(),
+                     e.textureFolder.empty() ? "-" : e.textureFolder.c_str());
+    }
     std::fprintf(f, "lastCharacter=%s\n", lastCharacter.c_str());
     std::fprintf(f, "lastStage=%s\n", lastStage.c_str());
     std::fprintf(f, "lastSong=%s\n", lastSong.c_str());

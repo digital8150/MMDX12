@@ -251,7 +251,7 @@ bool App::DrawShaderSelector(const char* id, ShaderChoice& choice, float width) 
         }
         int shown = 0;
         for (const ShaderPack& pk : reg.Packs()) {
-            if (pk.status == PackStatus::Duplicate ||
+            if (pk.status == PackStatus::Duplicate || pk.type != PackType::Surface ||
                 !PackMatches(needle, pk.id, pk.name, pk.authors, pk.tags))
                 continue;
             ++shown;
@@ -277,6 +277,20 @@ bool App::DrawShaderSelector(const char* id, ShaderChoice& choice, float width) 
     }
     ImGui::PopStyleVar();
     return changed;
+}
+
+// 1/2/3 columns for the parameter grid: packs with many params split the grid, small packs stay single column.
+static int PackParamColumns(size_t n) {
+    if (n <= 6) return 1;
+    if (n <= 14) return 2;
+    return 3;
+}
+
+// Popup width for the pack parameter grid (columns from the pack's param count), clamped to the viewport.
+float PackParamsPopupWidth(const ShaderChoice& choice) {
+    const ShaderPack* pack = choice.pack.empty() ? nullptr : ShaderPacks().Find(choice.pack);
+    const float w = (float)PackParamColumns(pack ? pack->params.size() : 0) * Dp(280.0f) + Dp(32.0f);
+    return std::min(w, ImGui::GetMainViewport()->WorkSize.x - Dp(24.0f));
 }
 
 bool App::DrawShaderPackParams(ShaderChoice& choice) {
@@ -325,14 +339,40 @@ bool App::DrawShaderPackParams(ShaderChoice& choice) {
     }
     if (pack->params.empty()) return changed;
     const PackParamValues values = pack->Resolve(choice.params);
-    for (size_t i = 0; i < pack->params.size(); ++i) {
-        const ShaderPackParam& sp = pack->params[i];
-        float v = values[i];
-        const std::string id = "##spp_" + sp.key;
-        const std::string label = sp.label.Empty() ? sp.key : sp.label.Get(lang);
-        if (SliderRow(id.c_str(), label.c_str(), &v, sp.min, sp.max, "%.2f")) {
-            choice.params[sp.key] = v;
-            changed = true;
+    const float avail = ImGui::GetContentRegionAvail().x;
+    const int cols = std::clamp(std::min((int)(avail / Dp(240.0f)), (int)pack->params.size()), 1, 3);
+    if (cols > 1) {
+        const size_t n = pack->params.size();
+        const int rows = (int)((n + (size_t)cols - 1) / (size_t)cols);   // column-major: ceil(n/cols)
+        if (ImGui::BeginTable("##spp_grid", cols, ImGuiTableFlags_SizingStretchSame)) {
+            for (int row = 0; row < rows; ++row) {
+                ImGui::TableNextRow();
+                for (int col = 0; col < cols; ++col) {
+                    const size_t i = (size_t)col * (size_t)rows + (size_t)row;   // fill column-major
+                    if (i >= n) continue;
+                    ImGui::TableSetColumnIndex(col);
+                    const ShaderPackParam& sp = pack->params[i];
+                    float v = values[i];
+                    const std::string id = "##spp_" + sp.key;
+                    const std::string label = sp.label.Empty() ? sp.key : sp.label.Get(lang);
+                    if (SliderRow(id.c_str(), label.c_str(), &v, sp.min, sp.max, "%.2f")) {
+                        choice.params[sp.key] = v;
+                        changed = true;
+                    }
+                }
+            }
+            ImGui::EndTable();
+        }
+    } else {
+        for (size_t i = 0; i < pack->params.size(); ++i) {
+            const ShaderPackParam& sp = pack->params[i];
+            float v = values[i];
+            const std::string id = "##spp_" + sp.key;
+            const std::string label = sp.label.Empty() ? sp.key : sp.label.Get(lang);
+            if (SliderRow(id.c_str(), label.c_str(), &v, sp.min, sp.max, "%.2f")) {
+                choice.params[sp.key] = v;
+                changed = true;
+            }
         }
     }
     Gap(6.0f);
@@ -369,7 +409,9 @@ void App::DrawStudioShaderRow(float w) {
         Gap(6.0f);
         if (Button("##studioshaderparams", Tr("팩 설정"), icon::Sliders, ButtonKind::Ghost))
             ImGui::OpenPopup("##studioshaderparamspopup");
-        ImGui::SetNextWindowSize(ImVec2(Dp(300.0f), 0));
+        ImGui::SetNextWindowSize(ImVec2(PackParamsPopupWidth(choice), 0));
+        ImGui::SetNextWindowSizeConstraints(ImVec2(0, 0),
+                                            ImVec2(FLT_MAX, ImGui::GetMainViewport()->WorkSize.y - Dp(24.0f)));
         ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(Dp(16.0f), Dp(14.0f)));
         if (ImGui::BeginPopup("##studioshaderparamspopup")) {
             SectionLabel(pack->name.Get(PackLanguage()).c_str());

@@ -149,6 +149,11 @@ bool PrintManifest(const ShaderPack& pack, const std::string& error) {
             printf("\n");
         }
     }
+    // type: "surface" (default) or "effect" (+ its injection stage)
+    if (pack.type == mmdx::PackType::Effect)
+        printf("  type: effect (stage: %s)\n", pack.stage == mmdx::PackEffectStage::PreBloom ? "pre-bloom" : "post");
+    else
+        printf("  type: surface\n");
     PrintTextures(pack);
     if (pack.params.empty()) {
         printf("  params: (none)\n");
@@ -232,8 +237,9 @@ bool CheckTextures(const ShaderPack& pack, const fs::path& dir) {
 void CheckTextureIndices(const ShaderPack& pack, const fs::path& dir, bool& ok) {
     if (pack.textures.empty()) return;
     std::error_code ec;
-    if (!fs::is_regular_file(dir / L"surface.hlsl", ec)) return;
-    FILE* f = _wfopen((dir / L"surface.hlsl").c_str(), L"rb");
+    const wchar_t* shaderFile = pack.type == mmdx::PackType::Effect ? L"effect.hlsl" : L"surface.hlsl";
+    if (!fs::is_regular_file(dir / shaderFile, ec)) return;
+    FILE* f = _wfopen((dir / shaderFile).c_str(), L"rb");
     if (!f) return;
     std::string hlsl;
     char buf[4096];
@@ -241,7 +247,7 @@ void CheckTextureIndices(const ShaderPack& pack, const fs::path& dir, bool& ok) 
     while ((n = fread(buf, 1, sizeof(buf), f)) > 0) hlsl.append(buf, n);
     fclose(f);
     const uint32_t count = (uint32_t)pack.textures.size();
-    for (const char* fn : {"PackSampleTex(", "PackSampleTexLevel("}) {
+    for (const char* fn : {"PackSampleTex(", "PackSampleTexLevel(", "PackFxSampleTex(", "PackFxSampleTexLevel("}) {
         for (size_t pos = hlsl.find(fn); pos != std::string::npos; pos = hlsl.find(fn, pos + 1)) {
             size_t i = pos + strlen(fn);
             while (i < hlsl.size() && (hlsl[i] == ' ' || hlsl[i] == '\t')) ++i;
@@ -252,7 +258,7 @@ void CheckTextureIndices(const ShaderPack& pack, const fs::path& dir, bool& ok) 
             if (digits >= hlsl.size() || (hlsl[digits] != ',' && hlsl[digits] != ')')) continue;
             const unsigned long index = strtoul(hlsl.c_str() + i, nullptr, 10);
             if (index >= count) {
-                printf("  [problem] surface.hlsl: %s%lu but the pack declares %u textures\n", fn, index, count);
+                printf("  [problem] %ls: %s%lu but the pack declares %u textures\n", fn, index, count);
                 ok = false;
             }
         }
@@ -362,14 +368,16 @@ int wmain(int argc, wchar_t** argv) {
     CheckTextureIndices(pack, dir, ok);
 
     if (compile) {
-        const fs::path mmdHlsl = mmdx::ExecutableDir() / L"shaders" / L"mmd.hlsl";
+        const bool effect = pack.type == mmdx::PackType::Effect;
+        const wchar_t* packFile = effect ? L"effect.hlsl" : L"surface.hlsl";
+        const fs::path mmdHlsl = mmdx::ExecutableDir() / L"shaders" / (effect ? L"effect.hlsl" : L"mmd.hlsl");
         if (!fs::is_regular_file(mmdHlsl, ec)) {
             printf("[problem] %s not found\n", mmdx::PathToUtf8(mmdHlsl).c_str());
             return 1;
         }
         // the surface as a quoted include path relative to the shaders dir, as the app compiles it
-        fs::path rel = fs::relative(pack.dir / L"surface.hlsl", mmdHlsl.parent_path(), ec);
-        if (ec || rel.empty()) rel = pack.dir / L"surface.hlsl";
+        fs::path rel = fs::relative(pack.dir / packFile, mmdHlsl.parent_path(), ec);
+        if (ec || rel.empty()) rel = pack.dir / packFile;
         std::string inc = mmdx::PathToUtf8(rel);
         std::replace(inc.begin(), inc.end(), '\\', '/');
         const std::string incDefine = "\"" + inc + "\"";
@@ -385,10 +393,10 @@ int wmain(int argc, wchar_t** argv) {
             {"PACK_TEX_COUNT", std::to_string(texCount)},
             {"PACK_TEX_CLAMP_MASK", std::to_string(clampMask) + "u"},
             {"PACK_TEX_SRGB_MASK", std::to_string(srgbMask) + "u"}};
-        printf("compile: PSPack of %s (ps_6_0, MMDX_PACK = %s, %u textures)\n",
-               mmdx::PathToUtf8(mmdHlsl.filename()).c_str(), incDefine.c_str(), texCount);
+        printf("compile: %s of %s (ps_6_0, MMDX_PACK = %s, %u textures)\n",
+               effect ? "PSEffect" : "PSPack", mmdx::PathToUtf8(mmdHlsl.filename()).c_str(), incDefine.c_str(), texCount);
         std::string errors;
-        const mmdx::ComPtr blob = mmdx::CompileShaderDxc(mmdHlsl, "PSPack", "ps_6_0", defines, &errors);
+        const mmdx::ComPtr blob = mmdx::CompileShaderDxc(mmdHlsl, effect ? "PSEffect" : "PSPack", "ps_6_0", defines, &errors);
         if (!errors.empty()) printf("%s\n", errors.c_str());
         if (!blob) {
             printf("[problem] shader compile failed\n");

@@ -64,10 +64,12 @@ std::wstring LowerAsciiWide(const std::wstring& s) {
     return out;
 }
 
+} // namespace
+
 // pack.json "textures" lookup: the user texture folder first (same relative path, then the same
 // file name, then a file in that folder — not recursive — whose name ends with "_" + the declared
 // file name, case-insensitive: users drop their own game rips in), then the pack folder (exact
-// path only). False = missing (white).
+// path only). False = missing (white). Shared with PackEffectPass (declared in ShaderPack.h).
 bool ResolvePackTextureFile(const ShaderPack& pack, const std::string& file, const std::filesystem::path& userFolder,
                             std::filesystem::path& out) {
     const std::filesystem::path rel = Utf8ToPath(file);
@@ -103,8 +105,6 @@ bool ResolvePackTextureFile(const ShaderPack& pack, const std::string& file, con
     }
     return false;
 }
-
-} // namespace
 
 // ---- ShadowPass -------------------------------------------------------------------------
 

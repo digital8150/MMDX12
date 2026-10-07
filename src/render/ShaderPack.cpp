@@ -354,6 +354,8 @@ bool ParseShaderPackManifest(const std::string& json, const std::filesystem::pat
     out.params.clear();
     out.textures.clear();
     out.hasEdge = false;
+    out.type = PackType::Surface;
+    out.stage = PackEffectStage::Post;
     out.status = PackStatus::Ready;
     out.statusMessage.clear();
 
@@ -393,6 +395,23 @@ bool ParseShaderPackManifest(const std::string& json, const std::filesystem::pat
     out.minAppVersion = Str(j, "minAppVersion");
     if (auto it = j.find("format"); it != j.end() && !it->is_number())
         problems.push_back("format must be a number");
+
+    // type: "surface" (default) or "effect"; an effect pack picks its injection point with "stage"
+    const std::string type = ToLowerAscii(Str(j, "type"));
+    if (type.empty() || type == "surface") {
+        out.type = PackType::Surface;
+    } else if (type == "effect") {
+        out.type = PackType::Effect;
+        const std::string stage = ToLowerAscii(Str(j, "stage"));
+        if (stage.empty() || stage == "post")
+            out.stage = PackEffectStage::Post;
+        else if (stage == "pre-bloom")
+            out.stage = PackEffectStage::PreBloom;
+        else
+            problems.push_back("stage '" + Str(j, "stage") + "' must be \"post\" or \"pre-bloom\"");
+    } else {
+        problems.push_back("type '" + Str(j, "type") + "' must be \"surface\" or \"effect\"");
+    }
 
     out.name = Text(j, "name");
     if (out.name.Empty()) {
@@ -555,7 +574,12 @@ bool ParseShaderPackManifest(const std::string& json, const std::filesystem::pat
     else if (fs::is_regular_file(previewJpg, ec))
         out.preview = previewJpg;
 
-    if (!fs::is_regular_file(dir / L"surface.hlsl", ec)) problems.push_back("surface.hlsl is missing");
+    // the pack's shader file must match its type (an effect pack implements PackEffect in effect.hlsl)
+    if (out.type == PackType::Effect) {
+        if (!fs::is_regular_file(dir / L"effect.hlsl", ec)) problems.push_back("effect packs need effect.hlsl");
+    } else if (!fs::is_regular_file(dir / L"surface.hlsl", ec)) {
+        problems.push_back("surface.hlsl is missing");
+    }
 
     if (!problems.empty()) {
         out.status = PackStatus::InvalidManifest;
@@ -837,7 +861,7 @@ bool ShaderPackRegistry::Uninstall(const std::string& id, std::string& error) {
 
 bool ShaderPackRegistry::CreateFromTemplate(const std::string& id, const std::string& name,
                                             const std::string& author, std::filesystem::path& dir,
-                                            std::string& error) {
+                                            std::string& error, bool effect) {
     if (!ValidShaderPackId(id)) {
         error = Tr("id는 소문자 a-z, 0-9, _, -만 사용할 수 있습니다");
         return false;
@@ -846,7 +870,7 @@ bool ShaderPackRegistry::CreateFromTemplate(const std::string& id, const std::st
         error = Tr("같은 id의 팩이 이미 있습니다");
         return false;
     }
-    const fs::path tmpl = ExecutableDir() / L"shaders" / L"pack_template";
+    const fs::path tmpl = ExecutableDir() / L"shaders" / (effect ? L"pack_template_effect" : L"pack_template");
     std::error_code ec;
     if (!fs::is_directory(tmpl, ec)) {
         error = Tr("템플릿 폴더를 찾을 수 없습니다");

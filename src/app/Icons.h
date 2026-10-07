@@ -21,6 +21,7 @@ inline constexpr const char* FolderOpen = "\xee\x89\x96";
 inline constexpr const char* X = "\xee\x93\xb6";
 inline constexpr const char* Globe = "\xee\x8a\x88";
 inline constexpr const char* Check = "\xee\x86\x82";
+inline constexpr const char* CaretUp = "\xee\x84\xbc";
 inline constexpr const char* CaretDown = "\xee\x84\xb6";
 inline constexpr const char* CaretRight = "\xee\x84\xba";
 inline constexpr const char* CaretLeft = "\xee\x84\xb8";

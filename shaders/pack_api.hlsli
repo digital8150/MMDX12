@@ -11,7 +11,7 @@
 #define PACK_API_HLSLI
 
 // Must equal kPackApiVersion (render/ShaderPack.h).
-#define PACK_API_VERSION 2
+#define PACK_API_VERSION 3
 
 // Material classes: pack.json "classes" rules map PMX material names to these ids.
 #define PACK_BODY 0u

@@ -56,6 +56,10 @@ struct AppSettings {
     // per-character texture folder (a separate line: the ids in characterShader= are already last).
     // Old ini files without it load unchanged.
     std::map<std::string, std::string> packTextureFolders;  // pack id -> user texture folder (game textures), UTF-8
+    // Effect packs ("type": "effect"), the user's ordered stack: applied to play mode, the lobby preview and
+    // video / still renders (the real-time renderers; GI / PT output skips it). Persisted as
+    // "effect=<pack id>|<enabled>|<key>:<value>,...|<texture folder or ->|" ini lines, oldest first.
+    std::vector<EffectStackEntry> effectStack;
     int windowWidth = 1600, windowHeight = 900;
     std::vector<std::string> recentProjects;         // studio projects (UTF-8 absolute paths), newest first, max 8
     void AddRecentProject(const std::string& path);  // moves it to the front (case-insensitive match)

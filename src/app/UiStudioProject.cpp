@@ -166,8 +166,9 @@ ProjectData App::StudioProjectData() const {
     e.frame = d.Frame();
     e.selectedModel = d.selectedModel;
     e.useMotionCamera = d.useMotionCamera;
-    e.useLightTrack = d.useLightTrack;
+    e.useLightTrack = d.lighting.source == studio::LightSource::VmdTrack;
     e.useShadowTrack = d.useShadowTrack;
+    e.lighting = d.lighting;
     e.showCameraPath = d.showCameraPath;
     e.loop = d.loop;
     e.physics = d.physics;

@@ -40,6 +40,9 @@ progress.md is the session log. Read its latest entry first.
     without dialogs: `studionew`, `studiosave`/`studioopen <file>`, `studioautosave`, `studioadd <character|stage|prop> <file>`,
     `studioaddlib <character|stage> <substr>`, `studiosong <substr>`, `studioaudio <file|none> [offset]`,
     `studioselect`/`studioremove <index>`, `studiorename <text>`, `studioattach <parent|-1> <bone|-> tx ty tz rx ry rz s`.
+    Lighting rig: `studiolight <vmd|preset|custom> [presetIndex] [spotCount] [keyOverride 0|1]` sets the studio's
+    lighting source (+ demo spots / key override; `studiostate` logs them), `studiokeyspot <spotIndex> [frame]` keys
+    that spot's values through the ordinary undoable insert.
     While a script runs, real mouse/keyboard input is ignored.
     Frames count like `--frames`. Use it to click through editor features headlessly (examples: `captures/studio/t*.txt`).
   - Benchmark: `--benchmark dx12-raster-fhd --bench-frames 600 --frames 100000` (result goes to `build/bin/mmdx12.log` as a `BENCHMARK` line)
@@ -95,8 +98,14 @@ progress.md is the session log. Read its latest entry first.
   - `asset/ModelImport.h` and `render/GpuModel.h` both declare `mmdx::ModelRole`: never include both in one .cpp.
   - Camera/light/self-shadow (`app/UiStudioCamera.cpp`): `StudioDoc::camera` holds the camera, light (`LightKf`, linear) and
     self-shadow (`ShadowKf`, stepped, VMD distance = 0.1 - UI*1e-5) tracks as timeline rows `RowKind::Camera/Light/Shadow`.
-    In the studio the light track overrides the preset's key light and the shadow track sets `FrameView::shadowsOff`/
-    `shadowDistance` (play mode ignores VMD light/shadow). Perspective-off keys render as a 3 degree lens from far away.
+    The lighting source is `StudioDoc::lighting` (`studio/LightRig.h`, a 3-way choice saved in the project, timeline rows
+    `RowKind::Spot` key the rig's spots): VMD track (the camera VMD's light keys override the preset's key light, empty
+    falls back), Preset (the project's own preset choice + a key-light override) or Custom (the concert spot rig, undoable
+    add/delete, auto swing / follow centre / head / manual aim modes, warm front fill). `BuildStudioLighting` (app/Lighting.cpp)
+    resolves the rig into `FrameView::light` for the studio (viewport, offline stills/videos). Play mode and the lobby keep
+    the global preset (App.cpp `BuildFrameView`); the benchmark stays Studio/ deterministic. In the studio the shadow track
+    sets `FrameView::shadowsOff`/`shadowDistance`; play mode ignores VMD light/shadow unless `settings_.motionLighting`.
+    Perspective-off keys render as a 3 degree lens from far away.
   - Projects (`studio/StudioProject.*`, `app/UiStudioProject.cpp`): `.mmdxproj` is UTF-8 JSON (format version, relative
     paths) next to standard VMDs (`<stem> - <model>.vmd`, `<stem> - camera.vmd`); every file is written tmp + rename.
     Dirty = `history.Version()` or `projectVersion` (add/remove/rename/visibility/audio) changed since the save. Autosave
@@ -166,6 +175,16 @@ progress.md is the session log. Read its latest entry first.
   from a user texture folder, v1 fallback per missing map; `tools/pack_check` validates
   textures (format / count / size / total ≤ 32 MB / bad paths; missing files are warnings) and literal
   `PackSampleTex(N)` indices against the declared count.
+  API v3 effect packs (docs/shader_effect_api.md): `"type": "effect"`, `"stage": "post" | "pre-bloom"`, `effect.hlsl` implements
+  `PackEffect(PackEffectInput)` (contract `shaders/effect_api.hlsli`, host `shaders/effect.hlsl`, DXC `ps_6_0` with `MMDX_PACK`).
+  The user's ordered stack is `RenderSettings::packEffects` (`EffectStackEntry`; `AppSettings::effectStack`, ini `effect=`,
+  CLI `--effect id[,id]|none`). `PackEffectPass` (`PassEffect.cpp`) is registered twice (pre-bloom after DoF, post after Post), runs
+  its share with ping-pong targets created only while an entry is enabled (zero effects = no targets, identical frame), skips
+  unlit / wire / quad views, and ends with a CopyResource into `hdrFinal` / `ldr`. Pack textures use the v2 table (`PackFxSampleTex`,
+  t0 space5), frame inputs are t0..t3 space6, params 16 root constants at b2. UI: `App::DrawEffectStackEditor` (shader manager detail
+  of an effect pack + the play bar's effect button); surface pickers list surface packs only. Templates `shaders/pack_template`
+  (surface) / `pack_template_effect`; built-ins chromatic_aberration, film_grain, crt_scanlines. Studio projects don't store the
+  stack yet (app-level setting).
 - `OfflineRenderer` (render/OfflineRenderer.h) is independent of `RenderSettings`: `Renderer::BeginOffline` builds the TLAS,
   then `Renderer::RenderOffline` replaces `Render` each frame (GPU-time-budgeted iterations, preview present) until Done.
   Motion blur: each iteration re-skins the character at its shutter time (`RtScene::Build(..., time)`) from the models'

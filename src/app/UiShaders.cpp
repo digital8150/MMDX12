@@ -107,6 +107,9 @@ const ShaderPack* InstalledVersionOf(const std::string& id) {
     return p && p->status != PackStatus::Duplicate ? p : nullptr;
 }
 
+// "효과" / "표면" type badge text for a card.
+const char* TypeLabel(PackType t) { return t == PackType::Effect ? Tr("효과") : Tr("표면"); }
+
 } // namespace
 
 // ---- per frame ------------------------------------------------------------------------------------------------------
@@ -294,6 +297,8 @@ void App::DrawShaders() {
                 if (!PackMatches(needle, pk.id, pk.name, pk.authors, pk.tags)) continue;
                 std::vector<std::pair<std::string, std::pair<ImU32, ImU32>>> badges;
                 badges.push_back({SourceLabel(pk.source), {WithAlpha(p.ink, 0.06f), p.ink2}});
+                if (pk.type == PackType::Effect)   // surface is the default: badge the effects only
+                    badges.push_back({TypeLabel(pk.type), {p.accentSoft, p.accentInk}});
                 ImU32 bg = 0, fg = 0;
                 if (const char* st = StatusLabel(pk.status, bg, fg)) badges.push_back({st, {bg, fg}});
                 const std::string sub = "v" + pk.version + (pk.authors.empty() ? "" : "  ·  " + PackAuthorLine(pk.authors));
@@ -515,6 +520,11 @@ void App::DrawShaderPackDetail(float x0, float y0, float x1, float y1) {
         }
         ImGui::PopID();
     }
+    // an effect pack: the stack editor above the management buttons (this pack is usually added from here)
+    if (pk->type == PackType::Effect && DrawEffectStackEditor(settings_.effectStack)) {
+        settings_.Save(settingsPath_);
+        ApplyRenderSettings();   // the new stack reaches the next frame
+    }
     Caption(Tr("관리"));
     if (Button("##openpack", Tr("폴더 열기"), icon::FolderOpen, ButtonKind::Secondary)) OpenFolder(pk->dir);
     if (pk->source != PackSource::BuiltIn) {
@@ -551,6 +561,93 @@ void App::DrawShaderPackDetail(float x0, float y0, float x1, float y1) {
     ImGui::PopStyleVar();
     ImGui::PopTextWrapPos();
     ImGui::EndChild();
+}
+
+// ---- effect stack editor ------------------------------------------------------------------------------------------------------
+
+// The ordered effect stack (RenderSettings::packEffects): per entry an enable switch, up / down / remove and the pack's
+// sliders; "효과 추가" appends an installed effect pack. True = the stack changed this frame (the caller saves + applies).
+bool App::DrawEffectStackEditor(std::vector<EffectStackEntry>& stack) {
+    const Palette& p = P();
+    ShaderPackRegistry& reg = ShaderPacks();
+    const std::string lang = PackLanguage();
+
+    SectionLabel(Tr("효과 스택"));
+    Para(Tr("위에서 아래로 화면 효과를 차례로 적용합니다. 영상·스틸 렌더에도 같은 스택이 쓰입니다."), p.ink3, size::Caption);
+    Gap(6.0f);
+
+    bool changed = false;
+    for (size_t i = 0; i < stack.size() && !changed; ++i) {
+        EffectStackEntry& e = stack[i];
+        const ShaderPack* pk = reg.Find(e.pack);
+        const bool usable = pk && pk->Selectable() && pk->type == PackType::Effect;
+        const std::string name = pk ? pk->name.Get(lang) : e.pack;
+        const char* where = !pk ? Tr("설치되어 있지 않음")
+                            : !usable ? Tr("사용할 수 없음 · 셰이더 탭에서 확인")
+                            : pk->stage == PackEffectStage::PreBloom ? Tr("블룸 앞 (HDR)") : Tr("톤맵 뒤");
+        ImGui::PushID((int)i);
+        bool on = e.enabled;
+        if (Switch("##on", name.c_str(), &on, where)) {
+            e.enabled = on;
+            changed = true;
+        }
+        if (IconButton("##up", icon::CaretUp, Tr("위로"), false, 28.0f) && i > 0) {
+            std::swap(stack[i - 1], stack[i]);
+            changed = true;
+        }
+        ImGui::SameLine();
+        if (IconButton("##down", icon::CaretDown, Tr("아래로"), false, 28.0f) && i + 1 < stack.size()) {
+            std::swap(stack[i], stack[i + 1]);
+            changed = true;
+        }
+        ImGui::SameLine();
+        if (IconButton("##remove", icon::X, Tr("스택에서 제거"), false, 28.0f)) {
+            stack.erase(stack.begin() + (long)i);
+            changed = true;
+        }
+        if (!changed && usable && e.enabled && !pk->params.empty()) {
+            const PackParamValues values = pk->Resolve(e.params);
+            for (size_t k = 0; k < pk->params.size(); ++k) {
+                const ShaderPackParam& sp = pk->params[k];
+                float v = values[k];
+                const std::string sid = "##fx_" + sp.key;
+                const std::string label = sp.label.Empty() ? sp.key : sp.label.Get(lang);
+                if (SliderRow(sid.c_str(), label.c_str(), &v, sp.min, sp.max, "%.2f")) {
+                    e.params[sp.key] = v;
+                    changed = true;
+                }
+            }
+        }
+        ImGui::PopID();
+        Gap(8.0f);
+    }
+
+    std::vector<const ShaderPack*> addable;
+    for (const ShaderPack& pk : reg.Packs()) {
+        if (pk.type != PackType::Effect || !pk.Selectable()) continue;
+        bool in = false;
+        for (const EffectStackEntry& e : stack) in |= e.pack == pk.id;
+        if (!in) addable.push_back(&pk);
+    }
+    if (!addable.empty()) {
+        if (Button("##fxadd", Tr("효과 추가"), icon::Plus, ButtonKind::Secondary)) ImGui::OpenPopup("##fxaddpopup");
+        ImGui::SetNextWindowSize(ImVec2(Dp(300.0f), 0));
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(Dp(12.0f), Dp(12.0f)));
+        if (ImGui::BeginPopup("##fxaddpopup")) {
+            for (const ShaderPack* pk : addable) {
+                const std::string rid = "##fxadd_" + pk->id;
+                if (MenuItem(rid.c_str(), pk->name.Get(lang).c_str())) {
+                    stack.push_back({pk->id, true, {}, {}});
+                    changed = true;
+                    ImGui::CloseCurrentPopup();
+                }
+            }
+            ImGui::EndPopup();
+        }
+        ImGui::PopStyleVar();
+    }
+    if (stack.empty()) Para(Tr("효과가 없습니다. 효과 팩을 추가하면 위에서 아래로 차례로 적용됩니다."), p.ink3, size::Caption);
+    return changed;
 }
 
 void App::DrawRemotePackDetail(float x0, float y0, float x1, float y1) {
@@ -675,7 +772,11 @@ void App::DrawNewPackDialog() {
         Para(Tr("주석이 달린 템플릿으로 shader_packs 폴더에 팩을 만듭니다. 앱을 켜 둔 채로 surface.hlsl 을 고치면 저장할 때마다 바로 반영됩니다."),
              p.ink2);
         ImGui::PopTextWrapPos();
-        Gap(14.0f);
+        Gap(10.0f);
+        if (Chip("##npsurface", Tr("표면"), nullptr, !newPackEffect_)) newPackEffect_ = false;
+        ImGui::SameLine();
+        if (Chip("##npeffect", Tr("효과"), nullptr, newPackEffect_)) newPackEffect_ = true;
+        Gap(10.0f);
         TextField("##npid", Tr("id (영문 소문자, 숫자, _ -)"), newPackId_, sizeof(newPackId_), w / Dpi(), "my_toon");
         Gap(8.0f);
         TextField("##npname", Tr("이름"), newPackName_, sizeof(newPackName_), w / Dpi(), Tr("내 툰 셰이더"));
@@ -694,7 +795,7 @@ void App::DrawNewPackDialog() {
         if (Button("##npcreate", Tr("만들고 폴더 열기"), icon::Plus, ButtonKind::Primary)) {
             std::filesystem::path dir;
             std::string err;
-            if (ShaderPacks().CreateFromTemplate(id, newPackName_, newPackAuthor_, dir, err)) {
+            if (ShaderPacks().CreateFromTemplate(id, newPackName_, newPackAuthor_, dir, err, newPackEffect_)) {
                 shaderSelInstalled_ = id;
                 OpenFolder(dir);
                 newPackOpen_ = false;
