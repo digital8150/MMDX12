@@ -44,7 +44,15 @@ PtPackOut PackEvaluate(PtPackIn i);
 
 ### Helpers
 
-- `PtPackSampleTex(i, uv)`: reserved explicit-LOD helper for future pack texture support (phase 1 returns white).
+Pack textures declared in `pack.json` (`"textures"`, up to 16) are accessible inside `PackEvaluate`.
+Sampling uses explicit LOD (no implicit-gradient `.Sample`). Textures declared `"srgb": true` (default) sample as linear; `"srgb": false` return stored values. Out-of-range index or missing texture file on disk returns white `(1, 1, 1, 1)` and size `(1, 1)`:
+
+- `float4 PtPackSampleTex(uint i, float2 uv)`: samples pack texture `i` at LOD 0 using its declared wrap/clamp address mode.
+- `float4 PtPackSampleTexLevel(uint i, float2 uv, float lod)`: samples pack texture `i` at explicit `lod` using its declared address mode.
+- `uint PtPackTexCount()`: number of declared pack textures (0 if no textures declared or upload failed).
+- `float2 PtPackTexSize(uint i)`: dimensions of texture `i` in pixels; returns `(1, 1)` for out-of-range index.
+
+Note: `ScenePass` (raster/RT) and the ray-tracing / path-tracer scene cache (`render/PackTextures`) each acquire their own texture sets independently. When both raster and PT use the same pack, duplicate GPU texture copies may exist.
 
 ## Integrator behaviour
 

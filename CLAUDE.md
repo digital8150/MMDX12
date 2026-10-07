@@ -175,7 +175,7 @@ progress.md is the session log. Read its latest entry first.
   from a user texture folder, v1 fallback per missing map; `tools/pack_check` validates
   textures (format / count / size / total ≤ 32 MB / bad paths; missing files are warnings) and literal
   `PackSampleTex(N)` indices against the declared count.
-  `pt_surface.hlsl` (docs/shader_pt_api.md, phase 1+2): optional `PackEvaluate(PtPackIn)` hook for offline GI (`CSRender`, `OfflineRenderer`) and real-time PT (`CSPathTrace`, `PathTracePass`); packs without it leave PT/GI untouched; shared variant cache `render/PtPackVariants.*`.
+  `pt_surface.hlsl` (docs/shader_pt_api.md, phases 1-3): optional `PackEvaluate(PtPackIn)` hook for offline GI (`CSRender`, `OfflineRenderer`) and real-time PT (`CSPathTrace`, `PathTracePass`) with pack textures supported (`PtPackSampleTex*`, `render/PackTextures.*`); packs without it leave PT/GI untouched; shared variant cache `render/PtPackVariants.*`.
   API v3 effect packs (docs/shader_effect_api.md): `"type": "effect"`, `"stage": "post" | "pre-bloom"`, `effect.hlsl` implements
   `PackEffect(PackEffectInput)` (contract `shaders/effect_api.hlsli`, host `shaders/effect.hlsl`, DXC `ps_6_0` with `MMDX_PACK`).
   The user's ordered stack is `RenderSettings::packEffects` (`EffectStackEntry`; `AppSettings::effectStack`, ini `effect=`,

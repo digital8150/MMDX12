@@ -237,31 +237,58 @@ bool CheckTextures(const ShaderPack& pack, const fs::path& dir) {
 // PackSampleTex(N) / PackSampleTexLevel(N, ...) literal indices in surface.hlsl must be < the
 // declared texture count (best effort: literal indices only).
 void CheckTextureIndices(const ShaderPack& pack, const fs::path& dir, bool& ok) {
-    if (pack.textures.empty()) return;
     std::error_code ec;
-    const wchar_t* shaderFile = pack.type == mmdx::PackType::Effect ? L"effect.hlsl" : L"surface.hlsl";
-    if (!fs::is_regular_file(dir / shaderFile, ec)) return;
-    FILE* f = _wfopen((dir / shaderFile).c_str(), L"rb");
-    if (!f) return;
-    std::string hlsl;
-    char buf[4096];
-    size_t n;
-    while ((n = fread(buf, 1, sizeof(buf), f)) > 0) hlsl.append(buf, n);
-    fclose(f);
     const uint32_t count = (uint32_t)pack.textures.size();
-    for (const char* fn : {"PackSampleTex(", "PackSampleTexLevel(", "PackFxSampleTex(", "PackFxSampleTexLevel("}) {
-        for (size_t pos = hlsl.find(fn); pos != std::string::npos; pos = hlsl.find(fn, pos + 1)) {
-            size_t i = pos + strlen(fn);
-            while (i < hlsl.size() && (hlsl[i] == ' ' || hlsl[i] == '\t')) ++i;
-            size_t digits = i;
-            while (digits < hlsl.size() && hlsl[digits] >= '0' && hlsl[digits] <= '9') ++digits;
-            if (digits == i) continue;   // not a literal index
-            while (digits < hlsl.size() && (hlsl[digits] == ' ' || hlsl[digits] == '\t')) ++digits;
-            if (digits >= hlsl.size() || (hlsl[digits] != ',' && hlsl[digits] != ')')) continue;
-            const unsigned long index = strtoul(hlsl.c_str() + i, nullptr, 10);
-            if (index >= count) {
-                printf("  [problem] %ls: %s%lu but the pack declares %u textures\n", fn, index, count);
-                ok = false;
+    const wchar_t* shaderFile = pack.type == mmdx::PackType::Effect ? L"effect.hlsl" : L"surface.hlsl";
+    if (fs::is_regular_file(dir / shaderFile, ec)) {
+        FILE* f = _wfopen((dir / shaderFile).c_str(), L"rb");
+        if (f) {
+            std::string hlsl;
+            char buf[4096];
+            size_t n;
+            while ((n = fread(buf, 1, sizeof(buf), f)) > 0) hlsl.append(buf, n);
+            fclose(f);
+            for (const char* fn : {"PackSampleTex(", "PackSampleTexLevel(", "PackFxSampleTex(", "PackFxSampleTexLevel("}) {
+                for (size_t pos = hlsl.find(fn); pos != std::string::npos; pos = hlsl.find(fn, pos + 1)) {
+                    size_t i = pos + strlen(fn);
+                    while (i < hlsl.size() && (hlsl[i] == ' ' || hlsl[i] == '\t')) ++i;
+                    size_t digits = i;
+                    while (digits < hlsl.size() && hlsl[digits] >= '0' && hlsl[digits] <= '9') ++digits;
+                    if (digits == i) continue;   // not a literal index
+                    while (digits < hlsl.size() && (hlsl[digits] == ' ' || hlsl[digits] == '\t')) ++digits;
+                    if (digits >= hlsl.size() || (hlsl[digits] != ',' && hlsl[digits] != ')')) continue;
+                    const unsigned long index = strtoul(hlsl.c_str() + i, nullptr, 10);
+                    if (index >= count) {
+                        printf("  [problem] %ls: %s%lu but the pack declares %u textures\n", shaderFile, fn, index, count);
+                        ok = false;
+                    }
+                }
+            }
+        }
+    }
+    if (fs::is_regular_file(dir / L"pt_surface.hlsl", ec)) {
+        FILE* f = _wfopen((dir / L"pt_surface.hlsl").c_str(), L"rb");
+        if (f) {
+            std::string hlsl;
+            char buf[4096];
+            size_t n;
+            while ((n = fread(buf, 1, sizeof(buf), f)) > 0) hlsl.append(buf, n);
+            fclose(f);
+            for (const char* fn : {"PtPackSampleTex(", "PtPackSampleTexLevel("}) {
+                for (size_t pos = hlsl.find(fn); pos != std::string::npos; pos = hlsl.find(fn, pos + 1)) {
+                    size_t i = pos + strlen(fn);
+                    while (i < hlsl.size() && (hlsl[i] == ' ' || hlsl[i] == '\t')) ++i;
+                    size_t digits = i;
+                    while (digits < hlsl.size() && hlsl[digits] >= '0' && hlsl[digits] <= '9') ++digits;
+                    if (digits == i) continue;   // not a literal index
+                    while (digits < hlsl.size() && (hlsl[digits] == ' ' || hlsl[digits] == '\t')) ++digits;
+                    if (digits >= hlsl.size() || (hlsl[digits] != ',' && hlsl[digits] != ')')) continue;
+                    const unsigned long index = strtoul(hlsl.c_str() + i, nullptr, 10);
+                    if (index >= count) {
+                        printf("  [problem] pt_surface.hlsl: %s%lu but the pack declares %u textures\n", fn, index, count);
+                        ok = false;
+                    }
+                }
             }
         }
     }

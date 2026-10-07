@@ -3,6 +3,7 @@
 #include "render/RayTracing.h"
 #include "render/GpuModel.h"
 #include "render/RenderPass.h"
+#include "render/PackTextures.h"
 #include "render/ShaderInterop.h"
 #include "render/ShaderPack.h"
 #include "core/Log.h"
@@ -403,9 +404,25 @@ bool RtScene::Build(ID3D12GraphicsCommandList* cmd, const std::vector<GpuModel*>
         }
 
         bool isPtPack = false;
+        const ShaderPack* sp = nullptr;
         if (m->Role() == ModelRole::Character && !m->ShaderPackId().empty()) {
-            const ShaderPack* sp = ShaderPacks().Find(m->ShaderPackId());
+            sp = ShaderPacks().Find(m->ShaderPackId());
             if (sp && sp->hasPtSurface) isPtPack = true;
+        }
+
+        uint32_t texBase = 0;
+        uint32_t texInfo = 0;
+        if (isPtPack && sp && packTextures_ && ctx_) {
+            const PackTextures::Set* set = packTextures_->Acquire(*ctx_, *sp, m->ShaderTextureFolder());
+            if (set && set->srv != DescriptorHeap::kInvalid) {
+                uint32_t count = (uint32_t)std::min<size_t>(sp->textures.size(), kPackMaxTextures);
+                uint32_t clampMask = 0;
+                for (uint32_t i = 0; i < count; ++i) {
+                    if (sp->textures[i].clamp) clampMask |= (1u << i);
+                }
+                texBase = set->srv;
+                texInfo = (count & 0xFFu) | ((clampMask & 0xFFFFu) << 8);
+            }
         }
 
         DirectX::XMFLOAT3 headRight = {1.0f, 0.0f, 0.0f};
@@ -476,7 +493,8 @@ bool RtScene::Build(ID3D12GraphicsCommandList* cmd, const std::vector<GpuModel*>
                     packRecordsMapped_ + recordIdx * sizeof(RtPtPackRecord));
                 rec->materialClass = c.packClass;
                 rec->headValid = headValid;
-                rec->_pad0[0] = rec->_pad0[1] = 0.0f;
+                rec->texBase = texBase;
+                rec->texInfo = texInfo;
                 rec->headRight = {headRight.x, headRight.y, headRight.z, 0.0f};
                 rec->headUp = {headUp.x, headUp.y, headUp.z, 0.0f};
                 rec->headForward = {headForward.x, headForward.y, headForward.z, 0.0f};

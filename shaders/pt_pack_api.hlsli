@@ -39,10 +39,12 @@ struct PtPackOut {
     bool flatFace;        // bool: use the engine's existing flat-face handling = no GI gradient on this surface
 };
 
-// Reserved helper for future pack texture support (phase 1 returns white).
-// Explicit-LOD helper only (no .Sample).
-float4 PtPackSampleTex(uint i, float2 uv) {
-    return float4(1.0, 1.0, 1.0, 1.0);
-}
+// Pack texture helpers (docs/shader_pt_api.md). Implemented in pt_pack_glue.hlsli.
+// Explicit-LOD sampling only. Indices are 0-based in pack.json "textures" order.
+// Out-of-range index samples as white (1, 1, 1, 1) / returns size (1, 1).
+float4 PtPackSampleTex(uint i, float2 uv);
+float4 PtPackSampleTexLevel(uint i, float2 uv, float lod);
+uint PtPackTexCount();
+float2 PtPackTexSize(uint i);
 
 #endif // PT_PACK_API_HLSLI

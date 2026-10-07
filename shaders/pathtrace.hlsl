@@ -2,15 +2,15 @@
 // punctual-light NEE, analytic studio floor, stochastic alpha-tested transparency.
 // u0 light (divided by albedo on surfaces), u1/u2/u3/u4 primary G-buffer for denoising.
 #include "rt_common.hlsli"   // includes common.hlsli
-#ifdef MMDX_PT_PACK
-#include "pt_pack_api.hlsli"
-#include MMDX_PT_PACK
-#include "pt_pack_glue.hlsli"
-#endif
 cbuffer PassCB : register(b1) { float4 gP0; float4 gP1; float4 gP2; float4 gP3; };
 SamplerState gPoint : register(s0);
 SamplerState gLinear : register(s1);
 SamplerState gLinearWrap : register(s2);
+#ifdef MMDX_PT_PACK
+#include "pt_pack_api.hlsli"
+#include "pt_pack_glue.hlsli"
+#include MMDX_PT_PACK
+#endif
 
 RWTexture2D<float4> gLightOut : register(u0);
 RWTexture2D<float4> gAlbedoOut : register(u1);
@@ -153,6 +153,7 @@ void CSPathTrace(uint3 id : SV_DispatchThreadID) {
                     bool isPtPackHit = (g.flags & RTG_PT_PACK) != 0;
                     if (isPtPackHit) {
                         RtPtPackRecord rec = LoadPtPackRecord(g.packSrv);
+                        PtPackBindRecord(rec);
                         PtPackIn packIn;
                         packIn.pos = pos;
                         packIn.normal = n;

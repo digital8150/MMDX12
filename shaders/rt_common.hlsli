@@ -30,7 +30,8 @@
 struct RtPtPackRecord {
     uint materialClass;
     uint headValid;
-    uint2 _pad0;
+    uint texBase;
+    uint texInfo;
     float4 headRight;
     float4 headUp;
     float4 headForward;

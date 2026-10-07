@@ -2,6 +2,7 @@
 #include "render/Dx12Context.h"
 #include "render/GpuModel.h"
 #include "render/OfflineRenderer.h"
+#include "render/PackTextures.h"
 #include "render/RayTracing.h"
 #include "render/RenderPass.h"
 #include "render/RenderTypes.h"
@@ -116,6 +117,7 @@ private:
     TransientDescriptors transient_;
     std::unique_ptr<IUpscaler> upscalers_[4];  // indexed by UpscalerKind; [0] unused
     bool upscalerAvailable_[4] = {true, false, false, false};
+    std::unique_ptr<PackTextures> packTextures_;
     std::unique_ptr<RtScene> rt_;
     std::unique_ptr<OfflineRenderer> offline_;   // null without ray tracing / offline pipelines
     bool offlinePresent_ = true;

@@ -32,15 +32,15 @@
 #include "rt_common.hlsli"   // includes common.hlsli
 #include "offline_common.hlsli"
 #include "offline_glass.hlsli"
-#ifdef MMDX_PT_PACK
-#include "pt_pack_api.hlsli"
-#include MMDX_PT_PACK
-#include "pt_pack_glue.hlsli"
-#endif
 cbuffer PassCB : register(b1) { float4 gP0; float4 gP1; float4 gP2; float4 gP3; };
 SamplerState gPoint : register(s0);
 SamplerState gLinear : register(s1);
 SamplerState gLinearWrap : register(s2);
+#ifdef MMDX_PT_PACK
+#include "pt_pack_api.hlsli"
+#include "pt_pack_glue.hlsli"
+#include MMDX_PT_PACK
+#endif
 
 RWTexture2D<float4> gAccum : register(u0);
 RWTexture2D<float4> gAlbedoAccum : register(u1);
@@ -888,6 +888,7 @@ void CSRender(uint3 id : SV_DispatchThreadID) {
         float ptSunVis = 0.0;
         if (isPtPackHit) {
             RtPtPackRecord rec = LoadPtPackRecord(s.g.packSrv);
+            PtPackBindRecord(rec);
             PtPackIn packIn;
             packIn.pos = s.pos;
             packIn.normal = s.n;

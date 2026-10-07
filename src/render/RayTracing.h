@@ -19,6 +19,7 @@
 namespace mmdx {
 
 class GpuModel;
+class PackTextures;
 
 class RtScene {
 public:
@@ -26,6 +27,8 @@ public:
     ~RtScene();
     RtScene(const RtScene&) = delete;
     RtScene& operator=(const RtScene&) = delete;
+
+    void SetPackTextures(PackTextures* pt) { packTextures_ = pt; }
 
     // False (logged) when the device lacks raytracing tier 1.1 / shader model 6.5 /
     // ID3D12Device5, or skin.hlsl does not compile.
@@ -68,6 +71,7 @@ private:
     uint32_t packRecordCapacity_ = 0;                       // per slot
     uint32_t packSrvBase_ = DescriptorHeap::kInvalid;       // kSlots * packRecordCapacity_ descriptors
     uint32_t lastSlot_ = 0;
+    PackTextures* packTextures_ = nullptr;
     bool ready_ = false;
 };
 

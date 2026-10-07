@@ -134,7 +134,8 @@ enum RtGeometryFlags : uint32_t {
 struct RtPtPackRecord {
     uint32_t materialClass;
     uint32_t headValid;
-    float _pad0[2];
+    uint32_t texBase;
+    uint32_t texInfo;
     DirectX::XMFLOAT4 headRight;   // xyz, w unused
     DirectX::XMFLOAT4 headUp;      // xyz, w unused
     DirectX::XMFLOAT4 headForward; // xyz, w unused

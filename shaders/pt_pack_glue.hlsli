@@ -4,13 +4,50 @@
 
 #include "pt_pack_api.hlsli"
 
+static uint s_PtPackTexBase = 0;
+static uint s_PtPackTexCount = 0;
+static uint s_PtPackClampMask = 0;
+
+void PtPackBindRecord(RtPtPackRecord rec) {
+    s_PtPackTexBase = rec.texBase;
+    s_PtPackTexCount = rec.texInfo & 0xFFu;
+    s_PtPackClampMask = (rec.texInfo >> 8) & 0xFFFFu;
+}
+
+uint PtPackTexCount() {
+    return s_PtPackTexCount;
+}
+
+float2 PtPackTexSize(uint i) {
+    if (i >= s_PtPackTexCount) return float2(1.0, 1.0);
+    uint w, h;
+    gBindlessTex[NonUniformResourceIndex(s_PtPackTexBase + i)].GetDimensions(w, h);
+    return float2((float)w, (float)h);
+}
+
+float4 PtPackSampleTexLevel(uint i, float2 uv, float lod) {
+    if (i >= s_PtPackTexCount) return float4(1.0, 1.0, 1.0, 1.0);
+    uint srvIndex = s_PtPackTexBase + i;
+    bool clamp = ((s_PtPackClampMask >> i) & 1u) != 0;
+    if (clamp) {
+        return gBindlessTex[NonUniformResourceIndex(srvIndex)].SampleLevel(gLinear, uv, lod);
+    } else {
+        return gBindlessTex[NonUniformResourceIndex(srvIndex)].SampleLevel(gLinearWrap, uv, lod);
+    }
+}
+
+float4 PtPackSampleTex(uint i, float2 uv) {
+    return PtPackSampleTexLevel(i, uv, 0.0);
+}
+
 RtPtPackRecord LoadPtPackRecord(uint packSrv) {
     ByteAddressBuffer buf = gBindlessBuf[NonUniformResourceIndex(packSrv)];
     RtPtPackRecord rec;
     uint4 v0 = buf.Load4(0);
     rec.materialClass = v0.x;
     rec.headValid = v0.y;
-    rec._pad0 = v0.zw;
+    rec.texBase = v0.z;
+    rec.texInfo = v0.w;
     rec.headRight = asfloat(buf.Load4(16));
     rec.headUp = asfloat(buf.Load4(32));
     rec.headForward = asfloat(buf.Load4(48));

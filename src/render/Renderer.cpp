@@ -120,9 +120,11 @@ bool Renderer::Initialize(Dx12Context& ctx, const std::filesystem::path& shaderD
         upscalerAvailable_[i] = upscalers_[i]->Initialize(ctx);
         LOG_INFO("upscaler %s: %s", upscalers_[i]->DisplayName(), upscalerAvailable_[i] ? "available" : "unavailable");
     }
+    packTextures_ = std::make_unique<PackTextures>();
     rt_ = std::make_unique<RtScene>();
     rtSupported_ = rt_->Initialize(ctx, shaderDir);
     if (!rtSupported_) rt_.reset();
+    else rt_->SetPackTextures(packTextures_.get());
     if (rtSupported_) {
         offline_ = std::make_unique<OfflineRenderer>();
         if (!offline_->Initialize(ctx, shaderDir)) {
@@ -825,6 +827,10 @@ void Renderer::Shutdown() {
     if (rt_) {
         rt_->Shutdown();
         rt_.reset();
+    }
+    if (packTextures_) {
+        packTextures_->Clear(ctx_);
+        packTextures_.reset();
     }
     rtSupported_ = false;
     for (size_t k = 1; k < 4; ++k) {

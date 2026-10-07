@@ -26,6 +26,7 @@
 #include <string>
 #include "render/RenderPass.h"
 #include "render/PtPackVariants.h"
+#include "render/PackTextures.h"
 #include <wrl/client.h>
 
 namespace mmdx {
@@ -75,12 +76,7 @@ private:
     struct PackPipelines {
         ComPtr<ID3D12PipelineState> back, noCull, backRt, noCullRt, edge;
         bool failed = false, rtTried = false;
-        struct TextureSet {
-            bool loaded = false;
-            uint32_t srv = DescriptorHeap::kInvalid;   // kPackMaxTextures consecutive SRVs in ctx.SrvHeap()
-            ComPtr<ID3D12Resource> white;              // 1x1 neutral fallback (kept alive with the SRVs)
-            std::vector<ComPtr<ID3D12Resource>> tex;
-        };
+        using TextureSet = PackTextures::Set;
         std::map<std::string, TextureSet> sets;        // resolved folder (utf-8, "" = pack folder) -> its set
     };
     const PackPipelines* PackPsos(Dx12Context& ctx, const std::string& id, const std::filesystem::path& textureFolder,
