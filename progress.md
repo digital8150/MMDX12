@@ -666,3 +666,6 @@ Workers: opencode (API 2 core: the first run stopped on an interactive question 
 - Ramp row order (alpha 1.0 / 0.7 / 0.5 / 0.3 / 0 -> rows 0..4) and the face SDF side are from community notes + one look;
   `faceFlip` exists for mirrored models. Furina's third sheet (Dress) maps to body. Star Rail / ZZZ map layouts differ.
 - Texture sets of old folders stay allocated until the next registry rescan.
+- Released 1.3.0 (GitHub release v1.3.0, asset SHA-256 = local zip; the packaged exe reported 1.3.0 and compiled
+  hoyo_toon_v2 with no [E]). Website deployed: /latest.json -> 1.3.0, gallery index has hoyo_toon_v2 2.0.0 (live zip
+  SHA-256 checked), docs in four languages. Issue #2 answered with the before/after image (docs/media).
