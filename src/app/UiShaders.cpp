@@ -29,7 +29,7 @@ namespace {
 
 constexpr float kAppBarH = 64.0f;   // as UiSelect.cpp
 constexpr float kPad = 28.0f;
-constexpr float kPanelW = 400.0f;
+constexpr float kPanelW = 460.0f;
 
 void OpenUrl(const std::string& url) {
     if (url.rfind("https://", 0) == 0 || url.rfind("http://", 0) == 0)
@@ -420,145 +420,157 @@ void App::DrawShaderPackDetail(float x0, float y0, float x1, float y1) {
         ImGui::Dummy(ImVec2(w, 0));
     }
 
-    if (!pk->description.Empty()) {
-        Gap(12.0f);
-        Para(pk->description.Get(lang), p.ink2);
-    }
-    if (!pk->recommendedFor.Empty()) {
-        Caption(Tr("이런 모델에 맞춰 만들었어요"));
-        Para(pk->recommendedFor.Get(lang), p.ink2);
-    }
-    if (!pk->authors.empty()) {
-        Caption(Tr("만든 사람"));
-        for (size_t i = 0; i < pk->authors.size(); ++i) {
-            const PackAuthor& a = pk->authors[i];
-            const ImVec2 c = ImGui::GetCursorScreenPos();
-            Text(dl, Font::Semibold, size::Small, ImVec2(c.x, c.y + Dp(6.0f)), p.ink, a.name.c_str());
-            if (!a.role.empty())
-                Text(dl, Font::Regular, size::Caption,
-                     ImVec2(c.x + TextSize(Font::Semibold, size::Small, a.name.c_str()).x + Dp(8.0f), c.y + Dp(7.0f)), p.ink3,
-                     a.role.c_str());
-            if (!a.url.empty()) {
-                ImGui::SetCursorScreenPos(ImVec2(c.x + w - Dp(32.0f), c.y));
-                ImGui::PushID((int)i);
-                if (IconButton("##authorlink", icon::LinkSimple, a.url.c_str(), false, 28.0f)) OpenUrl(a.url);
-                ImGui::PopID();
+    Gap(14.0f);
+    if (shaderDetailTab_ < 0 || shaderDetailTab_ > 2) shaderDetailTab_ = 0;
+    const char* tabLabels[] = {Tr("정보"), Tr("설정"), Tr("관리")};
+    Segmented("##packdetailtab", tabLabels, 3, &shaderDetailTab_, w / Dpi(), 36.0f);
+
+    if (shaderDetailTab_ == 0) {
+        if (!pk->description.Empty()) {
+            Gap(12.0f);
+            Para(pk->description.Get(lang), p.ink2);
+        }
+        if (!pk->recommendedFor.Empty()) {
+            Caption(Tr("이런 모델에 맞춰 만들었어요"));
+            Para(pk->recommendedFor.Get(lang), p.ink2);
+        }
+        if (!pk->authors.empty()) {
+            Caption(Tr("만든 사람"));
+            for (size_t i = 0; i < pk->authors.size(); ++i) {
+                const PackAuthor& a = pk->authors[i];
+                const ImVec2 c = ImGui::GetCursorScreenPos();
+                Text(dl, Font::Semibold, size::Small, ImVec2(c.x, c.y + Dp(6.0f)), p.ink, a.name.c_str());
+                if (!a.role.empty())
+                    Text(dl, Font::Regular, size::Caption,
+                         ImVec2(c.x + TextSize(Font::Semibold, size::Small, a.name.c_str()).x + Dp(8.0f), c.y + Dp(7.0f)), p.ink3,
+                         a.role.c_str());
+                if (!a.url.empty()) {
+                    ImGui::SetCursorScreenPos(ImVec2(c.x + w - Dp(32.0f), c.y));
+                    ImGui::PushID((int)i);
+                    if (IconButton("##authorlink", icon::LinkSimple, a.url.c_str(), false, 28.0f)) OpenUrl(a.url);
+                    ImGui::PopID();
+                }
+                ImGui::SetCursorScreenPos(ImVec2(c.x, c.y + Dp(30.0f)));
+                ImGui::Dummy(ImVec2(w, 0));
             }
-            ImGui::SetCursorScreenPos(ImVec2(c.x, c.y + Dp(30.0f)));
-            ImGui::Dummy(ImVec2(w, 0));
         }
-    }
-    if (!pk->license.empty() || !pk->homepage.empty() || !pk->repository.empty()) {
-        Caption(Tr("라이선스 · 링크"));
-        if (!pk->license.empty()) Para(pk->license, p.ink2);
-        if (!pk->homepage.empty()) {
-            Gap(4.0f);
-            if (Button("##home", Tr("홈페이지"), icon::Globe, ButtonKind::Ghost)) OpenUrl(pk->homepage);
-            if (!pk->repository.empty()) ImGui::SameLine();
+        if (!pk->license.empty() || !pk->homepage.empty() || !pk->repository.empty()) {
+            Caption(Tr("라이선스 · 링크"));
+            if (!pk->license.empty()) Para(pk->license, p.ink2);
+            if (!pk->homepage.empty()) {
+                Gap(4.0f);
+                if (Button("##home", Tr("홈페이지"), icon::Globe, ButtonKind::Ghost)) OpenUrl(pk->homepage);
+                if (!pk->repository.empty()) ImGui::SameLine();
+            }
+            if (!pk->repository.empty() && Button("##repo", Tr("소스 저장소"), icon::LinkSimple, ButtonKind::Ghost))
+                OpenUrl(pk->repository);
         }
-        if (!pk->repository.empty() && Button("##repo", Tr("소스 저장소"), icon::LinkSimple, ButtonKind::Ghost))
-            OpenUrl(pk->repository);
-    }
-    if (!pk->tags.empty()) {
-        Caption(Tr("태그"));
-        BadgeFlow(pk->tags, w);
-    }
-    if (!pk->params.empty()) {
-        Caption(Tr("조절할 수 있는 값"));
-        for (const ShaderPackParam& sp : pk->params) {
-            const ImVec2 c = ImGui::GetCursorScreenPos();
-            const std::string label = sp.label.Empty() ? sp.key : sp.label.Get(lang);
-            char range[64];
-            std::snprintf(range, sizeof(range), "%.2f  (%.2f – %.2f)", sp.def, sp.min, sp.max);
-            TextEllipsis(dl, Font::Regular, size::Small, c, c.x + w * 0.6f, p.ink2, label.c_str());
-            const ImVec2 rs = TextSize(Font::Regular, size::Caption, range);
-            Text(dl, Font::Regular, size::Caption, ImVec2(c.x + w - rs.x, c.y + Dp(1.0f)), p.ink3, range);
-            ImGui::Dummy(ImVec2(w, Dp(22.0f)));
+        if (!pk->tags.empty()) {
+            Caption(Tr("태그"));
+            BadgeFlow(pk->tags, w);
         }
-    }
-    if (!pk->textures.empty()) {
-        Caption(Tr("팩 텍스처"));
-        std::string list;
-        for (size_t i = 0; i < pk->textures.size(); ++i) {
-            if (i) list += ",  ";
-            list += pk->textures[i].file + (pk->textures[i].clamp ? " (clamp)" : "");
+    } else if (shaderDetailTab_ == 1) {
+        if (!pk->params.empty()) {
+            Caption(Tr("조절할 수 있는 값"));
+            for (const ShaderPackParam& sp : pk->params) {
+                const ImVec2 c = ImGui::GetCursorScreenPos();
+                const std::string label = sp.label.Empty() ? sp.key : sp.label.Get(lang);
+                char range[64];
+                std::snprintf(range, sizeof(range), "%.2f  (%.2f – %.2f)", sp.def, sp.min, sp.max);
+                TextEllipsis(dl, Font::Regular, size::Small, c, c.x + w * 0.6f, p.ink2, label.c_str());
+                const ImVec2 rs = TextSize(Font::Regular, size::Caption, range);
+                Text(dl, Font::Regular, size::Caption, ImVec2(c.x + w - rs.x, c.y + Dp(1.0f)), p.ink3, range);
+                ImGui::Dummy(ImVec2(w, Dp(22.0f)));
+            }
         }
-        Para(list, p.ink3, size::Caption);
-        const uint32_t missing = reg.MissingTextures(pk->id, reg.TextureFolder(pk->id));
-        if (missing)
-            Para(std::to_string(missing) +
-                     Tr("개의 팩 텍스처가 없어 흰색으로 표시됩니다 - 텍스처 폴더를 지정하세요"),
-                 p.warn, size::Caption);
-        // the user texture folder: game textures that can't be redistributed (picker + clear)
-        const std::filesystem::path folder = reg.TextureFolder(pk->id);
-        ImGui::PushID("##packtexfolder");
-        {
-            const ImVec2 c = ImGui::GetCursorScreenPos();
-            const std::string shown =
-                std::string(Tr("텍스처 폴더")) + ": " + (folder.empty() ? std::string(Tr("없음")) : PathToUtf8(folder));
-            TextEllipsis(dl, Font::Regular, size::Small, ImVec2(c.x, c.y + Dp(6.0f)), c.x + w - Dp(96.0f), p.ink2,
-                         shown.c_str());
-            ImGui::SetCursorScreenPos(ImVec2(c.x + w - Dp(88.0f), c.y));
-            if (IconButton("##pick", icon::FolderOpen, Tr("텍스처 폴더 선택"))) {
-                const std::filesystem::path picked = PickPackTextureFolder(hwnd_);
-                if (!picked.empty()) {
-                    reg.SetTextureFolder(pk->id, picked);
-                    settings_.packTextureFolders[pk->id] = PathToUtf8(picked);
+        if (!pk->textures.empty()) {
+            Caption(Tr("팩 텍스처"));
+            std::string list;
+            for (size_t i = 0; i < pk->textures.size(); ++i) {
+                if (i) list += ",  ";
+                list += pk->textures[i].file + (pk->textures[i].clamp ? " (clamp)" : "");
+            }
+            Para(list, p.ink3, size::Caption);
+            const uint32_t missing = reg.MissingTextures(pk->id, reg.TextureFolder(pk->id));
+            if (missing)
+                Para(std::to_string(missing) +
+                         Tr("개의 팩 텍스처가 없어 흰색으로 표시됩니다 - 텍스처 폴더를 지정하세요"),
+                     p.warn, size::Caption);
+            // the user texture folder: game textures that can't be redistributed (picker + clear)
+            const std::filesystem::path folder = reg.TextureFolder(pk->id);
+            ImGui::PushID("##packtexfolder");
+            {
+                const ImVec2 c = ImGui::GetCursorScreenPos();
+                const std::string shown =
+                    std::string(Tr("텍스처 폴더")) + ": " + (folder.empty() ? std::string(Tr("없음")) : PathToUtf8(folder));
+                TextEllipsis(dl, Font::Regular, size::Small, ImVec2(c.x, c.y + Dp(6.0f)), c.x + w - Dp(96.0f), p.ink2,
+                             shown.c_str());
+                ImGui::SetCursorScreenPos(ImVec2(c.x + w - Dp(88.0f), c.y));
+                if (IconButton("##pick", icon::FolderOpen, Tr("텍스처 폴더 선택"))) {
+                    const std::filesystem::path picked = PickPackTextureFolder(hwnd_);
+                    if (!picked.empty()) {
+                        reg.SetTextureFolder(pk->id, picked);
+                        settings_.packTextureFolders[pk->id] = PathToUtf8(picked);
+                        settings_.Save(settingsPath_);
+                    }
+                }
+                ImGui::SameLine();
+                ImGui::BeginDisabled(folder.empty());
+                if (IconButton("##clear", icon::X, Tr("텍스처 폴더 지우기"))) {
+                    reg.SetTextureFolder(pk->id, {});
+                    settings_.packTextureFolders.erase(pk->id);
                     settings_.Save(settingsPath_);
                 }
+                ImGui::EndDisabled();
+                ImGui::SetCursorScreenPos(ImVec2(c.x, c.y + Dp(30.0f)));
+                ImGui::Dummy(ImVec2(w, 0));
+            }
+            ImGui::PopID();
+        }
+        if (pk->params.empty() && pk->textures.empty()) {
+            Gap(12.0f);
+            Para(Tr("조절할 수 있는 항목이 없습니다"), p.ink3, size::Caption);
+        }
+        if (pk->type == PackType::Effect) {
+            Gap(12.0f);
+            Para(Tr("화면 효과는 로비의 셰이더 섹션(\"화면 효과\")과 재생 바의 ✦ 버튼에서 켜고 순서를 바꿀 수 있습니다."), p.ink3, size::Caption);
+        }
+    } else if (shaderDetailTab_ == 2) {
+        Gap(12.0f);
+        if (Button("##openpack", Tr("폴더 열기"), icon::FolderOpen, ButtonKind::Secondary)) OpenFolder(pk->dir);
+        if (pk->source != PackSource::BuiltIn) {
+            ImGui::SameLine();
+            if (Button("##removepack", Tr("삭제"), icon::Trash, ButtonKind::Danger)) ImGui::OpenPopup("##removeconfirm");
+        }
+        Gap(8.0f);
+        if (Button("##packdocs", Tr("셰이더 팩 만드는 법"), icon::Info, ButtonKind::Ghost))
+            OpenUrl("https://mmdx.codingbot.kr/" + lang + "/docs/shader-packs/");
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(Dp(18.0f), Dp(16.0f)));
+        if (ImGui::BeginPopup("##removeconfirm")) {
+            const std::string q = pk->name.Get(lang) + Tr(" 팩을 삭제할까요? 이 팩을 쓰던 캐릭터는 기본 셰이딩으로 돌아갑니다.");
+            ImGui::PushTextWrapPos(Dp(300.0f));
+            Para(q, p.ink);
+            ImGui::PopTextWrapPos();
+            Gap(10.0f);
+            if (Button("##removeyes", Tr("삭제"), icon::Trash, ButtonKind::Danger)) {
+                std::string err;
+                const std::string id = pk->id;
+                if (!reg.Uninstall(id, err)) {
+                    toast_ = Toast{};
+                    toast_.title = Tr("삭제하지 못했습니다");
+                    toast_.detail = err;
+                    toast_.error = true;
+                    toast_.until = timeSeconds_ + 6.0;
+                }
+                shaderSelInstalled_.clear();
+                ImGui::CloseCurrentPopup();
             }
             ImGui::SameLine();
-            ImGui::BeginDisabled(folder.empty());
-            if (IconButton("##clear", icon::X, Tr("텍스처 폴더 지우기"))) {
-                reg.SetTextureFolder(pk->id, {});
-                settings_.packTextureFolders.erase(pk->id);
-                settings_.Save(settingsPath_);
-            }
-            ImGui::EndDisabled();
-            ImGui::SetCursorScreenPos(ImVec2(c.x, c.y + Dp(30.0f)));
-            ImGui::Dummy(ImVec2(w, 0));
+            if (Button("##removeno", Tr("취소"), nullptr, ButtonKind::Ghost)) ImGui::CloseCurrentPopup();
+            ImGui::EndPopup();
         }
-        ImGui::PopID();
+        ImGui::PopStyleVar();
     }
-    // an effect pack: the stack editor above the management buttons (this pack is usually added from here)
-    if (pk->type == PackType::Effect && DrawEffectStackEditor(settings_.effectStack)) {
-        settings_.Save(settingsPath_);
-        ApplyRenderSettings();   // the new stack reaches the next frame
-    }
-    Caption(Tr("관리"));
-    if (Button("##openpack", Tr("폴더 열기"), icon::FolderOpen, ButtonKind::Secondary)) OpenFolder(pk->dir);
-    if (pk->source != PackSource::BuiltIn) {
-        ImGui::SameLine();
-        if (Button("##removepack", Tr("삭제"), icon::Trash, ButtonKind::Danger)) ImGui::OpenPopup("##removeconfirm");
-    }
-    Gap(8.0f);
-    if (Button("##packdocs", Tr("셰이더 팩 만드는 법"), icon::Info, ButtonKind::Ghost))
-        OpenUrl("https://mmdx.codingbot.kr/" + lang + "/docs/shader-packs/");
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(Dp(18.0f), Dp(16.0f)));
-    if (ImGui::BeginPopup("##removeconfirm")) {
-        const std::string q = pk->name.Get(lang) + Tr(" 팩을 삭제할까요? 이 팩을 쓰던 캐릭터는 기본 셰이딩으로 돌아갑니다.");
-        ImGui::PushTextWrapPos(Dp(300.0f));
-        Para(q, p.ink);
-        ImGui::PopTextWrapPos();
-        Gap(10.0f);
-        if (Button("##removeyes", Tr("삭제"), icon::Trash, ButtonKind::Danger)) {
-            std::string err;
-            const std::string id = pk->id;
-            if (!reg.Uninstall(id, err)) {
-                toast_ = Toast{};
-                toast_.title = Tr("삭제하지 못했습니다");
-                toast_.detail = err;
-                toast_.error = true;
-                toast_.until = timeSeconds_ + 6.0;
-            }
-            shaderSelInstalled_.clear();
-            ImGui::CloseCurrentPopup();
-        }
-        ImGui::SameLine();
-        if (Button("##removeno", Tr("취소"), nullptr, ButtonKind::Ghost)) ImGui::CloseCurrentPopup();
-        ImGui::EndPopup();
-    }
-    ImGui::PopStyleVar();
     ImGui::PopTextWrapPos();
     ImGui::EndChild();
 }
@@ -567,17 +579,20 @@ void App::DrawShaderPackDetail(float x0, float y0, float x1, float y1) {
 
 // The ordered effect stack (RenderSettings::packEffects): per entry an enable switch, up / down / remove and the pack's
 // sliders; "효과 추가" appends an installed effect pack. True = the stack changed this frame (the caller saves + applies).
-bool App::DrawEffectStackEditor(std::vector<EffectStackEntry>& stack) {
+bool App::DrawEffectStackEditor(std::vector<EffectStackEntry>& stack, bool header) {
     const Palette& p = P();
     ShaderPackRegistry& reg = ShaderPacks();
     const std::string lang = PackLanguage();
 
-    SectionLabel(Tr("효과 스택"));
+    if (header) SectionLabel(Tr("효과 스택"));
     Para(Tr("위에서 아래로 화면 효과를 차례로 적용합니다. 영상·스틸 렌더에도 같은 스택이 쓰입니다."), p.ink3, size::Caption);
     Gap(6.0f);
 
+    // Structural edits (move / remove) are applied after the loop so every entry keeps drawing on the frame a slider
+    // changes; breaking out early shrank the layout mid-drag and made the panel jitter.
     bool changed = false;
-    for (size_t i = 0; i < stack.size() && !changed; ++i) {
+    size_t swapWith = SIZE_MAX, removeAt = SIZE_MAX, swapA = 0;
+    for (size_t i = 0; i < stack.size(); ++i) {
         EffectStackEntry& e = stack[i];
         const ShaderPack* pk = reg.Find(e.pack);
         const bool usable = pk && pk->Selectable() && pk->type == PackType::Effect;
@@ -592,20 +607,17 @@ bool App::DrawEffectStackEditor(std::vector<EffectStackEntry>& stack) {
             changed = true;
         }
         if (IconButton("##up", icon::CaretUp, Tr("위로"), false, 28.0f) && i > 0) {
-            std::swap(stack[i - 1], stack[i]);
-            changed = true;
+            swapA = i - 1;
+            swapWith = i;
         }
         ImGui::SameLine();
         if (IconButton("##down", icon::CaretDown, Tr("아래로"), false, 28.0f) && i + 1 < stack.size()) {
-            std::swap(stack[i], stack[i + 1]);
-            changed = true;
+            swapA = i;
+            swapWith = i + 1;
         }
         ImGui::SameLine();
-        if (IconButton("##remove", icon::X, Tr("스택에서 제거"), false, 28.0f)) {
-            stack.erase(stack.begin() + (long)i);
-            changed = true;
-        }
-        if (!changed && usable && e.enabled && !pk->params.empty()) {
+        if (IconButton("##remove", icon::X, Tr("스택에서 제거"), false, 28.0f)) removeAt = i;
+        if (usable && e.enabled && !pk->params.empty()) {
             const PackParamValues values = pk->Resolve(e.params);
             for (size_t k = 0; k < pk->params.size(); ++k) {
                 const ShaderPackParam& sp = pk->params[k];
@@ -620,6 +632,13 @@ bool App::DrawEffectStackEditor(std::vector<EffectStackEntry>& stack) {
         }
         ImGui::PopID();
         Gap(8.0f);
+    }
+    if (removeAt != SIZE_MAX) {
+        stack.erase(stack.begin() + (long)removeAt);
+        changed = true;
+    } else if (swapWith != SIZE_MAX) {
+        std::swap(stack[swapA], stack[swapWith]);
+        changed = true;
     }
 
     std::vector<const ShaderPack*> addable;

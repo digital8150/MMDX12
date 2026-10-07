@@ -26,7 +26,7 @@ namespace {
 
 constexpr float kAppBarH = 64.0f;
 constexpr float kPad = 28.0f;
-constexpr float kPanelW = 380.0f;
+constexpr float kPanelW = 440.0f;
 
 bool MatchesFilter(const std::string& needle, const std::string& a, const std::string& b) {
     return needle.empty() || ToLowerAscii(a).find(needle) != std::string::npos ||
@@ -575,7 +575,7 @@ void App::DrawSelect() {
         const SongAsset* song = selSong_ >= 0 ? &library_.songs[(size_t)selSong_] : nullptr;
 
         // preview
-        const float prevH = innerW * (advancedOpen_ ? 0.34f : 10.0f / 16.0f);
+        const float prevH = innerW * 0.38f;
         DrawScenePreview(ch, st, pa.x + ip, pa.y + ip, pb.x - ip, pa.y + ip + prevH, Dp(12.0f));
         if (!ch) {
             const char* msg = Tr("캐릭터를 골라 주세요");
@@ -609,11 +609,18 @@ void App::DrawSelect() {
             ImGuiWindow* win = ImGui::GetCurrentWindow();
             win->DC.CursorPos.x = win->Pos.x;
             const float colW = innerW;
+            const float chipW = (colW / Dpi() - 8.0f) * 0.5f;
             ImGui::BeginGroup();
             ImGui::PushClipRect(win->Pos, ImVec2(win->Pos.x + colW + Dp(4.0f), win->Pos.y + win->Size.y), true);
+            {
+                const char* tabLabels[] = {Tr("화면"), Tr("셰이더"), Tr("세부")};
+                Segmented("##lobbytab", tabLabels, 3, &lobbyTab_, colW / Dpi(), 36.0f);
+                Gap(14.0f);
+            }
+            if (lobbyTab_ == 1) {
             // shader pack of the selected character (saved per character; play, stills and videos use it)
+            SectionLabel(Tr("셰이더"));
             if (ch) {
-                SectionLabel(Tr("셰이더"));
                 ShaderChoice choice = settings_.CharacterShader(ch->id);
                 bool shaderChanged = DrawShaderSelector("##lobbyshader", choice, colW);
                 const ShaderPack* pack = choice.pack.empty() ? nullptr : ShaderPacks().Find(choice.pack);
@@ -642,8 +649,29 @@ void App::DrawSelect() {
                     settings_.SetCharacterShader(ch->id, choice);
                     settings_.Save(settingsPath_);
                 }
-                Gap(18.0f);
             }
+            {
+                Gap(4.0f);
+                ImGuiWindow* w = ImGui::GetCurrentWindow();
+                const ImVec2 da = w->DC.CursorPos;
+                bool hovered = false;
+                if (CardItem("##effectstack", da, ImVec2(da.x + colW, da.y + Dp(30.0f)), &hovered))
+                    effectStackOpen_ = !effectStackOpen_;
+                const std::string label = std::string(Tr("화면 효과")) +
+                    (settings_.effectStack.empty() ? "" : std::string("  ·  ") + std::to_string(settings_.effectStack.size()) + Tr("개"));
+                Text(w->DrawList, Font::Semibold, size::Small, ImVec2(da.x, da.y + Dp(6.0f)), hovered ? p.ink : p.ink2,
+                     label.c_str());
+                Icon(w->DrawList, effectStackOpen_ ? icon::CaretDown : icon::CaretRight, 14.0f,
+                     ImVec2(da.x + colW - Dp(10.0f), da.y + Dp(15.0f)), p.ink2);
+                if (effectStackOpen_) {
+                    if (DrawEffectStackEditor(settings_.effectStack, false)) {
+                        settings_.Save(settingsPath_);
+                        ApplyRenderSettings();
+                    }
+                }
+            }
+            }
+            if (lobbyTab_ == 0) {
             SectionLabel(Tr("그래픽 품질"));
             const char* q[] = {Tr("낮음"), Tr("보통"), Tr("높음"), Tr("최고")};
             int preset = settings_.graphicsPreset;
@@ -709,7 +737,6 @@ void App::DrawSelect() {
             Gap(18.0f);
             SectionLabel(Tr("조명"));
             const char* lightIcons[] = {icon::Sun, icon::CircleHalf, icon::Sparkle, icon::Moon};
-            const float chipW = (colW / Dpi() - 8.0f) * 0.5f;
             for (int i = 0; i < kLightingPresetCount; ++i) {
                 if (i % 2) ImGui::SameLine(0, Dp(8.0f));
                 ImGui::PushID(i);
@@ -719,20 +746,8 @@ void App::DrawSelect() {
                 }
                 ImGui::PopID();
             }
-            Gap(14.0f);
-            // detailed settings disclosure
-            {
-                ImGuiWindow* w = ImGui::GetCurrentWindow();
-                const ImVec2 da = w->DC.CursorPos;
-                bool hovered = false;
-                if (CardItem("##advanced", da, ImVec2(da.x + colW, da.y + Dp(34.0f)), &hovered)) advancedOpen_ = !advancedOpen_;
-                const float rot = Anim(ImGui::GetID("##advrot"), advancedOpen_, 14.0f);
-                Text(w->DrawList, Font::Semibold, size::Small, ImVec2(da.x, da.y + Dp(8.0f)), hovered ? p.ink : p.ink2,
-                     Tr("세부 설정"));
-                Icon(w->DrawList, rot > 0.5f ? icon::CaretDown : icon::CaretRight, 14.0f,
-                     ImVec2(da.x + colW - Dp(10.0f), da.y + Dp(17.0f)), p.ink2);
             }
-            if (advancedOpen_) {
+            if (lobbyTab_ == 2) {
                 bool changed = false;
                 changed |= Switch("##shadows", Tr("그림자"), &settings_.shadows);
                 changed |= Switch("##ssao", Tr("앰비언트 오클루전"), &settings_.ssao);

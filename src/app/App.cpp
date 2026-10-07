@@ -829,7 +829,7 @@ void App::PollScan() {
         screen_ = Screen::Shaders;
         shaderTab_ = options_.startScreen == "shaders-online" ? 1 : 0;
     } else if (options_.startScreen == "settings") {
-        advancedOpen_ = true;
+        lobbyTab_ = 2;
     } else if (options_.startScreen == "studio") {
         if (!options_.project.empty()) {
             StartStudioProjectLoad(std::filesystem::absolute(options_.project), false);

@@ -503,8 +503,10 @@ private:
     void PollShaderPacks();                                              // every frame: hot reload, store, drops
     // The effect stack editor (UiShaders.cpp): add / remove / reorder (up/down) / enable + per-effect
     // sliders. Edits `stack` in place; true = changed. `widths` = the content width for layout.
-    bool DrawEffectStackEditor(std::vector<EffectStackEntry>& stack);
+    bool DrawEffectStackEditor(std::vector<EffectStackEntry>& stack, bool header = true);
     bool shaderParamsOpen_ = false;                                      // select screen: pack settings disclosure
+    bool effectStackOpen_ = false;                                       // select screen: effect stack disclosure
+    int shaderDetailTab_ = 0;                                            // shader detail: 0 info, 1 settings, 2 manage
     ShaderPackStore shaderStore_;
     int shaderTab_ = 0;                                                  // 0 installed, 1 online
     char shaderFilter_[128] = {};
@@ -545,7 +547,7 @@ private:
     ThumbnailCache thumbs_;
     bool thumbsClearPending_ = false;
     int libraryTab_ = 0;          // 0 characters, 1 stages, 2 songs
-    bool advancedOpen_ = false;
+    int lobbyTab_ = 0;                                                   // select screen settings tab: 0 screen, 1 shader, 2 detail
     std::filesystem::path assetsDir_;
     std::vector<ColorLutEntry> luts_;   // built-in looks + .cube files (ListColorLuts)
     std::string appliedLut_ = "\x01";   // id currently uploaded to the renderer ("\x01" = nothing applied yet)

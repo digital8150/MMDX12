@@ -708,3 +708,23 @@ finished by Claude.
   effect packs and the play-bar popup / new-pack dialog were not clicked through. Spot viewport handles not built.
 - The saved ini can keep a stale `effect=` line after scripted UI runs; delete it if the viewport shows an unexpected effect.
 - Skill `opencode-delegate` updated: unique run folders, per-worker build dirs, `opencode session delete` to really stop a worker.
+
+## 2026-10-07 (10) — UI cleanup: play bar width, effect stack jitter, shader panel / lobby tabs
+
+### Done
+- Play bar: `rightW` ignored the size, shader and effects buttons, so the right cluster ran out of the bar; it now counts them.
+- `DrawEffectStackEditor`: the entry loop stopped on the frame a slider changed, so later entries vanished mid-drag and the layout
+  jittered (play bar popup and shader manager alike). Move / remove are now applied after the loop.
+- The effect stack moved out of the shader manager (it read as the selected pack's own settings) into a collapsed "화면 효과" row
+  under the lobby's shader section (`effectStackOpen_`, editor gets `header=false`); the manager shows a pointer note instead.
+- Shader manager detail panel: 400 -> 460 px, tabs 정보 / 설정 / 관리 (`shaderDetailTab_`). Delegated to antigravity (smoke review).
+- Lobby select panel: 380 -> 440 px, tabs 화면 / 셰이더 / 세부 (`lobbyTab_`, replaces `advancedOpen_`; `--screen settings` opens 세부),
+  smaller preview.
+- Removed the extra build directories; only `build` remains.
+
+### Verified
+- Build clean; captures of the shader manager, lobby 화면 and 세부 tabs, no `[E]` lines.
+
+### Not verified / notes
+- Play bar after the width fix, slider drag on the stack, the lobby 셰이더 tab and the open "화면 효과" row were not captured.
+- Lobby 화면 tab at 1600x900: the lighting section sits under the play button until scrolled.
