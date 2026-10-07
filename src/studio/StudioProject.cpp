@@ -256,12 +256,23 @@ bool SaveProject(const std::filesystem::path& file, const ProjectData& data, std
                     {"s", m.place.scale},
                 };
             }
-            if (m.kind == ModelKind::Character && !m.shader.pack.empty()) {  // the default shading is not written
+            // the default shading alone is not written; settings remembered for other packs are
+            if (m.kind == ModelKind::Character && (!m.shader.pack.empty() || !m.shader.remembered.empty())) {
                 nlohmann::json params = nlohmann::json::object();
                 for (const auto& [k, v] : m.shader.params) params[k] = v;
                 jm["shader"] = {{"pack", m.shader.pack}, {"params", params}};
                 if (!m.shader.textureFolder.empty())
                     jm["shader"]["textureFolder"] = m.shader.textureFolder;
+                if (!m.shader.remembered.empty()) {
+                    nlohmann::json rem = nlohmann::json::object();
+                    for (const auto& [packId, memo] : m.shader.remembered) {
+                        nlohmann::json mp = nlohmann::json::object();
+                        for (const auto& [k, v] : memo.params) mp[k] = v;
+                        rem[packId] = {{"params", mp}};
+                        if (!memo.textureFolder.empty()) rem[packId]["textureFolder"] = memo.textureFolder;
+                    }
+                    jm["shader"]["remembered"] = rem;
+                }
             }
             if (m.kind == ModelKind::Prop) {  // "attach" is written for props only
                 const PropAttach& a = m.attach;
@@ -463,6 +474,17 @@ bool LoadProject(const std::filesystem::path& file, ProjectData& out, std::strin
                         for (const auto& [k, v] : sh["params"].items())
                             if (v.is_number()) pm.shader.params[k] = v.get<float>();
                     pm.shader.textureFolder = ReadString(sh, "textureFolder", "");
+                    if (sh.contains("remembered") && sh["remembered"].is_object()) {
+                        for (const auto& [packId, mv] : sh["remembered"].items()) {
+                            if (!mv.is_object()) continue;
+                            ShaderMemo memo;
+                            if (mv.contains("params") && mv["params"].is_object())
+                                for (const auto& [k, v] : mv["params"].items())
+                                    if (v.is_number()) memo.params[k] = v.get<float>();
+                            memo.textureFolder = ReadString(mv, "textureFolder", "");
+                            pm.shader.remembered[packId] = std::move(memo);
+                        }
+                    }
                 }
                 if (kind == ModelKind::Prop && m.contains("attach") && m["attach"].is_object()) {
                     const nlohmann::json& a = m["attach"];  // "attach" is read for props only

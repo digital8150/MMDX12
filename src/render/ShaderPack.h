@@ -50,10 +50,34 @@ enum class PackClass : uint32_t { Body = 0, Skin = 1, Face = 2, Eye = 3, Hair = 
 // A model's shader pack choice: pack id (empty = the default shading), the parameter values the user changed
 // (key -> value; the rest use the pack's defaults) and an optional per-character texture folder (UTF-8, empty =
 // the pack-level folder). Saved per character (settings) and per studio model (project).
+struct ShaderMemo {   // what was set for a pack that is not the current one
+    std::map<std::string, float> params;
+    std::string textureFolder;
+    bool operator==(const ShaderMemo&) const = default;
+};
+// `remembered` holds the parameters and texture folder of the packs this model used before, so going back to one
+// (after trying another pack or the default shading) restores them instead of starting from scratch.
 struct ShaderChoice {
     std::string pack;
     std::map<std::string, float> params;
     std::string textureFolder;
+    std::map<std::string, ShaderMemo> remembered;   // pack id -> its last params / texture folder (not the current pack)
+    // Selects `to` ("" = the default shading): the current pack's settings are remembered, `to`'s come back.
+    void SwitchPack(const std::string& to) {
+        if (to == pack) return;
+        if (!pack.empty()) {
+            if (params.empty() && textureFolder.empty()) remembered.erase(pack);
+            else remembered[pack] = ShaderMemo{params, textureFolder};
+        }
+        pack = to;
+        params.clear();
+        textureFolder.clear();
+        if (const auto it = remembered.find(to); !to.empty() && it != remembered.end()) {
+            params = it->second.params;
+            textureFolder = it->second.textureFolder;
+            remembered.erase(it);
+        }
+    }
     bool operator==(const ShaderChoice&) const = default;
 };
 

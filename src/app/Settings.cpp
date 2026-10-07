@@ -17,7 +17,7 @@ ShaderChoice AppSettings::CharacterShader(const std::string& id) const {
 }
 
 void AppSettings::SetCharacterShader(const std::string& id, const ShaderChoice& choice) {
-    if (choice.pack.empty()) characterShaders.erase(id);
+    if (choice.pack.empty() && choice.remembered.empty()) characterShaders.erase(id);   // nothing left to keep
     else characterShaders[id] = choice;
 }
 
@@ -171,7 +171,33 @@ bool AppSettings::Load(const std::filesystem::path& file) {
                         c.params[item.substr(0, colon)] = f;
                     pos = end + 1;
                 }
-                characterShaders[value.substr(b + 1)] = std::move(c);
+                ShaderChoice& dst = characterShaders[value.substr(b + 1)];   // keeps memos loaded before
+                dst.pack = std::move(c.pack);
+                dst.params = std::move(c.params);
+            }
+        }
+        else if (key == "characterShaderMemo") {
+            // characterShaderMemo=<pack id>|<key>:<value>,...|<texture folder or ->|<character id>: the last settings of a pack
+            // this character is not using right now (restored when it is picked again)
+            const size_t a = value.find('|');
+            const size_t b = a == std::string::npos ? a : value.find('|', a + 1);
+            const size_t c2 = b == std::string::npos ? b : value.find('|', b + 1);
+            if (a != std::string::npos && a > 0 && c2 != std::string::npos && c2 + 1 < value.size()) {
+                ShaderMemo m;
+                const std::string list = value.substr(a + 1, b - a - 1);
+                size_t pos = 0;
+                while (pos < list.size()) {
+                    size_t end = list.find(',', pos);
+                    if (end == std::string::npos) end = list.size();
+                    const std::string item = list.substr(pos, end - pos);
+                    const size_t colon = item.find(':');
+                    if (colon != std::string::npos && ParseFloat(item.substr(colon + 1), f) && std::isfinite(f))
+                        m.params[item.substr(0, colon)] = f;
+                    pos = end + 1;
+                }
+                const std::string folder = value.substr(b + 1, c2 - b - 1);
+                if (folder != "-") m.textureFolder = folder;
+                characterShaders[value.substr(c2 + 1)].remembered[value.substr(0, a)] = std::move(m);
             }
         }
         else if (key == "characterShaderTextures") {
@@ -328,9 +354,21 @@ bool AppSettings::Save(const std::filesystem::path& file) const {
             std::snprintf(buf, sizeof(buf), "%.4g", v);
             list += (list.empty() ? "" : ",") + k + ":" + buf;
         }
-        std::fprintf(f, "characterShader=%s|%s|%s\n", c.pack.c_str(), list.c_str(), id.c_str());
-        if (!c.textureFolder.empty())
-            std::fprintf(f, "characterShaderTextures=%s|%s\n", c.textureFolder.c_str(), id.c_str());
+        if (!c.pack.empty()) {
+            std::fprintf(f, "characterShader=%s|%s|%s\n", c.pack.c_str(), list.c_str(), id.c_str());
+            if (!c.textureFolder.empty())
+                std::fprintf(f, "characterShaderTextures=%s|%s\n", c.textureFolder.c_str(), id.c_str());
+        }
+        for (const auto& [packId, memo] : c.remembered) {
+            std::string mlist;
+            for (const auto& [k, v] : memo.params) {
+                char buf[64];
+                std::snprintf(buf, sizeof(buf), "%.4g", v);
+                mlist += (mlist.empty() ? "" : ",") + k + ":" + buf;
+            }
+            std::fprintf(f, "characterShaderMemo=%s|%s|%s|%s\n", packId.c_str(), mlist.c_str(),
+                         memo.textureFolder.empty() ? "-" : memo.textureFolder.c_str(), id.c_str());
+        }
     }
     for (const auto& [id, dir] : packTextureFolders)
         std::fprintf(f, "packTextureFolder=%s|%s\n", id.c_str(), dir.c_str());

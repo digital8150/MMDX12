@@ -70,6 +70,10 @@ static void TestRoundTrip() {
         m.shader.pack = "test_pack";                                                   // shader pack choice
         m.shader.params["threshold"] = 0.5f;
         m.shader.textureFolder = "F:/tex/miku";                                        // per-character texture folder
+        m.shader.SwitchPack("other_pack");                                             // remembered settings of a previous pack
+        m.shader.params["gloss"] = 0.25f;
+        m.shader.textureFolder = "F:/tex/other";
+        m.shader.SwitchPack("test_pack");
         b0 = BoneKf{};
         b0.frame = 0;
         b0.t = {1, 2, 3};

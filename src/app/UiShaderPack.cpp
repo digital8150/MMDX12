@@ -245,7 +245,7 @@ bool App::DrawShaderSelector(const char* id, ShaderChoice& choice, float width) 
             return clicked && selectable;
         };
         if (needle.empty() && row("##pk_default", nullptr, choice.pack.empty()) && !choice.pack.empty()) {
-            choice = {};
+            choice.SwitchPack("");
             changed = true;
             ImGui::CloseCurrentPopup();
         }
@@ -257,9 +257,7 @@ bool App::DrawShaderSelector(const char* id, ShaderChoice& choice, float width) 
             ++shown;
             const std::string rid = "##pk_" + pk.id;
             if (row(rid.c_str(), &pk, choice.pack == pk.id) && choice.pack != pk.id) {
-                choice.pack = pk.id;
-                choice.params.clear();
-                choice.textureFolder.clear();
+                choice.SwitchPack(pk.id);
                 changed = true;
                 ImGui::CloseCurrentPopup();
             }
