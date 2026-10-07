@@ -1,4 +1,4 @@
-// Offline GI shader pack API (docs/shader_pt_api.md). Included by offline_gi.hlsl only under MMDX_PT_PACK.
+// Path tracer / offline GI shader pack API (docs/shader_pt_api.md). Included by offline_gi.hlsl and pathtrace.hlsl under MMDX_PT_PACK.
 // Authors implement:
 //     PtPackOut PackEvaluate(PtPackIn i);
 #ifndef PT_PACK_API_HLSLI

@@ -35,23 +35,7 @@
 #ifdef MMDX_PT_PACK
 #include "pt_pack_api.hlsli"
 #include MMDX_PT_PACK
-
-RtPtPackRecord LoadPtPackRecord(uint packSrv) {
-    ByteAddressBuffer buf = gBindlessBuf[NonUniformResourceIndex(packSrv)];
-    RtPtPackRecord rec;
-    uint4 v0 = buf.Load4(0);
-    rec.materialClass = v0.x;
-    rec.headValid = v0.y;
-    rec._pad0 = v0.zw;
-    rec.headRight = asfloat(buf.Load4(16));
-    rec.headUp = asfloat(buf.Load4(32));
-    rec.headForward = asfloat(buf.Load4(48));
-    rec.params[0] = asfloat(buf.Load4(64));
-    rec.params[1] = asfloat(buf.Load4(80));
-    rec.params[2] = asfloat(buf.Load4(96));
-    rec.params[3] = asfloat(buf.Load4(112));
-    return rec;
-}
+#include "pt_pack_glue.hlsli"
 #endif
 cbuffer PassCB : register(b1) { float4 gP0; float4 gP1; float4 gP2; float4 gP3; };
 SamplerState gPoint : register(s0);
@@ -945,11 +929,7 @@ void CSRender(uint3 id : SV_DispatchThreadID) {
         if (!diffuseChain) {
 #ifdef MMDX_PT_PACK
             if (isPtPackHit) {
-                float ndl = dot(s.n, -gLightDir);
-                float flatVal = s.flat ? 1.0 : 0.0;
-                float terminator = smoothstep(-0.12, 0.22, ndl + ptPackOut.shadowBias);
-                float term = lerp(terminator * ptSunVis, lerp(1.0, ptSunVis, 0.8), flatVal);
-                float3 sunDirect = lerp(ptPackOut.albedo * ptPackOut.shadowTint, ptPackOut.albedo, term) * gSunIntensity + ptPackOut.specular * ptSunVis;
+                float3 sunDirect = PtPackComposeSunDirect(ptPackOut, s.n, ptSunVis, s.flat);
                 if (gNumLights >= 1.0)
                     sunDirect += (1.0 - pSpec) * s.albedo / PI * PunctualIrradiance(s, s.character, rng);
                 radiance += T * (s.emission + sunDirect);

@@ -431,6 +431,25 @@ int wmain(int argc, wchar_t** argv) {
                 } else {
                     printf("compile ok (%zu bytes)\n", ptBlob->GetBufferSize());
                 }
+
+                const fs::path ptHlsl = mmdx::ExecutableDir() / L"shaders" / L"pathtrace.hlsl";
+                if (!fs::is_regular_file(ptHlsl, ec)) {
+                    printf("[problem] %s not found\n", mmdx::PathToUtf8(ptHlsl).c_str());
+                    ok = false;
+                } else {
+                    printf("compile: CSPathTrace of %s (cs_6_5, MMDX_PT_PACK = %s)\n",
+                           mmdx::PathToUtf8(ptHlsl.filename()).c_str(), ptIncDefine.c_str());
+                    std::string ptTraceErrors;
+                    const mmdx::ComPtr ptTraceBlob =
+                        mmdx::CompileShaderDxc(ptHlsl, "CSPathTrace", "cs_6_5", ptDefines, &ptTraceErrors);
+                    if (!ptTraceErrors.empty()) printf("%s\n", ptTraceErrors.c_str());
+                    if (!ptTraceBlob) {
+                        printf("[problem] CSPathTrace shader compile failed\n");
+                        ok = false;
+                    } else {
+                        printf("compile ok (%zu bytes)\n", ptTraceBlob->GetBufferSize());
+                    }
+                }
             }
         }
     }

@@ -1,8 +1,8 @@
-# Offline GI shader pack hook (experimental, phase 1: offline GI stills)
+# PT/GI shader pack hook (phase 1: offline GI stills, phase 2: real-time path tracer)
 
-A surface shader pack can optionally provide `pt_surface.hlsl` next to `surface.hlsl` for the offline GI path tracer (`CSRender`).
-When present, characters using the pack will evaluate `PackEvaluate` during offline GI still rendering instead of the default `ToonSun` shading.
-If `pt_surface.hlsl` is omitted, the pack uses the offline GI renderer's default shading. Real-time raster, RT and PT are unaffected.
+A surface shader pack can optionally provide `pt_surface.hlsl` next to `surface.hlsl` for the offline GI path tracer (`CSRender`) and the real-time path tracer (`CSPathTrace`, `PathTracePass`, `--render pt`).
+When present, characters using the pack will evaluate `PackEvaluate` during offline GI still rendering and real-time path tracing instead of the default `ToonSun` shading.
+If `pt_surface.hlsl` is omitted, the pack uses the path tracer's default shading. Real-time raster and RT are unaffected.
 
 ## File placement
 
@@ -10,7 +10,7 @@ If `pt_surface.hlsl` is omitted, the pack uses the offline GI renderer's default
 my_pack/
   pack.json        manifest
   surface.hlsl     raster / real-time RT (PackShade)
-  pt_surface.hlsl  offline GI renderer (PackEvaluate)
+  pt_surface.hlsl  offline GI / real-time PT (PackEvaluate)
 ```
 
 No `pack.json` change or `apiVersion` bump is needed.
@@ -53,8 +53,9 @@ PtPackOut PackEvaluate(PtPackIn i);
   where `terminator` is the engine's smoothstep shape shifted by `shadowBias`, and `flatFace` reuses the engine's `s.flat` path.
 - **Diffuse bounces (`diffuseChain`)**: Uses `PtPackOut.albedo` as the surface albedo. Toon terms do not run on GI gather rays.
 - **Cache prepass**: The irradiance cache prepass keeps default albedo.
+- **Denoiser note**: In real-time path tracing, the pack's stylized direct light goes through the same temporal / a-trous filtering as the default toon light (`radiance / a` demodulation, temporal accumulation, a-trous filter, modulation). Hard-edged cel steps will soften; a later phase may split them out.
 
 ## Verification & tooling
 
-- `tools/pack_check <pack>` reports `pt_surface: yes/no` and compiles `CSRender` with DXC when `--compile` is passed.
+- `tools/pack_check <pack>` reports `pt_surface: yes/no` and compiles `CSRender` and `CSPathTrace` with DXC when `--compile` is passed.
 - Template: `shaders/pack_template/pt_surface.hlsl`.

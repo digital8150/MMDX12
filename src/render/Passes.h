@@ -25,6 +25,7 @@
 #include <map>
 #include <string>
 #include "render/RenderPass.h"
+#include "render/PtPackVariants.h"
 #include <wrl/client.h>
 
 namespace mmdx {
@@ -145,6 +146,8 @@ public:
 
 private:
     ComputePipeline trace_, temporal_, atrous_, modulate_;
+    PtPackVariants ptVariants_;
+    std::filesystem::path shaderDir_;
     Texture light_, albedo_;        // noisy demodulated radiance, primary albedo (RGBA16F)
     Texture history_[2];            // accumulated light, a = history length (RGBA16F)
     Texture histDepth_[2];          // R32_FLOAT raw depth of the frame each history belongs to

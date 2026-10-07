@@ -5,6 +5,7 @@
 #include "render/GpuModel.h"
 #include "asset/ImageLoader.h"
 #include "render/ShaderPack.h"
+#include "render/PtPackVariants.h"
 #include "core/Log.h"
 #include "core/TextUtil.h"
 #include <directx/d3dx12.h>
@@ -100,12 +101,10 @@ ComPtr<ID3D12Resource> CreateMappedUpload(ID3D12Device* device, uint64_t bytes, 
 struct OfflineRenderer::Impl {
     Dx12Context* ctx = nullptr;
     std::filesystem::path shaderDir;
-    uint32_t packGeneration = 0;
     // offline_gi.hlsl (ComputePipeline, cs_6_5)
     ComputePipeline clearImage, clearCounter, defaultRender, prepassLevel, prepassDisplay, prepassSmooth;
     ComputePipeline* render = &defaultRender;
-    std::map<std::string, ComputePipeline> ptRenderPipes;
-    std::set<std::string> ptRenderFailed;
+    PtPackVariants ptVariants;
     // offline_post.hlsl
     ComputePipeline denoise, bloomDown, bloomBlur, finalize, edgeAccumulate;
     // offline_volumetric.hlsl, bloom_fft.hlsl (optional effects: empty pipelines disable them)
@@ -883,8 +882,7 @@ void OfflineRenderer::Shutdown() {
     m.presentPso.Reset();
     m.list.Reset();
     m.alloc.Reset();
-    m.ptRenderPipes.clear();
-    m.ptRenderFailed.clear();
+    m.ptVariants.Clear(m.ctx);
     m.render = &m.defaultRender;
     m.ctx = nullptr;
     impl_.reset();
@@ -917,57 +915,7 @@ void OfflineRenderer::Begin(ID3D12GraphicsCommandList* cmd, TransientDescriptors
     for (Impl::Slot& s : m.slots) { s.counted = false; s.timed = false; }
 
     // 1b. PT pack pipeline selection
-    ShaderPackRegistry& reg = ShaderPacks();
-    if (m.packGeneration != reg.Generation()) {
-        m.ptRenderPipes.clear();
-        m.ptRenderFailed.clear();
-        m.packGeneration = reg.Generation();
-    }
-
-    const ShaderPack* chosenPack = nullptr;
-    bool warnedMultiple = false;
-    for (GpuModel* model : m.view.models) {
-        if (!model || model->Role() != ModelRole::Character || model->ShaderPackId().empty()) continue;
-        const ShaderPack* pack = reg.Find(model->ShaderPackId());
-        if (!pack || !pack->hasPtSurface) continue;
-        if (!chosenPack) {
-            chosenPack = pack;
-        } else if (chosenPack->id != pack->id && !warnedMultiple) {
-            LOG_WARN("offline: multiple pt packs present; using %s for GiTable", chosenPack->id.c_str());
-            warnedMultiple = true;
-        }
-    }
-
-    if (!chosenPack) {
-        m.render = &m.defaultRender;
-    } else {
-        auto it = m.ptRenderPipes.find(chosenPack->id);
-        if (it != m.ptRenderPipes.end()) {
-            m.render = &it->second;
-        } else if (m.ptRenderFailed.count(chosenPack->id)) {
-            m.render = &m.defaultRender;
-        } else {
-            std::error_code ec;
-            std::filesystem::path rel = std::filesystem::relative(chosenPack->dir / L"pt_surface.hlsl", m.shaderDir, ec);
-            if (ec || rel.empty()) rel = chosenPack->dir / L"pt_surface.hlsl";
-            std::string inc = PathToUtf8(rel);
-            std::replace(inc.begin(), inc.end(), '\\', '/');
-            const std::string incDefine = "\"" + inc + "\"";
-            const ShaderDefines defs = {{"MMDX_PT_PACK", incDefine}};
-
-            ComputePipeline pipe;
-            const std::filesystem::path gi = m.shaderDir / L"offline_gi.hlsl";
-            if (pipe.Create(*m.ctx, gi, "CSRender", defs)) {
-                LOG_INFO("offline: pt pack '%s' compiled into CSRender", chosenPack->id.c_str());
-                auto [ins, _] = m.ptRenderPipes.emplace(chosenPack->id, std::move(pipe));
-                m.render = &ins->second;
-            } else {
-                LOG_ERROR("offline: failed to compile CSRender with pt pack '%s'", chosenPack->id.c_str());
-                m.ptRenderFailed.insert(chosenPack->id);
-                m.render = &m.defaultRender;
-            }
-        }
-    }
+    m.render = m.ptVariants.Resolve(*m.ctx, m.shaderDir, m.view.models, m.defaultRender, "offline_gi.hlsl", "CSRender", "offline");
 
     // 2. per-image constants
     memcpy(m.sceneCbMapped, &sc, sizeof(sc));

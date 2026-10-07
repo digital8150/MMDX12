@@ -2,6 +2,11 @@
 // punctual-light NEE, analytic studio floor, stochastic alpha-tested transparency.
 // u0 light (divided by albedo on surfaces), u1/u2/u3/u4 primary G-buffer for denoising.
 #include "rt_common.hlsli"   // includes common.hlsli
+#ifdef MMDX_PT_PACK
+#include "pt_pack_api.hlsli"
+#include MMDX_PT_PACK
+#include "pt_pack_glue.hlsli"
+#endif
 cbuffer PassCB : register(b1) { float4 gP0; float4 gP1; float4 gP2; float4 gP3; };
 SamplerState gPoint : register(s0);
 SamplerState gLinear : register(s1);
@@ -93,6 +98,9 @@ void CSPathTrace(uint3 id : SV_DispatchThreadID) {
         float3 throughput = 1.0;
         float3 dir = rd, origin = ro;
         bool primarySky = false;
+#ifdef MMDX_PT_PACK
+        bool diffuseChain = false;
+#endif
 
         [loop] for (uint bounce = 0; bounce <= bounces; ++bounce) {
             float tMin = (bounce == 0) ? gNearZ : 0.0;
@@ -141,18 +149,66 @@ void CSPathTrace(uint3 id : SV_DispatchThreadID) {
                 if (g.flags & MAT_STAGE) {
                     radiance += throughput * SrgbToLinear(saturate(g.ambient * tex.rgb)) * gSunIntensity * kAmbientEmission;
                 } else {
-                    toon = true;
-                    flat = (g.flags & MAT_FLAT) ? 1.0 : 0.0;
-                    float sh = 1.0;
-                    if (receive && gShadowParams.w < 0.5) {
-                        float3 sd = SampleCone(float2(Rand(rng), Rand(rng)), -gLightDir, kSunCosMax);
-                        sh = TraceShadowRay(OffsetRayOrigin(pos, faceN), sd, 1e5);
-                    }
-                    radiance += throughput * ToonSun(g, tex, sf.uv, n, -dir, sh);
-                    if (flat > 0.5) {
-                        // raster flat fill: no sky/ground gradient and no occlusion modelling the face
-                        float3 fill = lerp(gGroundColor, gSkyZenith, 0.65) * gSunIntensity * gHemiStrength;
-                        radiance += throughput * albedo * fill;
+#ifdef MMDX_PT_PACK
+                    bool isPtPackHit = (g.flags & RTG_PT_PACK) != 0;
+                    if (isPtPackHit) {
+                        RtPtPackRecord rec = LoadPtPackRecord(g.packSrv);
+                        PtPackIn packIn;
+                        packIn.pos = pos;
+                        packIn.normal = n;
+                        packIn.V = -dir;
+                        packIn.uv = sf.uv;
+                        packIn.L = -gLightDir;
+                        float sh = 1.0;
+                        if (!diffuseChain) {
+                            if (receive && gShadowParams.w < 0.5) {
+                                float3 sd = SampleCone(float2(Rand(rng), Rand(rng)), -gLightDir, kSunCosMax);
+                                sh = TraceShadowRay(OffsetRayOrigin(pos, faceN), sd, 1e5);
+                            }
+                            packIn.sunVis = sh;
+                        } else {
+                            packIn.sunVis = 0.0;
+                        }
+                        packIn.baseColor = SrgbToLinear(saturate(tex.rgb * g.diffuse.rgb));
+                        packIn.materialClass = rec.materialClass;
+                        [unroll] for (int p = 0; p < 16; ++p)
+                            packIn.params[p] = rec.params[p >> 2][p & 3];
+                        packIn.headRight = rec.headRight.xyz;
+                        packIn.headUp = rec.headUp.xyz;
+                        packIn.headForward = rec.headForward.xyz;
+                        packIn.headValid = (rec.headValid != 0);
+
+                        PtPackOut ptPackOut = PackEvaluate(packIn);
+                        albedo = ptPackOut.albedo;
+                        flat = ((g.flags & MAT_FLAT) || ptPackOut.flatFace) ? 1.0 : 0.0;
+
+                        if (!diffuseChain) {
+                            toon = true;
+                            radiance += throughput * PtPackComposeSunDirect(ptPackOut, n, sh, flat > 0.5);
+                            if (flat > 0.5) {
+                                // raster flat fill: no sky/ground gradient and no occlusion modelling the face
+                                float3 fill = lerp(gGroundColor, gSkyZenith, 0.65) * gSunIntensity * gHemiStrength;
+                                radiance += throughput * albedo * fill;
+                            }
+                        } else {
+                            toon = false;
+                        }
+                    } else
+#endif
+                    {
+                        toon = true;
+                        flat = (g.flags & MAT_FLAT) ? 1.0 : 0.0;
+                        float sh = 1.0;
+                        if (receive && gShadowParams.w < 0.5) {
+                            float3 sd = SampleCone(float2(Rand(rng), Rand(rng)), -gLightDir, kSunCosMax);
+                            sh = TraceShadowRay(OffsetRayOrigin(pos, faceN), sd, 1e5);
+                        }
+                        radiance += throughput * ToonSun(g, tex, sf.uv, n, -dir, sh);
+                        if (flat > 0.5) {
+                            // raster flat fill: no sky/ground gradient and no occlusion modelling the face
+                            float3 fill = lerp(gGroundColor, gSkyZenith, 0.65) * gSunIntensity * gHemiStrength;
+                            radiance += throughput * albedo * fill;
+                        }
                     }
                 }
             } else {
@@ -220,6 +276,9 @@ void CSPathTrace(uint3 id : SV_DispatchThreadID) {
             } else {
                 nextDir = CosineSampleHemisphere(float2(Rand(rng), Rand(rng)), n);
                 throughput *= albedo;
+#ifdef MMDX_PT_PACK
+                diffuseChain = true;
+#endif
             }
             if (dot(nextDir, faceN) <= 0.0) break;
             dir = nextDir;

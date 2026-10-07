@@ -870,6 +870,7 @@ void SsrPass::Execute(PassContext& pc) {
 
 bool PathTracePass::CreatePipelines(Dx12Context& ctx, const std::filesystem::path& shaderDir, uint32_t) {
     if (!RtPipelinesSupported(ctx)) return true;
+    shaderDir_ = shaderDir;
     const std::filesystem::path f = shaderDir / L"pathtrace.hlsl";
     const std::filesystem::path d = shaderDir / L"pt_denoise.hlsl";
     const bool ok = trace_.Create(ctx, f, "CSPathTrace") && temporal_.Create(ctx, d, "CSTemporal") &&
@@ -881,6 +882,7 @@ bool PathTracePass::CreatePipelines(Dx12Context& ctx, const std::filesystem::pat
         modulate_ = ComputePipeline{};
         LOG_WARN("PathTrace: pipelines unavailable");
     }
+    ptVariants_.Clear(&ctx);
     return true;  // Execute checks the pipelines; never fails the pass
 }
 
@@ -915,6 +917,10 @@ void PathTracePass::Execute(PassContext& pc) {
     RenderTargets& t = pc.targets;
     if (pc.path != RenderPath::PathTraced || !pc.rt || !trace_ || !temporal_ || !atrous_ || !modulate_ || !light_)
         return;
+
+    ComputePipeline* pipe = ptVariants_.Resolve(pc.ctx, shaderDir_, pc.view.models, trace_, "pathtrace.hlsl", "CSPathTrace", "pathtrace");
+    if (!pipe || !*pipe) return;
+
     ID3D12GraphicsCommandList* cmd = pc.cmd;
     const uint32_t W = t.width, H = t.height;
     const uint32_t gx = Groups(W), gy = Groups(H);
@@ -930,8 +936,8 @@ void PathTracePass::Execute(PassContext& pc) {
                          pc.view.studioFloor ? 1.0f : 0.0f,
                          pc.settings.transparentBackground ? 1.0f : 0.0f,
                          (float)(pc.frame % 65536), 0, 0, 0};
-    trace_.Dispatch(pc, {}, pc.transient.UavTable(pc.ctx, {&light_, &albedo_, &t.normal, &t.velocity, &t.depth}),
-                    c0, 8, gx, gy);
+    pipe->Dispatch(pc, {}, pc.transient.UavTable(pc.ctx, {&light_, &albedo_, &t.normal, &t.velocity, &t.depth}),
+                   c0, 8, gx, gy);
 
     // 2. temporal accumulation into this frame's history slots.
     const uint32_t cur = current_, prev = current_ ^ 1;
