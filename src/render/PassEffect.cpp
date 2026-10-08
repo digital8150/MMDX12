@@ -362,6 +362,72 @@ void PackEffectPass::RunStack(PassContext& pc, bool preBloom) {
     }
 }
 
+// Offline GI: does this share have an enabled entry whose pipeline compiles (the PSO is built here, once, as in RunStack)?
+bool PackEffectPass::Ready(Dx12Context& ctx, const std::vector<EffectStackEntry>& stack) {
+    for (const EffectStackEntry& e : stack) {
+        const ShaderPack* pack = ShaderPacks().Find(e.pack);
+        if (!pack || pack->type != PackType::Effect || !pack->Selectable() || !e.enabled) continue;
+        if ((pack->stage == PackEffectStage::PreBloom) != preBloom_) continue;
+        const std::filesystem::path folder =
+            e.textureFolder.empty() ? ShaderPacks().TextureFolder(e.pack) : Utf8ToPath(e.textureFolder);
+        const EffectPipelines* p = Pipelines(ctx, e.pack, folder, preBloom_);
+        if (p && *p->pipe) return true;
+    }
+    return false;
+}
+
+// Offline GI: this share over `io`, ping-ponging through `scratch`. Same entries, pipelines and draws as RunStack, with
+// the offline image as the frame; the effect inputs are the image's own G-buffer copies. The offline renderer keeps the
+// frame in its own targets, so no RenderTargets are involved.
+bool PackEffectPass::RunOffline(PassContext& pc, const std::vector<EffectStackEntry>& stack, Texture& io, Texture& scratch,
+                                Texture& depth, Texture& velocity, Texture& normal) {
+    std::vector<const EffectStackEntry*> entries;
+    entries.reserve(stack.size());
+    for (const EffectStackEntry& e : stack) {
+        const ShaderPack* pack = ShaderPacks().Find(e.pack);
+        if (!pack || pack->type != PackType::Effect || !pack->Selectable() || !e.enabled) continue;
+        if ((pack->stage == PackEffectStage::PreBloom) != preBloom_) continue;
+        entries.push_back(&e);
+    }
+    if (entries.empty()) return false;
+
+    io.Transition(pc.cmd, kSrv);
+    depth.Transition(pc.cmd, kSrv);
+    velocity.Transition(pc.cmd, kSrv);
+    normal.Transition(pc.cmd, kSrv);
+    Texture* src = &io;         // read by the next entry
+    Texture* other = &scratch;  // drawn into by the next entry
+    bool ran = false;
+    for (const EffectStackEntry* e : entries) {
+        const ShaderPack* pack = ShaderPacks().Find(e->pack);
+        // per-effect texture folder: the entry's, else the pack-level folder (the registry setting)
+        const std::filesystem::path folder =
+            e->textureFolder.empty() ? ShaderPacks().TextureFolder(e->pack) : Utf8ToPath(e->textureFolder);
+        const EffectPipelines* p = Pipelines(pc.ctx, e->pack, folder, preBloom_);
+        if (!p || !*p->pipe) continue;   // compile error (already logged + reported): the entry is skipped
+
+        const float outConst[16] = {(float)io.width, (float)io.height};
+        const PackParamValues values = pack->Resolve(e->params);
+        other->Transition(pc.cmd, kRt);
+        p->pipe->Draw(pc, *other, pc.transient.SrvTable(pc.ctx, {src, &depth, &velocity, &normal}),
+                      p->texSrv != DescriptorHeap::kInvalid ? pc.ctx.SrvHeap().Gpu(p->texSrv)
+                                                            : D3D12_GPU_DESCRIPTOR_HANDLE{},
+                      outConst, values.data());
+        other->Transition(pc.cmd, kSrv);
+        std::swap(src, other);   // the result is now `src`, the texture it was read from is free
+        ran = true;
+    }
+    if (ran && src != &io) {
+        // an odd number of effects: copy the last result back into the image (same format on both sides)
+        io.Transition(pc.cmd, D3D12_RESOURCE_STATE_COPY_DEST);
+        src->Transition(pc.cmd, D3D12_RESOURCE_STATE_COPY_SOURCE);
+        pc.cmd->CopyResource(io.res.Get(), src->res.Get());
+        io.Transition(pc.cmd, kSrv);
+        src->Transition(pc.cmd, kSrv);
+    }
+    return ran;
+}
+
 void PackEffectPass::Execute(PassContext& pc) { RunStack(pc, preBloom_); }
 
 } // namespace mmdx

@@ -24,15 +24,20 @@
 //           shutter time) until converged or maxSamples; the first frames run 1, 2, 3 ... iterations
 //           so the preview visibly refines from noise
 //   Done    CSDenoise x3, optional volumetric light (offline_volumetric.hlsl), bloom (soft glow or FFT
-//           convolution), CSFinalize -> final image; Renderer::ReadOfflineImage copies it
+//           convolution), CSFinalize -> final image; Renderer::ReadOfflineImage copies it.
+//           Shader packs (job.effects, PackEffectPass::RunOffline): the pre-bloom share runs on the lit HDR
+//           image (CSLitCompose: albedo, volumetric light and outlines composed in) before the bloom, which
+//           then reads the effect's output; the post share runs on the final sRGB image
 // Work is split across app frames with a GPU-time budget so the UI stays responsive and no
 // command list runs long enough to trigger a TDR. Between frames the preview shows the running
 // accumulation (raw, with outlines).
 #include "render/RenderPass.h"
 #include "render/RenderTypes.h"
 #include "render/ShaderInterop.h"
+#include "render/ShaderPack.h"
 #include <filesystem>
 #include <memory>
+#include <vector>
 
 namespace mmdx {
 
@@ -65,6 +70,8 @@ struct OfflineJobDesc {
     bool bloomConvolution = false;   // FFT convolution bloom with the starburst kernel instead of the soft glow
     bool volumetric = false;         // sun shafts + spotlight cones, sun shadowed with ray queries
     float volumetricDensity = 1.0f;  // 0.25 .. 4
+    // The shader packs' effect stack (RenderSettings::packEffects of the real-time frame); empty = no effects.
+    std::vector<EffectStackEntry> effects;
 };
 
 struct OfflineProgress {

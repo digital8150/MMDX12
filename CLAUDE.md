@@ -184,8 +184,11 @@ progress.md is the session log. Read its latest entry first.
   unlit / wire / quad views, and ends with a CopyResource into `hdrFinal` / `ldr`. Pack textures use the v2 table (`PackFxSampleTex`,
   t0 space5), frame inputs are t0..t3 space6, params 16 root constants at b2. UI: `App::DrawEffectStackEditor` (shader manager detail
   of an effect pack + the play bar's effect button); surface pickers list surface packs only. Templates `shaders/pack_template`
-  (surface) / `pack_template_effect`; online-gallery-only examples chromatic_aberration, film_grain, crt_scanlines (not bundled; sources in the website repo). Studio projects don't store the
-  stack yet (app-level setting).
+  (surface) / `pack_template_effect`; online-gallery-only examples chromatic_aberration, film_grain, crt_scanlines, auto_luminous (not bundled; sources in the website
+  repo). Studio projects don't store the stack yet (app-level setting). Offline GI runs the stack too (`job.effects`, `OfflineRenderer::Impl::Finish`):
+  pre-bloom entries run on the lit HDR before the bloom (`CSLitCompose`, the bloom then reads the effect output), post entries on the sRGB
+  result (`PackEffectPass::RunOffline`). Their depth / normal come from the offline G-buffer (depth from `offline_effect.hlsl`, the normal in view
+  space like the real-time normal target), motion is zero.
 - `OfflineRenderer` (render/OfflineRenderer.h) is independent of `RenderSettings`: `Renderer::BeginOffline` builds the TLAS,
   then `Renderer::RenderOffline` replaces `Render` each frame (GPU-time-budgeted iterations, preview present) until Done.
   Motion blur: each iteration re-skins the character at its shutter time (`RtScene::Build(..., time)`) from the models'

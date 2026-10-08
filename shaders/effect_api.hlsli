@@ -33,7 +33,7 @@ struct PackEffectInput {
     float4 color;         // the frame so far at this pixel: linear HDR ("pre-bloom") or display-referred
                           // sRGB with alpha ("post"; alpha < 1 only with a transparent background)
     float depth;          // raw device depth at this pixel (1 = background; LinearZ() converts to view z)
-    float3 normal;        // world-space normal, oct-encoded in the G-buffer (OctDecode); decodes to a stray
+    float3 normal;        // view-space normal (the normal target, oct-encoded: OctDecode); decodes to a stray
                           // direction on background pixels
     float2 motion;        // motion vector, uv(current) - uv(prev); (0, 0) when the frame has no motion
 };

@@ -103,7 +103,9 @@ void CSBloomDown(uint3 id : SV_DispatchThreadID) {
     [unroll] for (int y = 0; y < 4; ++y) {
         [unroll] for (int x = 0; x < 4; ++x) {
             int2 p = min(int2(id.xy) * 4 + int2(x, y), size - 1);
-            float3 c = MeanRadiance(p);
+            float3 c;
+            if (gP0.y > 0.5) c = gInT.Load(int3(p, 0)).rgb;   // lit HDR: the pre-bloom effects' output (CSLitCompose)
+            else c = MeanRadiance(p);
             float l = Luminance(c);
             s += c * (max(l - thr, 0.0) / max(l, 1e-4));
         }
@@ -185,13 +187,17 @@ void CSFinalize(uint3 id : SV_DispatchThreadID) {
     int2 size = int2(gP1.xy);
     int2 p = int2(id.xy);
     if (p.x >= size.x || p.y >= size.y) return;
-    float3 c = gP0.x > 0.5 ? gInT.Load(int3(p, 0)).rgb * MeanAlbedo(p) : MeanRadiance(p);
-    if (gP2.x > 0.5) {
+    // lit = 1: gInT is the lit HDR image (CSLitCompose: albedo, volumetric light and outlines are already in it)
+    const bool lit = gP2.y > 0.5;
+    float3 c;
+    if (lit) c = gInT.Load(int3(p, 0)).rgb;
+    else c = gP0.x > 0.5 ? gInT.Load(int3(p, 0)).rgb * MeanAlbedo(p) : MeanRadiance(p);
+    if (gP2.x > 0.5 && !lit) {
         float4 vol = VolUpsample(p, size);   // rgb in-scattered light, a transmittance
         c = c * saturate(vol.a) + vol.rgb;
     }
     if (gP0.y > 0.5) c += gBloomT.SampleLevel(gLinear, (float2(p) + 0.5) / float2(size), 0).rgb * gP0.z;
-    if (gP1.w > 0.0 && !SeesGlass(p, size)) {
+    if (gP1.w > 0.0 && !lit && !SeesGlass(p, size)) {
         float4 e = gEdgeT.Load(int3(p, 0)) / gP1.w;   // mean outline layer over the iterations
         c = c * (1.0 - e.a) + e.rgb;
     }
@@ -204,6 +210,49 @@ void CSFinalize(uint3 id : SV_DispatchThreadID) {
     c = LinearToSrgb(saturate(c));
     c += (Ign(float2(p)) - 0.5) / 255.0;
     gOut[p] = float4(saturate(c), 1.0);
+}
+
+// Lit HDR for the pre-bloom effects, in the real-time frame's order: the denoised radiance back in albedo, the
+// volumetric light and the MMD outlines composed in. CSFinalize (lit = 1) then adds the bloom of the effect output.
+[numthreads(8, 8, 1)]
+void CSLitCompose(uint3 id : SV_DispatchThreadID) {
+    int2 size = int2(gP1.xy);
+    int2 p = int2(id.xy);
+    if (p.x >= size.x || p.y >= size.y) return;
+    float3 c = gInT.Load(int3(p, 0)).rgb * MeanAlbedo(p);
+    if (gP2.x > 0.5) {
+        float4 vol = VolUpsample(p, size);
+        c = c * saturate(vol.a) + vol.rgb;
+    }
+    if (gP1.w > 0.0 && !SeesGlass(p, size)) {
+        float4 e = gEdgeT.Load(int3(p, 0)) / gP1.w;
+        c = c * (1.0 - e.a) + e.rgb;
+    }
+    gOut[p] = float4(max(c, 0.0), 1.0);
+}
+
+// Effect inputs (effect_api.hlsli): the oct-encoded view-space normal, as the real-time normal target holds it
+// (mmd.hlsl PackOutput: normalize(mul(worldNormal, gView))); 0 on the background. The G-buffer normal is world space.
+// The raw device depth is offline_effect.hlsl's CSEffectDepth (an R32_FLOAT target needs its own declaration).
+[numthreads(8, 8, 1)]
+void CSEffectNormal(uint3 id : SV_DispatchThreadID) {
+    int2 size = int2(gP1.xy);
+    int2 p = int2(id.xy);
+    if (p.x >= size.x || p.y >= size.y) return;
+    float4 g = gGbufT.Load(int3(p, 0));
+    float2 e = 0.0;
+    const float len = length(g.xyz);
+    if (g.w < 1e5 && len > 1e-6) e = OctEncode(normalize(mul(g.xyz / len, (float3x3)gView)));
+    gOut[p] = float4(e, 0.0, 0.0);
+}
+
+// Zero motion: the offline renderer has no per-pixel motion vectors (its motion blur is integrated over the
+// shutter). The target is 1x1: every uv of the effect reads texel 0.
+[numthreads(8, 8, 1)]
+void CSEffectVelocity(uint3 id : SV_DispatchThreadID) {
+    int2 size = int2(gP1.xy);
+    if ((int)id.x >= size.x || (int)id.y >= size.y) return;
+    gOut[id.xy] = float4(0.0, 0.0, 0.0, 0.0);
 }
 
 // Adds this iteration's resolved outline layer (camera at the iteration's shutter time and lens

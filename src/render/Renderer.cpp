@@ -148,9 +148,10 @@ bool Renderer::Initialize(Dx12Context& ctx, const std::filesystem::path& shaderD
     passes_.push_back(std::make_unique<TaaPass>());
     passes_.push_back(std::make_unique<UpscalePass>());
     passes_.push_back(std::make_unique<DofPass>());
-    passes_.push_back(std::make_unique<BloomPass>());
-    // "pre-bloom" effect packs: linear HDR, before Bloom. The "post" share runs after PostPass (below).
+    // "pre-bloom" effect packs: linear HDR, before Bloom (Bloom reads hdrFinal, which this share writes). The
+    // "post" share runs after PostPass (below).
     passes_.push_back(std::make_unique<PackEffectPass>(true));
+    passes_.push_back(std::make_unique<BloomPass>());
     passes_.push_back(std::make_unique<PostPass>());
     passes_.push_back(std::make_unique<PackEffectPass>(false));
     passes_.push_back(std::make_unique<BackdropPass>());

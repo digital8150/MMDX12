@@ -6,7 +6,7 @@
 //
 // PackEffectInput i:  i.uv (0..1, top left = 0,0)   i.pixel   i.outputSize   i.time (seconds)   i.frameIndex
 //                     i.color (the frame so far, alpha kept)   i.depth (raw device depth, 1 = background)
-//                     i.normal (world space; garbage on the background)   i.motion (uv motion vector)
+//                     i.normal (view space; garbage on the background)   i.motion (uv motion vector)
 // Neighbouring pixels: gEffectSource.SampleLevel(gLinear, uv, 0).   Parameters: PackParam(0..15) = the sliders in the
 // pack.json "params" order.   Textures (pack.json "textures"): PackFxSampleTex(index, uv), PackFxSampleTexLevel,
 // PackFxTexSize, PackFxTexCount.   Helpers from common.hlsli: Luminance, LinearZ(depth), Ign, SrgbToLinear ...

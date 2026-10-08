@@ -27,6 +27,7 @@
 #include "render/RenderPass.h"
 #include "render/PtPackVariants.h"
 #include "render/PackTextures.h"
+#include "render/ShaderPack.h"
 #include <wrl/client.h>
 
 namespace mmdx {
@@ -284,6 +285,14 @@ public:
     void OnResize(Dx12Context& ctx, RenderTargets& targets) override;
     void ReleaseTargets(Dx12Context& ctx) override;
     void Execute(PassContext& pc) override;
+
+    // Offline GI (OfflineRenderer::Impl::Finish): does this share have an enabled entry whose pipeline compiles? The offline
+    // lit path is taken only then, so a broken pack leaves the image as it is without effects.
+    bool Ready(Dx12Context& ctx, const std::vector<EffectStackEntry>& stack);
+    // Offline GI: this instance's share of `stack` over the image `io`, ping-ponging through `scratch` (the same format), with
+    // the image's effect inputs (depth R32_FLOAT, velocity, oct normal). The result is copied back into `io`; false: nothing ran.
+    bool RunOffline(PassContext& pc, const std::vector<EffectStackEntry>& stack, Texture& io, Texture& scratch,
+                    Texture& depth, Texture& velocity, Texture& normal);
 
 private:
     // Per-entry GPU state, keyed by pack id: its PSO plus one texture set per resolved folder (pack.json

@@ -6,6 +6,7 @@
 #include "asset/ImageLoader.h"
 #include "render/ShaderPack.h"
 #include "render/PtPackVariants.h"
+#include "render/Passes.h"
 #include "core/Log.h"
 #include "core/TextUtil.h"
 #include <directx/d3dx12.h>
@@ -107,6 +108,9 @@ struct OfflineRenderer::Impl {
     PtPackVariants ptVariants;
     // offline_post.hlsl
     ComputePipeline denoise, bloomDown, bloomBlur, finalize, edgeAccumulate;
+    // offline_post.hlsl (lit compose, effect normal / velocity) and offline_effect.hlsl (effect depth): the effect stage
+    ComputePipeline litCompose, effectDepth, effectNormal, effectVelocity;
+    PackEffectPass effectPre{true}, effectPost{false};   // the shader packs' pre-bloom and post shares (RunOffline)
     // offline_volumetric.hlsl, bloom_fft.hlsl (optional effects: empty pipelines disable them)
     ComputePipeline volMarch, volBlur;
     ComputePipeline fftInput, fftRows, fftCols, fftKernel, fftOutput;
@@ -123,6 +127,7 @@ struct OfflineRenderer::Impl {
     // image targets (job size; recreated in Begin when the size changes)
     uint32_t width = 0, height = 0;
     Texture accum, albedo, moments, gbuf, edgeLayer, edgeAccum, denoiseA, denoiseB, ldr, bloomA, bloomB;
+    Texture litA, litB, ldrB, fxDepth, fxNormal, fxVel;   // effect stage: lit HDR and post ping-pong, effect inputs
     Texture edgeColorMsaa, edgeDepthMsaa;
     Texture counter;                   // 1x1 R32_UINT
     Texture preE[kOfflinePrepassLevels], preG[kOfflinePrepassLevels];  // prepass levels (irradiance, geometry)
@@ -174,9 +179,10 @@ struct OfflineRenderer::Impl {
 
     D3D12_GPU_DESCRIPTOR_HANDLE GiTable(ID3D12GraphicsCommandList* cmd, TransientDescriptors& t);
     void DispatchPost(PassContext& pc, const ComputePipeline& pipe, Texture* target, Texture* in5, Texture* in6,
-                      const float* c, uint32_t groupsX, uint32_t groupsY);
+                      const float* c, uint32_t groupsX, uint32_t groupsY, float lit = 0.0f);
     void Volumetric(PassContext& pc);
     void ConvolveBloom(PassContext& pc);
+    void EffectInputs(PassContext& pc);
     bool EnsureTargets(uint32_t w, uint32_t h);
     void DrawEdges(ID3D12GraphicsCommandList* cmd, float shutter, float lensX, float lensY);
     void Work(ID3D12GraphicsCommandList* cmd, TransientDescriptors& t, const BuiltinTextures* b, RtScene& rt,
@@ -197,7 +203,7 @@ D3D12_GPU_DESCRIPTOR_HANDLE OfflineRenderer::Impl::GiTable(ID3D12GraphicsCommand
 
 void OfflineRenderer::Impl::DispatchPost(PassContext& pc, const ComputePipeline& pipe, Texture* target,
                                          Texture* in5, Texture* in6, const float* c, uint32_t groupsX,
-                                         uint32_t groupsY) {
+                                         uint32_t groupsY, float lit) {
     ID3D12GraphicsCommandList* cmd = pc.cmd;
     accum.Transition(cmd, kSrvAll);
     albedo.Transition(cmd, kSrvAll);
@@ -212,9 +218,20 @@ void OfflineRenderer::Impl::DispatchPost(PassContext& pc, const ComputePipeline&
     D3D12_GPU_DESCRIPTOR_HANDLE srv =
         pc.transient.SrvTable(*ctx, {&accum, &albedo, &moments, &gbuf, &edgeAccum, in5, in6, vol ? &volA : nullptr});
     D3D12_GPU_DESCRIPTOR_HANDLE uav = pc.transient.UavTable(*ctx, {target});
-    float c12[12] = {c[0], c[1], c[2], c[3], c[4], c[5], c[6], c[7], vol ? 1.0f : 0.0f, 0.0f, 0.0f, 0.0f};
+    float c12[12] = {c[0], c[1], c[2], c[3], c[4], c[5], c[6], c[7], vol ? 1.0f : 0.0f, lit, 0.0f, 0.0f};
     pipe.Dispatch(pc, srv, uav, c12, 12, groupsX, groupsY);
     UavBarrier(cmd);
+}
+
+// The effect inputs of this image (effect_api.hlsli), from the G-buffer: the raw device depth (offline_effect.hlsl), the
+// oct-encoded view-space normal (CSEffectNormal) and zero motion (a 1x1 texture: the offline renderer has no per-pixel
+// motion vectors).
+void OfflineRenderer::Impl::EffectInputs(PassContext& pc) {
+    const float proj[8] = {view.camera.nearZ, view.camera.farZ, 0.0f, 0.0f, (float)width, (float)height, 0.0f, 0.0f};
+    DispatchPost(pc, effectDepth, &fxDepth, nullptr, nullptr, proj, Groups(width), Groups(height));
+    DispatchPost(pc, effectNormal, &fxNormal, nullptr, nullptr, proj, Groups(width), Groups(height));
+    const float one[8] = {0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 1.0f, 0.0f, 0.0f};
+    DispatchPost(pc, effectVelocity, &fxVel, nullptr, nullptr, one, 1, 1);
 }
 
 bool OfflineRenderer::Impl::EnsureTargets(uint32_t w, uint32_t h) {
@@ -238,6 +255,12 @@ bool OfflineRenderer::Impl::EnsureTargets(uint32_t w, uint32_t h) {
     volB.Release(c);
     edgeColorMsaa.Release(c);
     edgeDepthMsaa.Release(c);
+    litA.Release(c);
+    litB.Release(c);
+    ldrB.Release(c);
+    fxDepth.Release(c);
+    fxNormal.Release(c);
+    fxVel.Release(c);
     const D3D12_RESOURCE_FLAGS uav = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
     const uint32_t qw = (w + 3) / 4, qh = (h + 3) / 4;
     const float zero[4] = {0, 0, 0, 0};
@@ -251,6 +274,16 @@ bool OfflineRenderer::Impl::EnsureTargets(uint32_t w, uint32_t h) {
     ok &= bloomA.Create(c, qw, qh, DXGI_FORMAT_R16G16B16A16_FLOAT, uav, kSrvAll, L"offline.bloomA");
     ok &= bloomB.Create(c, qw, qh, DXGI_FORMAT_R16G16B16A16_FLOAT, uav, kSrvAll, L"offline.bloomB");
     ok &= ldr.Create(c, w, h, DXGI_FORMAT_R8G8B8A8_UNORM, uav, kSrvAll, L"offline.ldr");
+    // effect stage (shader packs): the lit HDR image and its ping-pong (UAV for CSLitCompose, RT for the effects), the
+    // post ping-pong (RT), and the effect inputs; fxVel is 1x1 (zero motion, see EffectInputs)
+    const D3D12_RESOURCE_FLAGS uavRt = (D3D12_RESOURCE_FLAGS)(uav | D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET);
+    ok &= litA.Create(c, w, h, DXGI_FORMAT_R16G16B16A16_FLOAT, uavRt, kSrvAll, L"offline.litA");
+    ok &= litB.Create(c, w, h, DXGI_FORMAT_R16G16B16A16_FLOAT, uavRt, kSrvAll, L"offline.litB");
+    ok &= ldrB.Create(c, w, h, DXGI_FORMAT_R8G8B8A8_UNORM, D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET, kSrvAll,
+                      L"offline.ldrB");
+    ok &= fxDepth.Create(c, w, h, DXGI_FORMAT_R32_FLOAT, uav, kSrvAll, L"offline.fxDepth");
+    ok &= fxNormal.Create(c, w, h, DXGI_FORMAT_R16G16B16A16_FLOAT, uav, kSrvAll, L"offline.fxNormal");
+    ok &= fxVel.Create(c, 1, 1, DXGI_FORMAT_R16G16B16A16_FLOAT, uav, kSrvAll, L"offline.fxVel");
     if (volMarch) {
         ok &= volA.Create(c, (w + 1) / 2, (h + 1) / 2, DXGI_FORMAT_R16G16B16A16_FLOAT, uav, kSrvAll, L"offline.volA");
         ok &= volB.Create(c, (w + 1) / 2, (h + 1) / 2, DXGI_FORMAT_R16G16B16A16_FLOAT, uav, kSrvAll, L"offline.volB");
@@ -637,10 +670,23 @@ void OfflineRenderer::Impl::Finish(PassContext& pc) {
 
     if (job.volumetric && volMarch && volA) Volumetric(pc);
 
+    // Shader packs (job.effects; none = nothing below changes). The pre-bloom share runs on the lit HDR image, in the
+    // real-time frame's order: albedo, volumetric light and outlines composed in (CSLitCompose). Bloom then reads the
+    // effect's output and CSFinalize skips that composition (lit = 1). The post share runs on the finished sRGB image.
+    const bool preFx = effectPre.Ready(*ctx, job.effects);
+    const bool postFx = effectPost.Ready(*ctx, job.effects);
+    const bool lit = preFx;
+    if (preFx || postFx) EffectInputs(pc);
+    if (preFx) {
+        const float lc[8] = {0.0f, 0.0f, 0.0f, 0.0f, (float)w, (float)h, 0.0f, (float)edgeLayers};
+        DispatchPost(pc, litCompose, &litA, &denoiseA, nullptr, lc, Groups(w), Groups(h));
+        effectPre.RunOffline(pc, job.effects, litA, litB, fxDepth, fxVel, fxNormal);
+    }
+
     const bool convolve = job.bloomConvolution && fftRows && gridA;
     if (job.bloom) {
-        const float bd[8] = {1.0f, 0.0f, 0.0f, 0.0f, (float)w, (float)h, 0.0f, 0.0f};
-        DispatchPost(pc, bloomDown, &bloomA, nullptr, nullptr, bd, Groups(qw), Groups(qh));
+        const float bd[8] = {1.0f, lit ? 1.0f : 0.0f, 0.0f, 0.0f, (float)w, (float)h, 0.0f, 0.0f};
+        DispatchPost(pc, bloomDown, &bloomA, lit ? &litA : nullptr, nullptr, bd, Groups(qw), Groups(qh));
         if (convolve) {
             ConvolveBloom(pc);
         } else {
@@ -655,7 +701,8 @@ void OfflineRenderer::Impl::Finish(PassContext& pc) {
 
     const float fin[8] = {1.0f, job.bloom ? 1.0f : 0.0f, convolve ? kConvolutionBloomIntensity : 0.08f, 1.0f,
                           (float)w, (float)h, 0.12f, (float)edgeLayers};
-    DispatchPost(pc, finalize, &ldr, &denoiseA, &bloomA, fin, Groups(w), Groups(h));
+    DispatchPost(pc, finalize, &ldr, lit ? &litA : &denoiseA, &bloomA, fin, Groups(w), Groups(h), lit ? 1.0f : 0.0f);
+    if (postFx) effectPost.RunOffline(pc, job.effects, ldr, ldrB, fxDepth, fxVel, fxNormal);
 }
 
 OfflineRenderer::OfflineRenderer() = default;
@@ -683,6 +730,13 @@ bool OfflineRenderer::Initialize(Dx12Context& ctx, const std::filesystem::path& 
     ok &= m.bloomBlur.Create(ctx, post, "CSBloomBlur");
     ok &= m.finalize.Create(ctx, post, "CSFinalize");
     ok &= m.edgeAccumulate.Create(ctx, post, "CSEdgeAccum");
+    ok &= m.litCompose.Create(ctx, post, "CSLitCompose");
+    ok &= m.effectNormal.Create(ctx, post, "CSEffectNormal");
+    ok &= m.effectVelocity.Create(ctx, post, "CSEffectVelocity");
+    ok &= m.effectDepth.Create(ctx, shaderDir / L"offline_effect.hlsl", "CSEffectDepth");
+    // the packs' effect.hlsl is compiled lazily from the shader directory (as the real-time passes do)
+    m.effectPre.CreatePipelines(ctx, shaderDir, 0);
+    m.effectPost.CreatePipelines(ctx, shaderDir, 0);
     if (!ok) {
         LOG_ERROR("offline renderer: compute pipeline creation failed");
         return false;
@@ -863,7 +917,8 @@ void OfflineRenderer::Shutdown() {
     for (Texture& tex : m.preG) tex.Release(ctx);
     m.icFinal.Release(ctx);
     for (Texture* t : {&m.accum, &m.albedo, &m.moments, &m.gbuf, &m.edgeLayer, &m.edgeAccum, &m.denoiseA, &m.denoiseB, &m.ldr, &m.bloomA, &m.bloomB, &m.edgeColorMsaa,
-                       &m.edgeDepthMsaa, &m.counter, &m.volA, &m.volB, &m.gridA, &m.gridB, &m.kernelSpec})
+                       &m.edgeDepthMsaa, &m.counter, &m.volA, &m.volB, &m.gridA, &m.gridB, &m.kernelSpec,
+                       &m.litA, &m.litB, &m.ldrB, &m.fxDepth, &m.fxNormal, &m.fxVel})
         t->Release(ctx);
     if (m.sceneCb && m.sceneCbMapped) m.sceneCb->Unmap(0, nullptr);
     if (m.lightBuf && m.lightMapped) m.lightBuf->Unmap(0, nullptr);

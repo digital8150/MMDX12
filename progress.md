@@ -818,3 +818,57 @@ reviewed by Claude (smoke); Claude wrote nimble_toon, the contract v2, the memor
 ### Next
 - `PSEdgePack` in the offline renderer, PT / GI badge in the gallery index, a faster-motion check of the PT denoiser with hard cel edges,
   side-by-side comparison of nimble_toon with the official renders on all four models, fix `pack_check` for relative zip paths.
+
+## 2026-10-09 — offline GI runs the shader-pack effects, view-space effect normals, auto_luminous gallery pack
+
+Request: apply the screen-effect packs to the offline GI renderer (4K stills, GI videos) and check whether depth / normal effects work
+there; then close the session and publish auto_luminous to the public gallery following the publish procedure (the user supplied the
+preview capture, cropped to 16:9).
+
+### Done
+- Offline GI runs the effect stack (`OfflineRenderer::Impl::Finish`, `PackEffectPass::RunOffline`, `Ready`). Pre-bloom entries run on the
+  lit HDR image: `CSLitCompose` composes denoised radiance x albedo, volumetric light and outlines (the real-time frame's order), the effect
+  runs on it, then bloom reads the effect output (`CSBloomDown` / `CSFinalize` lit mode). Post entries run on the final sRGB image. With
+  no enabled, compiling pack the GI path is unchanged.
+- GI effect inputs: depth from the G-buffer view depth (`shaders/offline_effect.hlsl`, the inverse of `LinearZ`), normal oct-encoded in
+  view space like the real-time normal target (`CSEffectNormal`), motion a 1x1 zero texture (the offline renderer has no per-pixel motion
+  vectors).
+- Found and fixed: the GI normal input was in world space, while the real-time normal target is view space (`mmd.hlsl` `PackOutput`). The
+  docs and template comments said world space; corrected to view space.
+- The `Renderer` pass order fix (pre-bloom share before Bloom) was uncommitted before this session; it is part of this commit.
+- auto_luminous 1.0.0 (pre-bloom glow: strength, threshold, knee, radius; apiVersion 3; minAppVersion 1.5.0) published to the gallery from
+  the website repo: preview cropped to 16:9 (1600x900) from a play capture, `build-packs` and `pack_check --compile` OK, `deploy.sh` run.
+  The website commit d8e2476 is local only (see notes).
+- Docs: `docs/shader_effect_api.md` (rules, example list) and CLAUDE.md (gallery list, offline GI note).
+
+### Verified
+- Build (build_au) passes; no `[E]` / `[W]` in the GI and real-time runs.
+- GI still without effects (`--effect none`): byte-identical to the render before the change (md5).
+- GI still with auto_luminous: glow visible; bright pixels (luminance > 150) +4.6 on average, the dim surround +3.4; 40% of the pixels
+  changed (max 132 levels in R).
+- Lit-path side effect alone (identity pre-bloom pack): 7% of the pixels, at most 12 levels.
+- Post path (test pack halving G and B): all 518,400 pixels within +-1 of the expected values.
+- Depth and normal against the real-time render of the same pack (split test pack: view normal left, log depth right; real-time capture
+  at the seek frame): depth mean abs difference 1.25/255 (character 0.6); view normal on the character: 86% of the pixels within 24 levels,
+  median 3; background 100%.
+- Live site: index.json lists auto_luminous (version, apiVersion, minAppVersion and sha256 match the local zip); the zip, the preview and the
+  pack pages (ko / en / ja / zh) return 200; the gallery pages list the pack.
+
+### Not verified / notes
+- GI floor normals: about a third of the floor pixels in the test view (32%) get a zero normal in the GI G-buffer while their depth is
+  valid, so normal-based effects read a stray direction there. Cause not isolated. The denoiser reads the same G-buffer normal, so a fix can
+  change GI output. Not fixed.
+- GI videos with effects were not rendered (the same `Finish` runs per frame).
+- Thumbnails (`RenderToImage`) still run the effect stack when one is set (unchanged).
+- Motion-based effects see zero motion in GI.
+- The in-app online install of auto_luminous was not clicked through (zip extraction path only).
+- The website repo commit is local only (not pushed). Its public history still holds a server web-root path in the deploy docs and the
+  nginx config, committed before this session; a history scrub needs a decision first.
+- The website's screen-effect pages describe the 1.5.0 behaviour (GI not covered yet); update them with the next app release.
+
+### Next
+- Decide the far-floor normal fix: (a) reconstruct the normal from depth in `CSEffectNormal` for zero-normal pixels (GI output unchanged),
+  or (b) fix the G-buffer write (GI output may change).
+- Decide the history scrub for the website repo, then push it.
+- App release with GI effect support: version bump, website docs, pack `minAppVersion` where needed.
+- Decide whether thumbnails should skip the effect stack.

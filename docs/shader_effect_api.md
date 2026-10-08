@@ -32,7 +32,7 @@ float3 PackEffect(PackEffectInput i) { return i.color.rgb; }
 ```
 
 `PackEffectInput`: `uv` (0..1, top left = 0,0), `pixel`, `outputSize`, `time` (seconds), `frameIndex`, `color` (the frame so
-far, alpha kept), `depth` (raw device depth, 1 = background), `normal` (world space, undefined on the background), `motion`
+far, alpha kept), `depth` (raw device depth, 1 = background), `normal` (view space, oct-encoded; undefined on the background), `motion`
 (uv(current) - uv(previous)).
 
 Helpers: `gEffectSource.SampleLevel(gLinear, uv, 0)` reads any pixel of the frame so far (bilinear, clamp), `PackParam(i)`,
@@ -45,9 +45,12 @@ shader manager) and never crashes. Saving `effect.hlsl` while the app runs reloa
 
 ## Rules
 
-- Effects apply to the raster / ray-traced / path-traced real-time views. Unlit / wireframe views, the quad view and the
-  offline GI renderer do not apply them.
+- Effects apply to the raster / ray-traced / path-traced real-time views and to the offline GI renderer (4K stills and GI
+  videos). Unlit / wireframe views and the quad view do not apply them. Offline GI: a pre-bloom pack runs on the lit HDR
+  image (the denoised radiance re-lit, volumetric light and outlines composed in) before the bloom, and the bloom reads its
+  output; a post pack runs on the final sRGB image. `depth` and `normal` come from the offline G-buffer, `motion` is zero
+  (the offline renderer has no per-pixel motion vectors; its motion blur is integrated over the shutter).
 - No effects in the stack = no extra targets, no extra passes: the frame is identical to a build without the feature.
 - Check a pack with `pack_check <folder> --compile`. Template: `shaders/pack_template_effect`.
-- Examples (online gallery only, not bundled): chromatic_aberration, film_grain, crt_scanlines (sources in the website repo `shader-packs/`).
+- Examples (online gallery only, not bundled): chromatic_aberration, film_grain, crt_scanlines, auto_luminous (sources in the website repo `shader-packs/`).
 - CLI: `--effect <id>[,<id>...]` replaces the stack for one run, `--effect none` clears it.
