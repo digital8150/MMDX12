@@ -838,7 +838,7 @@ preview capture, cropped to 16:9).
 - The `Renderer` pass order fix (pre-bloom share before Bloom) was uncommitted before this session; it is part of this commit.
 - auto_luminous 1.0.0 (pre-bloom glow: strength, threshold, knee, radius; apiVersion 3; minAppVersion 1.5.0) published to the gallery from
   the website repo: preview cropped to 16:9 (1600x900) from a play capture, `build-packs` and `pack_check --compile` OK, `deploy.sh` run.
-  The website commit d8e2476 is local only (see notes).
+  The website repo (private) commits d8e2476 and 534b53e are pushed to its remote.
 - Docs: `docs/shader_effect_api.md` (rules, example list) and CLAUDE.md (gallery list, offline GI note).
 
 ### Verified
@@ -862,13 +862,10 @@ preview capture, cropped to 16:9).
 - Thumbnails (`RenderToImage`) still run the effect stack when one is set (unchanged).
 - Motion-based effects see zero motion in GI.
 - The in-app online install of auto_luminous was not clicked through (zip extraction path only).
-- The website repo commit is local only (not pushed). Its public history still holds a server web-root path in the deploy docs and the
-  nginx config, committed before this session; a history scrub needs a decision first.
 - The website's screen-effect pages describe the 1.5.0 behaviour (GI not covered yet); update them with the next app release.
 
 ### Next
 - Decide the far-floor normal fix: (a) reconstruct the normal from depth in `CSEffectNormal` for zero-normal pixels (GI output unchanged),
   or (b) fix the G-buffer write (GI output may change).
-- Decide the history scrub for the website repo, then push it.
 - App release with GI effect support: version bump, website docs, pack `minAppVersion` where needed.
 - Decide whether thumbnails should skip the effect stack.
