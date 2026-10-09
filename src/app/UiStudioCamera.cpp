@@ -217,9 +217,10 @@ void App::DrawStudioCameraPanel(float w) {
         Tooltip(Tr("액션 세이프 93 % · 타이틀 세이프 90 %"));
     }
 
-    // --- the camera at the playhead: always editable (auto-key keys the edit), key state like an AE/Blender property
-    separator(8.0f);
-    {
+    // --- the camera at the playhead: always editable (auto-key keys the edit), key state like an AE/Blender property.
+    // While a camera key is selected the key section below edits it instead (one set of fields, no ID clash).
+    if (!compact) {
+        separator(8.0f);
         const bool keyed = FindKey(d.camera.camera, d.Frame()) != nullptr;
         const ImVec2 c = ImGui::GetCursorScreenPos();
         Text(cdl, Font::Semibold, size::Small, c, p.ink2, Tr("카메라 값"));
@@ -327,6 +328,8 @@ bool App::DrawStudioCameraKeyFields(float w, RowKind kind, int frame, bool live)
     };
 
     if (kind == RowKind::Camera) {
+        ImGui::PushID(live ? "camlive" : "camkey");  // the playhead and selected-key copies never share widget IDs
+        struct PopId { ~PopId() { ImGui::PopID(); } } popId;
         CameraKf* k = FindKey(d.camera.camera, frame);
         // live: the fields of the playhead. They always show the camera in effect (a key or the interpolated / free
         // view); editing one keys it here when auto-key is on (or the key already exists), like Adobe / Blender.

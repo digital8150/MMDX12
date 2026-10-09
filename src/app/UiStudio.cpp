@@ -1877,9 +1877,8 @@ void App::DrawStudioInspector(float x0, float y0, float x1, float y1) {
     line(Tr("프레임"), std::to_string(first->second));
     if (IsCameraKind(kind)) {
         ImGui::Dummy(ImVec2(w, Dp(4.0f)));
-        // the camera key under the playhead is edited by the "camera values" section above (no second copy)
-        const bool shownAbove = kind == RowKind::Camera && first->second == d.Frame();
-        if (!shownAbove && DrawStudioCameraKeyFields(w, kind, first->second)) {  // light / shadow: no curves
+        // the camera panel hides its "camera values" section while a camera key is selected: these are the only fields
+        if (DrawStudioCameraKeyFields(w, kind, first->second)) {  // light / shadow: no curves
             ImGui::EndChild();
             return;
         }
