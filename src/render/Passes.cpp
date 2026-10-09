@@ -159,7 +159,7 @@ uint32_t SpotShadowCount(const LightParams& light, uint32_t maxLights) {
 uint32_t PointShadowCount(const LightParams& light, uint32_t maxLights) {
     uint32_t n = 0;
     const size_t count = std::min<size_t>(light.punctual.size(), maxLights);
-    for (size_t i = 0; i < count && n < kPointShadowLights; ++i)
+    for (size_t i = 0; i < count; ++i)
         if (light.punctual[i].spotCosOuter <= -1.0f && light.punctual[i].castPointShadow &&
             light.punctual[i].shadow != LightShadowType::NoCast)
             ++n;
@@ -242,7 +242,7 @@ void ShadowPass::Execute(PassContext& pc) {
             point.Transition(cmd, D3D12_RESOURCE_STATE_DEPTH_WRITE);
             uint32_t pointIdx = 0;
             const size_t count = std::min<size_t>(pc.view.light.punctual.size(), Renderer::kMaxPunctualLights);
-            for (size_t i = 0; i < count && pointIdx < kPointShadowLights; ++i) {
+            for (size_t i = 0; i < count && (pointIdx + 1) * kPointShadowFaces <= point.arraySize; ++i) {
                 const PunctualLight& p = pc.view.light.punctual[i];
                 if (p.spotCosOuter > -1.0f || !p.castPointShadow || p.shadow == LightShadowType::NoCast) continue;
                 const float nearZ = std::max(0.05f, p.range * 0.004f);

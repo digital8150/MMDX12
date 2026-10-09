@@ -828,7 +828,7 @@ const Entry kEnglish[] = {
     {"뷰포트 표시", "Viewport visible"},
     {"소프트", "Soft"},
     {"스펙큘러 영향", "Affect specular"},
-    {"실시간 방식에서는 점광원 4개까지 그림자가 생깁니다. 그 이상은 그림자 없이 비춥니다.", "In the real-time paths the first 4 point lights cast shadows; further ones light without a shadow."},
+    {"래스터에서는 그림자를 켠 점광원이 많아지면 점광원 그림자 해상도가 낮아집니다.", "In raster, point light shadows get a lower resolution when many shadowed point lights are on."},
     {"에디터 전용이며 렌더에는 영향이 없습니다", "Editor only; no effect on render"},
     {"역제곱", "Inverse square"},
     {"외부 각도", "Outer angle"},

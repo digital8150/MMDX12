@@ -47,7 +47,7 @@ uint32_t SpotShadowCount(const LightParams& light, uint32_t maxLights);
 inline bool PointShadowsWanted(const RenderSettings& s, RenderPath path, bool offscreen) {
     return s.shadows && (path == RenderPath::Raster);
 }
-// Number of qualifying point lights (at most kPointShadowLights).
+// Number of qualifying point lights (no cap besides maxLights).
 uint32_t PointShadowCount(const LightParams& light, uint32_t maxLights);
 
 class ShadowPass final : public IRenderPass {

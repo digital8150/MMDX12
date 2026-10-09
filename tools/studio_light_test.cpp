@@ -108,6 +108,9 @@ static void TestPresetRegression() {
         for (const double t : {0.0, 3.7, 12.5}) {
             LightParams ref;
             BuildLighting((LightingPreset)p, t, focus, ref);
+            // the studio's concert fill is NoCast (a fill casts no shadow of its own); play mode keeps its look
+            for (PunctualLight& pl : ref.punctual)
+                if (pl.spotCosOuter <= -1.0f && p == 2) pl.shadow = LightShadowType::NoCast;
             uint32_t next = 1;
             const std::vector<SceneLight> lights = PresetLights(p, focus, next);
             LightParams got;
@@ -168,18 +171,19 @@ static void TestPresetStructure() {
               concert[8].v.range == 120.0f,
           "concert fill light position, intensity, range");
 
-    // the defaults of the common properties: every light Hard (the ray paths always shadowed the fill: no look change), falloff None
+    // the defaults of the common properties: every light Hard except the concert fill (NoCast), falloff None
     bool shadows = true, falloff = true, common = true;
     for (int p = 0; p < kLightingPresetCount; ++p) {
         next = 1;
         for (const SceneLight& l : PresetLights(p, focus, next)) {
-            shadows = shadows && l.shadow == ShadowType::Hard;
+            const bool fill = (p == 2 && l.kind == LightKind::Point);
+            shadows = shadows && l.shadow == (fill ? ShadowType::NoCast : ShadowType::Hard);
             falloff = falloff && l.falloff == FalloffType::None;
             common = common && l.shadowSoftness == 0.5f && l.shadowDensity == 1.0f && Same3(l.shadowColor, {0, 0, 0}) &&
                      l.affectDiffuse && l.affectSpecular && l.viewportVisible;
         }
     }
-    Check(shadows, "preset lights: every light Hard");
+    Check(shadows, "preset lights: every light Hard, the concert fill NoCast");
     Check(falloff, "preset lights: falloff None");
     Check(common, "preset lights: softness 0.5, density 1, black shadow colour, affect diffuse / specular, visible");
     Check(concert[0].vmdLink && concert[0].shadow == ShadowType::Hard && concert[1].shadow == ShadowType::Hard,

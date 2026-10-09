@@ -93,7 +93,7 @@ public:
 
     DescriptorHeap& SrvHeap() { return srvHeap_; }  // shader-visible CBV/SRV/UAV, capacity 16384
     DescriptorHeap& RtvHeap() { return rtvHeap_; }  // capacity 64
-    DescriptorHeap& DsvHeap() { return dsvHeap_; }  // capacity 64
+    DescriptorHeap& DsvHeap() { return dsvHeap_; }  // capacity 192 (16 point lights x 6 shadow faces fit)
 
 private:
     void CreateBackBuffers();

@@ -230,6 +230,7 @@ std::vector<SceneLight> PresetLights(int presetIndex, DirectX::XMFLOAT3 focus, u
         fill.v.color = Srgb(1.0f, 0.92f, 0.86f);
         fill.v.intensity = 0.55f;
         fill.v.range = 120.0f;
+        fill.shadow = ShadowType::NoCast; // a fill lifts the key light's shadows, it casts none itself
         out.push_back(std::move(fill));
     }
     return out;

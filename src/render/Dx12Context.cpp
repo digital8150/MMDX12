@@ -228,7 +228,7 @@ bool Dx12Context::Initialize(HWND hwnd, uint32_t width, uint32_t height, bool en
     // Heaps.
     if (!srvHeap_.Create(device_.Get(), D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, 16384, true)) return false;
     if (!rtvHeap_.Create(device_.Get(), D3D12_DESCRIPTOR_HEAP_TYPE_RTV, 64, false)) return false;
-    if (!dsvHeap_.Create(device_.Get(), D3D12_DESCRIPTOR_HEAP_TYPE_DSV, 64, false)) return false;
+    if (!dsvHeap_.Create(device_.Get(), D3D12_DESCRIPTOR_HEAP_TYPE_DSV, 192, false)) return false;
 
     // Swap chain.
     DXGI_SWAP_CHAIN_DESC1 sd{};

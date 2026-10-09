@@ -221,15 +221,22 @@ void Renderer::EnsureShadowMap(uint32_t size) {
 }
 
 void Renderer::EnsurePointShadowMap(const LightParams& light, bool offscreen) {
-    if (!PointShadowsWanted(settings_, EffectivePath(), offscreen) ||
-        PointShadowCount(light, kMaxPunctualLights) == 0) {
-        return;
-    }
-    if (targets_.pointShadowMap && targets_.pointShadowMap.width == kPointShadowMapSize) return;
+    const uint32_t count = PointShadowsWanted(settings_, EffectivePath(), offscreen)
+                               ? PointShadowCount(light, kMaxPunctualLights) : 0;
+    if (count == 0) return;
+    // Faces shrink only when the lights no longer fit the full-resolution budget (see ShaderInterop.h).
+    const uint64_t budgetLights = (uint64_t)kPointShadowFullResLights * (settings_.shadowMapSize >= 4096 ? 2 : 1);
+    uint32_t size = kPointShadowMapSize;
+    while (size > kPointShadowMinSize && (uint64_t)count * size * size > budgetLights * kPointShadowMapSize * kPointShadowMapSize)
+        size /= 2;
+    const uint32_t slices = count * kPointShadowFaces;
+    // Grow only (no shrink when lights are switched off) unless the face size changes.
+    if (targets_.pointShadowMap && targets_.pointShadowMap.width == size && targets_.pointShadowMap.arraySize >= slices) return;
     ctx_->WaitForGpu();
-    targets_.pointShadowMap.Create(*ctx_, kPointShadowMapSize, kPointShadowMapSize, RenderTargets::kDepthFormat,
-                                   D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL, D3D12_RESOURCE_STATE_DEPTH_WRITE,
-                                   L"shadow.points", 1, kPointShadowSlices);
+    if (!targets_.pointShadowMap.Create(*ctx_, size, size, RenderTargets::kDepthFormat,
+                                        D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL, D3D12_RESOURCE_STATE_DEPTH_WRITE,
+                                        L"shadow.points", 1, slices))
+        targets_.pointShadowMap.Release(*ctx_);
 }
 
 void Renderer::EnsureTargets(uint32_t width, uint32_t height, uint32_t outWidth, uint32_t outHeight, uint32_t msaa) {
@@ -434,7 +441,7 @@ void Renderer::FillSceneConstants(const FrameView& view, uint32_t w, uint32_t h,
     if (shading != 0u) sc.fog = 0.0f;
 }
 
-uint32_t Renderer::FillGpuLights(const LightParams& light, GpuLight* out) {
+uint32_t Renderer::FillGpuLights(const LightParams& light, GpuLight* out, uint32_t pointCap) {
     const size_t count = std::min<size_t>(light.punctual.size(), kMaxPunctualLights);
     uint32_t spot = 0;
     uint32_t pointIndex = 0;
@@ -456,7 +463,9 @@ uint32_t Renderer::FillGpuLights(const LightParams& light, GpuLight* out) {
         g.falloff = (float)(uint8_t)p.falloff;
         g.affectDiffuse = p.affectDiffuse ? 1.0f : 0.0f;
         g.affectSpecular = p.affectSpecular ? 1.0f : 0.0f;
-        if (p.spotCosOuter <= -1.0f && p.castPointShadow && p.shadow != LightShadowType::NoCast && pointIndex < kPointShadowLights) {
+        // Raster samples slices of the point shadow map (sized for every shadowed light by
+        // EnsurePointShadowMap); the ray-traced paths only read the slice as a "casts" flag.
+        if (p.spotCosOuter <= -1.0f && p.castPointShadow && p.shadow != LightShadowType::NoCast && pointIndex < pointCap) {
             g.pointShadowSlice = (float)(pointIndex * 6);
             ++pointIndex;
         } else {
@@ -474,7 +483,10 @@ void Renderer::RecordScene(ID3D12GraphicsCommandList* cmd, const FrameView& view
     FillSceneConstants(view, w, h, offscreen, sc);
     memcpy(sceneCbMapped_ + (size_t)cbSlot * kSceneCbSize, &sc, sizeof(sc));
     GpuLight lights[kMaxPunctualLights] = {};
-    FillGpuLights(view.light, lights);
+    const uint32_t pointCap = EffectivePath() == RenderPath::Raster
+                                  ? (targets_.pointShadowMap ? targets_.pointShadowMap.arraySize / kPointShadowFaces : 0u)
+                                  : kMaxPunctualLights;
+    FillGpuLights(view.light, lights, pointCap);
     memcpy(lightBufMapped_ + (size_t)cbSlot * kLightBytes, lights, sizeof(lights));
 
     // Temporal history survives only consecutive on-screen frames without a camera cut.

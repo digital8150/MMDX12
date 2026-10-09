@@ -9,10 +9,13 @@ namespace mmdx {
 
 inline constexpr uint32_t kShadowCascades = 3;
 inline constexpr uint32_t kSpotShadowSlices = 8;  // spot lights with a shadow map (the first 8 spots)
-inline constexpr uint32_t kPointShadowLights = 4; // point lights with a shadow map (the first 4 point lights)
+// Raster point shadows: every shadowed point light gets 6 slices (no light cap). Faces stay at
+// kPointShadowMapSize while the map fits the memory of kPointShadowFullResLights lights (twice that
+// at shadow quality 4096); more lights halve the face size, down to kPointShadowMinSize.
 inline constexpr uint32_t kPointShadowFaces = 6;
-inline constexpr uint32_t kPointShadowSlices = kPointShadowLights * kPointShadowFaces; // 24 slices
 inline constexpr uint32_t kPointShadowMapSize = 1024;
+inline constexpr uint32_t kPointShadowMinSize = 256;
+inline constexpr uint32_t kPointShadowFullResLights = 4;
 inline constexpr uint32_t kSceneCbSize = 2048;
 
 struct SceneConstants {               // b0, kSceneCbSize-byte slot per frame
@@ -95,7 +98,7 @@ struct GpuLight {
     DirectX::XMFLOAT3 shadowColor; float falloff;     // falloff: 0 = None, 1 = Linear, 2 = InverseSquare
     float affectDiffuse;         // 1.0 = on, 0.0 = off
     float affectSpecular;        // 1.0 = on, 0.0 = off
-    float pointShadowSlice;      // point shadow base slice (0, 6, 12, 18), -1 = none
+    float pointShadowSlice;      // point shadow base slice (6 * shadowed point index), -1 = none
     float _pad;
 };
 static_assert(sizeof(GpuLight) == 96, "GpuLight layout");

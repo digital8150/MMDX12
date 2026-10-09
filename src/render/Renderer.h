@@ -106,7 +106,8 @@ private:
     IUpscaler* EffectiveUpscaler() const;      // null for None or an unavailable upscaler
     // Punctual lights -> GpuLight (premultiplied colour, normalized direction); returns the count
     // written (<= kMaxPunctualLights).
-    static uint32_t FillGpuLights(const LightParams& light, GpuLight* out);
+    // pointCap: point lights that get a shadow slice (raster: the map's capacity; ray-traced paths: no cap).
+    static uint32_t FillGpuLights(const LightParams& light, GpuLight* out, uint32_t pointCap = kMaxPunctualLights);
 
     Dx12Context* ctx_ = nullptr;
     std::filesystem::path shaderDir_;
