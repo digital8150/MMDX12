@@ -432,6 +432,21 @@ bool ScenePass::CreatePipelines(Dx12Context& ctx, const std::filesystem::path& s
     if (!CheckHr(device->CreateGraphicsPipelineState(&pso, IID_PPV_ARGS(&psoEdge_)), "ScenePass: PSO edge"))
         return false;
 
+    // Path tracer outlines: the depth pre-pass (lit desc, colour writes off; optional: PT then draws no outlines)
+    psoDepthBack_.Reset();
+    psoDepthNoCull_.Reset();
+    if (ComPtr<ID3DBlob> psDepth = CompileShader(file, "PSDepthAlpha", "ps_5_1")) {
+        D3D12_GRAPHICS_PIPELINE_STATE_DESC depth = rasterPso;
+        depth.PS = {psDepth->GetBufferPointer(), psDepth->GetBufferSize()};
+        depth.BlendState = CD3DX12_BLEND_DESC(D3D12_DEFAULT);
+        for (auto& r : depth.BlendState.RenderTarget) r.RenderTargetWriteMask = 0;
+        depth.RasterizerState.CullMode = D3D12_CULL_MODE_BACK;
+        if (FAILED(device->CreateGraphicsPipelineState(&depth, IID_PPV_ARGS(&psoDepthBack_)))) psoDepthBack_.Reset();
+        depth.RasterizerState.CullMode = D3D12_CULL_MODE_NONE;
+        if (FAILED(device->CreateGraphicsPipelineState(&depth, IID_PPV_ARGS(&psoDepthNoCull_)))) psoDepthBack_.Reset();
+    }
+    if (!psoDepthBack_) LOG_WARN("ScenePass: depth pre-pass unavailable, the path tracer draws no outlines");
+
     // Wireframe model variants (D3D12_FILL_MODE_WIREFRAME, flat PSWire): same MRT layout and
     // blend as the lit PSO so the resolve / composite passes run unchanged. Line width is fixed
     // at 1 px (the rasterizer cannot draw wider lines); the vertex stage is VSMain (same skinning).
@@ -600,8 +615,86 @@ bool ScenePass::EnsurePackTextures(Dx12Context& ctx, const ShaderPack& pack, Pac
     return PackTextures::Upload(ctx, pack, set, folder);
 }
 
+// Path tracer outlines, as the offline GI renderer draws them (OfflineRenderer::DrawEdges): the skinned meshes'
+// depth, then the inverted-hull edges (default, or the pack's PackEdge in the lit view) into the MSAA scene targets
+// cleared to zero, with the same jittered camera the tracer uses. PathTracePass composites the layer over its
+// denoised colour (pt_edge.hlsl). Camera view only (PT has no extra views).
+void ScenePass::DrawPtEdges(PassContext& pc) {
+    if (!pc.settings.drawEdges || !psoDepthBack_ || !psoDepthNoCull_) return;
+    ID3D12GraphicsCommandList* cmd = pc.cmd;
+    Dx12Context& ctx = pc.ctx;
+    RenderTargets& t = pc.targets;
+
+    t.colorMsaa.Transition(cmd, kRt);
+    t.normalMsaa.Transition(cmd, kRt);
+    t.velocityMsaa.Transition(cmd, kRt);
+    t.depthMsaa.Transition(cmd, D3D12_RESOURCE_STATE_DEPTH_WRITE);
+    D3D12_CPU_DESCRIPTOR_HANDLE rtvs[3] = {ctx.RtvHeap().Cpu(t.colorMsaa.rtv), ctx.RtvHeap().Cpu(t.normalMsaa.rtv),
+                                           ctx.RtvHeap().Cpu(t.velocityMsaa.rtv)};
+    D3D12_CPU_DESCRIPTOR_HANDLE dsv = ctx.DsvHeap().Cpu(t.depthMsaa.dsv);
+    const float zero[4] = {0, 0, 0, 0};
+    for (auto& r : rtvs) cmd->ClearRenderTargetView(r, zero, 0, nullptr);
+    cmd->ClearDepthStencilView(dsv, D3D12_CLEAR_FLAG_DEPTH, 1.0f, 0, 0, nullptr);
+    cmd->OMSetRenderTargets(3, rtvs, FALSE, &dsv);
+
+    cmd->SetGraphicsRootSignature(rootSig_.Get());
+    cmd->SetGraphicsRootDescriptorTable(5, pc.transient.SrvTable(ctx, {&t.shadowMap}));
+    cmd->SetGraphicsRootDescriptorTable(11, pc.transient.SrvTable(ctx, {&t.spotShadowMap}));
+    cmd->SetGraphicsRootDescriptorTable(13, pc.transient.SrvTable(ctx, {&t.pointShadowMap}));
+    cmd->SetGraphicsRootShaderResourceView(6, pc.lights);
+    cmd->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+    const float* r = pc.view.mainRect;
+    const float px = std::floor(r[0] * (float)t.width), py = std::floor(r[1] * (float)t.height);
+    const float pw = std::floor((r[0] + r[2]) * (float)t.width) - px;
+    const float ph = std::floor((r[1] + r[3]) * (float)t.height) - py;
+    D3D12_VIEWPORT viewport{px, py, pw, ph, 0.0f, 1.0f};
+    D3D12_RECT scissor{(LONG)px, (LONG)py, (LONG)(px + pw), (LONG)(py + ph)};
+    cmd->RSSetViewports(1, &viewport);
+    cmd->RSSetScissorRects(1, &scissor);
+    cmd->SetGraphicsRootConstantBufferView(0, pc.sceneConstants);
+
+    for (int p = 0; p < 2; ++p) {   // pass 0: depth pre-pass of every model, pass 1: edges
+        for (GpuModel* model : pc.view.models) {
+            if (!model) continue;
+            BindModelBuffers(cmd, *model, pc.frame);
+            cmd->SetGraphicsRootShaderResourceView(2, model->BoneBuffer(pc.frame));
+            cmd->SetGraphicsRootShaderResourceView(4, model->PrevBoneBuffer(pc.frame));
+            ID3D12PipelineState* edge = psoEdge_.Get();
+            if (p == 1 && !model->ShaderPackId().empty() && pc.settings.shading == ViewShading::Lit) {
+                // the pack's outlines, as the raster lit view draws them
+                const PackPipelines* pack = PackPsos(ctx, model->ShaderPackId(), model->ShaderTextureFolder(), false);
+                if (pack && pack->edge) {
+                    const auto it = pack->sets.find(PackSetKey(model->ShaderTextureFolder()));
+                    if (it != pack->sets.end() && it->second.srv != DescriptorHeap::kInvalid)   // pack_api.hlsli gPackTex
+                        cmd->SetGraphicsRootDescriptorTable(12, ctx.SrvHeap().Gpu(it->second.srv));
+                    edge = pack->edge.Get();
+                }
+            }
+            if (p == 1) cmd->SetPipelineState(edge);
+            for (const GpuModel::Material& m : model->Materials()) {
+                if (m.indexCount == 0) continue;
+                if (p == 0) {
+                    if (!m.visible) continue;
+                    cmd->SetPipelineState(m.doubleSided ? psoDepthNoCull_.Get() : psoDepthBack_.Get());
+                } else if (!m.drawEdge) {
+                    continue;
+                }
+                cmd->SetGraphicsRootConstantBufferView(1, m.constants);
+                cmd->SetGraphicsRootDescriptorTable(3, ctx.SrvHeap().Gpu(m.srvTable));
+                cmd->DrawIndexedInstanced(m.indexCount, 1, m.indexStart, 0, 0);
+                pc.stats.drawCalls++;
+            }
+        }
+    }
+    t.ptEdges = true;
+}
+
 void ScenePass::Execute(PassContext& pc) {
-    if (pc.path == RenderPath::PathTraced) return;
+    pc.targets.ptEdges = false;
+    if (pc.path == RenderPath::PathTraced) {
+        DrawPtEdges(pc);
+        return;
+    }
     ID3D12GraphicsCommandList* cmd = pc.cmd;
     Dx12Context& ctx = pc.ctx;
     RenderTargets& t = pc.targets;
@@ -854,7 +947,7 @@ void SsrPass::Execute(PassContext& pc) {
 
 // ---- PathTracePass ---------------------------------------------------------------------------
 
-bool PathTracePass::CreatePipelines(Dx12Context& ctx, const std::filesystem::path& shaderDir, uint32_t) {
+bool PathTracePass::CreatePipelines(Dx12Context& ctx, const std::filesystem::path& shaderDir, uint32_t msaa) {
     if (!RtPipelinesSupported(ctx)) return true;
     shaderDir_ = shaderDir;
     const std::filesystem::path f = shaderDir / L"pathtrace.hlsl";
@@ -868,6 +961,11 @@ bool PathTracePass::CreatePipelines(Dx12Context& ctx, const std::filesystem::pat
         modulate_ = ComputePipeline{};
         LOG_WARN("PathTrace: pipelines unavailable");
     }
+    // outlines (ScenePass::DrawPtEdges): optional, the image is drawn without them on failure
+    edgeComposite_ = ComputePipeline{};
+    if (ok && !edgeComposite_.Create(ctx, shaderDir / L"pt_edge.hlsl", "CSPtEdgeComposite",
+                                     {{"MSAA_SAMPLES", std::to_string(msaa > 1 ? msaa : 1)}}))
+        LOG_WARN("PathTrace: outline composite unavailable");
     ptVariants_.Clear(&ctx);
     return true;  // Execute checks the pipelines; never fails the pass
 }
@@ -960,6 +1058,17 @@ void PathTracePass::Execute(PassContext& pc) {
     const float c3[4] = {pc.settings.transparentBackground ? 1.0f : 0.0f, 0, 0, 0};
     modulate_.Dispatch(pc, pc.transient.SrvTable(pc.ctx, {&filterA_, &albedo_, &t.depth}),
                        pc.transient.UavTable(pc.ctx, {&t.color}), c3, 4, gx, gy);
+
+    // 4b. outlines: ScenePass's edge layer (DrawPtEdges) over the denoised colour, its velocity where it covers
+    if (t.ptEdges && edgeComposite_) {
+        D3D12_RESOURCE_BARRIER uav = CD3DX12_RESOURCE_BARRIER::UAV(t.color.res.Get());
+        cmd->ResourceBarrier(1, &uav);
+        t.colorMsaa.Transition(cmd, kSrvAll);
+        t.velocityMsaa.Transition(cmd, kSrvAll);
+        t.velocity.Transition(cmd, kUav);
+        edgeComposite_.Dispatch(pc, pc.transient.SrvTable(pc.ctx, {&t.colorMsaa, &t.velocityMsaa}),
+                                pc.transient.UavTable(pc.ctx, {&t.color, &t.velocity}), nullptr, 0, gx, gy);
+    }
 
     // 5. hand the G-buffer to the pixel-shader passes.
     t.color.Transition(cmd, kSrv);

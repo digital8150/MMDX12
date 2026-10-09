@@ -25,28 +25,21 @@
 #define P_AMBIENT          PackParam(10)  // flat ambient fill (replaces the sky / ground gradient)
 #define P_EYE_BRIGHTNESS   PackParam(11)
 
+#include "hoyo_toon_core.hlsli"
+
 // Shadow colour of a lit colour: the material's own MMD toon ramp at its dark end (the artist's shadow tone), tinted.
 float3 ShadowColour(float3 lit, float extraWarmth) {
     float3 toonDark = PackSampleToon(1.0);
-    float3 warm = lerp(float3(1, 1, 1), float3(1.0, 0.82, 0.84), saturate(P_SHADOW_WARMTH + extraWarmth));
+    float3 warm = HoyoShadowWarmFactor(extraWarmth, P_SHADOW_WARMTH);
     return lit * lerp(float3(1, 1, 1), toonDark * warm, P_SHADOW_DARKNESS);
 }
 
 // Face shadow from the head frame (the SDF stand-in).
-// The light is projected into the head's horizontal plane: theta = 0 light in front, pi/2 at the side, pi behind.
-// Every face pixel gets a coordinate `side` from -1 (far edge of the face, away from the light) to +1 (near edge).
-// The shadow boundary sweeps from -1 to +1 as theta goes 0 -> pi, so a frontal light leaves the face clean, a side light
-// shades exactly half, and a back light shades all of it. No per-pixel normal is involved: the nose and cheeks never
-// cast or catch modelled shading.
+// Uses the head-relative cylindrical horizontal normal so frontal light leaves the face clean,
+// and side light sweeps a clean terminator across the face without vertical planar artifacts.
 float FaceLight(PackSurface s) {
     if (!s.hasHead) return 1.0;
-    float lx = dot(s.L, s.headRight);
-    float lz = dot(s.L, s.headForward);
-    float theta = atan2(abs(lx), lz);                    // 0..pi
-    float boundary = lerp(-1.15, 1.15, theta / 3.14159265);
-    float side = dot(s.worldPos - s.headPos, s.headRight) / (P_FACE_WIDTH * s.headScale);
-    side = clamp(side, -1.0, 1.0) * (lx >= 0.0 ? 1.0 : -1.0);
-    return smoothstep(boundary - P_FACE_SOFTNESS, boundary + P_FACE_SOFTNESS, side);
+    return HoyoFaceGeometricLight(s.worldPos, s.headPos, s.headScale, s.headRight, s.headUp, s.headForward, s.L, P_FACE_WIDTH, P_FACE_SOFTNESS);
 }
 
 PackResult PackShade(PackSurface s) {

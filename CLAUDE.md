@@ -77,6 +77,10 @@ progress.md is the session log. Read its latest entry first.
     Only the character enables it. `App::UpdateScene` derives dt from the motion clock and resets the bodies on seeks/loops.
 - `render`: `Dx12Context` (device, frames, descriptors, `UploadBatch`, PNG capture) and `Renderer`.
   - The renderer runs an ordered `IRenderPass` list (see `Passes.h`): Shadow → Scene → Resolve → PathTrace → SSAO → SSR → Composite → Volumetric → TAA → Upscale → DoF → Bloom → Post → Backdrop → Present. `PassContext::path` decides which passes work (RayTraced: ray-query sun shadows in the scene PS, RTAO, RT reflections; PathTraced: compute path tracer + temporal/à-trous denoiser writing the G-buffer). Passes own their targets via `OnResize`; inputs are bound through per-frame `TransientDescriptors`.
+    PT outlines: in PT mode `ScenePass::DrawPtEdges` rasterises a depth pre-pass (`PSDepthAlpha`) + the edges (default or the
+    pack's) into the cleared MSAA scene targets with the tracer's jittered camera (`RenderTargets::ptEdges`), and
+    `PathTracePass` composites that layer over the denoised colour (`pt_edge.hlsl`, outline velocity where it covers), as the
+    offline GI renderer composites its outline layer.
     Pass implementations live in `Passes.cpp` and `Pass*.cpp` (shared helpers in `PassCommon.h`). Volumetric and the FFT bloom are `ComputePipeline` (cs_6_5) and silently disable themselves without DXR-class hardware.
     Colour LUTs (`ColorLut.h`) are 32³ strips uploaded with `Renderer::SetColorLut`; PostPass applies them after the sRGB encode.
   - `GpuModel` keeps a 3-frame ring of bone/morph buffers so the previous pose (motion vectors) stays valid.
@@ -171,11 +175,14 @@ progress.md is the session log. Read its latest entry first.
   sets follow the texture sheet (hoyo_toon_v2 picks hair maps for anything on the hair sheet). A pack with all textures missing
   still compiles and renders. `PACK_HAS_EDGE` + `PackEdge` in surface.hlsl wire the pack into the edge pass (per-material
   outline colour + width scale; `PSEdgePack` / a `VSEdge` width-scale build from `PackPsos`, root param 12 bound there
-  too); otherwise the edge pass is unchanged. `PACK_WEAPON` = 5 joins the material classes; built-in `hoyo_toon_v2` (issue #2) = Genshin light maps / ramps / face SDF
+  too); otherwise the edge pass is unchanged. PT and offline GI draw the same pack outlines: PT through `ScenePass::DrawPtEdges`
+  (below), offline GI through `offline_edge_pack.hlsl` (`VSEdgeOfflinePack` / `PSEdgeOfflinePack`, mmd.hlsl included with
+  `MMDX_NO_SHADOW_PASS` because its `ShadowCB` is b2; one DXC PSO per pack in `OfflineRenderer::Impl::PreparePackEdges`). `PACK_WEAPON` = 5 joins the material classes; built-in `hoyo_toon_v2` (issue #2) = Genshin light maps / ramps / face SDF
   from a user texture folder, v1 fallback per missing map; `tools/pack_check` validates
   textures (format / count / size / total ≤ 32 MB / bad paths; missing files are warnings) and literal
   `PackSampleTex(N)` indices against the declared count.
-  `pt_surface.hlsl` (docs/shader_pt_api.md, phases 1-3): optional `PackEvaluate(PtPackIn)` hook for offline GI (`CSRender`, `OfflineRenderer`) and real-time PT (`CSPathTrace`, `PathTracePass`) with pack textures supported (`PtPackSampleTex*`, `render/PackTextures.*`); packs without it leave PT/GI untouched; shared variant cache `render/PtPackVariants.*`. `PtPackIn` also carries `headPos`/`headScale`; `PtPackOut::terminator` = N.L edges of the ramp (hi <= lo: engine default), `shadowBias` = smoothed-normal offset, and every field must be assigned (`pack_check` warns). Online-gallery-only `nimble_toon` (sources in the website repo `shader-packs/`; Eternal Return MMD models) = soft cel look (low-contrast coloured shadows, lifted dark-material shadow floor, skull-sphere face normals, soft hair gloss, wide environment rim, tinted outlines via `PackEdge`); `surface.hlsl` (raster / RT) and `pt_surface.hlsl` (PT / GI) share `nimble_core.hlsli`; the offline renderer still draws the default outlines.
+  `pt_surface.hlsl` (docs/shader_pt_api.md, phases 1-3): optional `PackEvaluate(PtPackIn)` hook for offline GI (`CSRender`, `OfflineRenderer`) and real-time PT (`CSPathTrace`, `PathTracePass`) with pack textures supported (`PtPackSampleTex*`, `render/PackTextures.*`); packs without it leave PT/GI untouched; shared variant cache `render/PtPackVariants.*`. `PtPackIn` also carries `headPos`/`headScale`; `PtPackOut::terminator` = N.L edges of the ramp (hi <= lo: engine default), `shadowBias` = smoothed-normal offset, and every field must be assigned (`pack_check` warns). Online-gallery-only `nimble_toon` (sources in the website repo `shader-packs/`; Eternal Return MMD models) = soft cel look (low-contrast coloured shadows, lifted dark-material shadow floor, skull-sphere face normals, soft hair gloss, wide environment rim, tinted outlines via `PackEdge`); `surface.hlsl` (raster / RT) and `pt_surface.hlsl` (PT / GI) share `nimble_core.hlsli`. `PtPackOut::flatFace` alone decides the
+  flat-face path for pack surfaces (a material without toon, `MAT_FLAT`, no longer drops the pack's terminator in PT / GI).
   API v3 effect packs (docs/shader_effect_api.md): `"type": "effect"`, `"stage": "post" | "pre-bloom"`, `effect.hlsl` implements
   `PackEffect(PackEffectInput)` (contract `shaders/effect_api.hlsli`, host `shaders/effect.hlsl`, DXC `ps_6_0` with `MMDX_PACK`).
   The user's ordered stack is `RenderSettings::packEffects` (`EffectStackEntry`; `AppSettings::effectStack`, ini `effect=`,

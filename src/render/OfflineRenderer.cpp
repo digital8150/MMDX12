@@ -6,6 +6,8 @@
 #include "asset/ImageLoader.h"
 #include "render/ShaderPack.h"
 #include "render/PtPackVariants.h"
+#include "render/PackTextures.h"
+#include "render/RayTracing.h"
 #include "render/Passes.h"
 #include "core/Log.h"
 #include "core/TextUtil.h"
@@ -121,6 +123,11 @@ struct OfflineRenderer::Impl {
     // offline_edge.hlsl (FXC, 4x MSAA raster)
     ComPtr<ID3D12RootSignature> edgeRootSig;
     ComPtr<ID3D12PipelineState> depthCullBack, depthNoCull, edgePso;
+    // offline_edge_pack.hlsl (DXC): the edge PSO of each pack that draws its own outlines (PACK_HAS_EDGE + PackEdge),
+    // compiled in Begin (GPU idle) and dropped when the pack registry reloads; null = the pack failed (default edges)
+    D3D12_GRAPHICS_PIPELINE_STATE_DESC edgeDesc{};
+    std::map<std::string, ComPtr<ID3D12PipelineState>> packEdgePsos;
+    uint32_t packEdgeGeneration = 0;
     // present.hlsl
     ComPtr<ID3D12RootSignature> presentRootSig;
     ComPtr<ID3D12PipelineState> presentPso;
@@ -184,7 +191,8 @@ struct OfflineRenderer::Impl {
     void ConvolveBloom(PassContext& pc);
     void EffectInputs(PassContext& pc);
     bool EnsureTargets(uint32_t w, uint32_t h);
-    void DrawEdges(ID3D12GraphicsCommandList* cmd, float shutter, float lensX, float lensY);
+    void DrawEdges(ID3D12GraphicsCommandList* cmd, RtScene& rt, float shutter, float lensX, float lensY);
+    void PreparePackEdges();
     void Work(ID3D12GraphicsCommandList* cmd, TransientDescriptors& t, const BuiltinTextures* b, RtScene& rt,
               OfflineProgress& pg);
     void Finish(PassContext& pc);
@@ -318,7 +326,51 @@ bool OfflineRenderer::Impl::EnsureTargets(uint32_t w, uint32_t h) {
     return true;
 }
 
-void OfflineRenderer::Impl::DrawEdges(ID3D12GraphicsCommandList* cmd, float shutter, float lensX, float lensY) {
+void OfflineRenderer::Impl::PreparePackEdges() {
+    const ShaderPackRegistry& reg = ShaderPacks();
+    if (reg.Generation() != packEdgeGeneration) {   // reload: Begin runs with the GPU idle, the old PSOs are free
+        packEdgePsos.clear();
+        packEdgeGeneration = reg.Generation();
+    }
+    for (GpuModel* model : view.models) {
+        if (!model || model->ShaderPackId().empty() || packEdgePsos.count(model->ShaderPackId())) continue;
+        const std::string& id = model->ShaderPackId();
+        ComPtr<ID3D12PipelineState>& pso = packEdgePsos[id];   // stays null on failure: default edges
+        const ShaderPack* pack = reg.Find(id);
+        if (!pack || !pack->Selectable() || !pack->hasEdge) continue;
+        // the surface as an include path relative to the shader directory (as ScenePass::PackPsos)
+        std::error_code ec;
+        std::filesystem::path rel = std::filesystem::relative(pack->dir / L"surface.hlsl", shaderDir, ec);
+        if (ec || rel.empty()) rel = pack->dir / L"surface.hlsl";
+        std::string inc = PathToUtf8(rel);
+        std::replace(inc.begin(), inc.end(), '\\', '/');
+        const uint32_t texCount = (uint32_t)std::min<size_t>(pack->textures.size(), kPackMaxTextures);
+        uint32_t clampMask = 0, srgbMask = 0;
+        for (uint32_t i = 0; i < texCount; ++i) {
+            if (pack->textures[i].clamp) clampMask |= 1u << i;
+            if (pack->textures[i].srgb) srgbMask |= 1u << i;
+        }
+        const ShaderDefines defines = {{"MMDX_PACK", "\"" + inc + "\""},
+                                       {"PACK_TEX_COUNT", std::to_string(texCount)},
+                                       {"PACK_TEX_CLAMP_MASK", std::to_string(clampMask) + "u"},
+                                       {"PACK_TEX_SRGB_MASK", std::to_string(srgbMask) + "u"}};
+        const std::filesystem::path file = shaderDir / L"offline_edge_pack.hlsl";
+        std::string errors;
+        ComPtr<ID3DBlob> vs = CompileShaderDxc(file, "VSEdgeOfflinePack", "vs_6_0", defines, &errors);
+        ComPtr<ID3DBlob> ps = vs ? CompileShaderDxc(file, "PSEdgeOfflinePack", "ps_6_0", defines, &errors) : nullptr;
+        D3D12_GRAPHICS_PIPELINE_STATE_DESC d = edgeDesc;
+        if (vs && ps) {
+            d.VS = {vs->GetBufferPointer(), vs->GetBufferSize()};
+            d.PS = {ps->GetBufferPointer(), ps->GetBufferSize()};
+            if (FAILED(ctx->Device()->CreateGraphicsPipelineState(&d, IID_PPV_ARGS(&pso)))) pso.Reset();
+        }
+        if (pso) LOG_INFO("offline: pack '%s' outlines (PackEdge)", id.c_str());
+        else LOG_ERROR("offline: pack '%s' outline variant failed, using the default outlines", id.c_str());
+    }
+}
+
+void OfflineRenderer::Impl::DrawEdges(ID3D12GraphicsCommandList* cmd, RtScene& rt, float shutter, float lensX,
+                                      float lensY) {
     Dx12Context& c = *ctx;
     edgeColorMsaa.Transition(cmd, kRt);
     edgeDepthMsaa.Transition(cmd, D3D12_RESOURCE_STATE_DEPTH_WRITE);
@@ -341,6 +393,22 @@ void OfflineRenderer::Impl::DrawEdges(ID3D12GraphicsCommandList* cmd, float shut
     for (int p = 0; p < 2; ++p) {  // pass 0: depth pre-pass, pass 1: edges
         for (GpuModel* model : view.models) {
             if (!model) continue;
+            // pass 1: the model's pack outlines (PackEdge) when its pack draws them, else the default edges
+            ID3D12PipelineState* edge = edgePso.Get();
+            if (p == 1 && !model->ShaderPackId().empty()) {
+                const auto it = packEdgePsos.find(model->ShaderPackId());
+                const ShaderPack* pack = ShaderPacks().Find(model->ShaderPackId());
+                if (it != packEdgePsos.end() && it->second && pack) {
+                    bool texturesOk = true;
+                    if (!pack->textures.empty()) {   // pack_api.hlsli gPackTex (t0, space5)
+                        PackTextures* pt = rt.GetPackTextures();
+                        const PackTextures::Set* set = pt ? pt->Acquire(c, *pack, model->ShaderTextureFolder()) : nullptr;
+                        texturesOk = set && set->srv != DescriptorHeap::kInvalid;
+                        if (texturesOk) cmd->SetGraphicsRootDescriptorTable(6, c.SrvHeap().Gpu(set->srv));
+                    }
+                    if (texturesOk) edge = it->second.Get();
+                }
+            }
             D3D12_VERTEX_BUFFER_VIEW vbs[4] = {model->VertexBufferView(), model->MorphBufferView(frame),
                                                model->PrevMorphBufferView(frame), model->SdefBufferView()};
             cmd->IASetVertexBuffers(0, 4, vbs);
@@ -353,7 +421,7 @@ void OfflineRenderer::Impl::DrawEdges(ID3D12GraphicsCommandList* cmd, float shut
                     cmd->SetPipelineState(mat.doubleSided ? depthNoCull.Get() : depthCullBack.Get());
                 } else {
                     if (!mat.drawEdge || mat.indexCount == 0) continue;
-                    cmd->SetPipelineState(edgePso.Get());
+                    cmd->SetPipelineState(edge);
                 }
                 cmd->SetGraphicsRootConstantBufferView(1, mat.constants);
                 cmd->SetGraphicsRootDescriptorTable(3, c.SrvHeap().Gpu(mat.srvTable));
@@ -451,7 +519,7 @@ void OfflineRenderer::Impl::Work(ID3D12GraphicsCommandList* cmd, TransientDescri
                 lx *= lensRadius;
                 ly *= lensRadius;
             }
-            DrawEdges(cmd, shutter, lx, ly);
+            DrawEdges(cmd, rt, shutter, lx, ly);
             edgeAccum.Transition(cmd, kUav);
             const float c[8] = {0, 0, 0, 0, (float)width, (float)height, 0, 0};
             edgeAccumulate.Dispatch(pc, edgeSrv, edgeUav, c, 8, Groups(width), Groups(height));
@@ -775,20 +843,25 @@ bool OfflineRenderer::Initialize(Dx12Context& ctx, const std::filesystem::path& 
 
     // Outline layer: raster inverted hull at the offline image size (4x MSAA).
     ID3D12Device* device = ctx.Device();
-    CD3DX12_ROOT_PARAMETER params[6];
+    CD3DX12_ROOT_PARAMETER params[7];
     params[0].InitAsConstantBufferView(0, 0, D3D12_SHADER_VISIBILITY_ALL);
     params[1].InitAsConstantBufferView(1, 0, D3D12_SHADER_VISIBILITY_ALL);
     params[2].InitAsShaderResourceView(0, 0, D3D12_SHADER_VISIBILITY_VERTEX);
     CD3DX12_DESCRIPTOR_RANGE table;
     table.Init(D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 3, 1);
-    params[3].InitAsDescriptorTable(1, &table, D3D12_SHADER_VISIBILITY_PIXEL);
+    params[3].InitAsDescriptorTable(1, &table, D3D12_SHADER_VISIBILITY_ALL);   // ALL: PackEdge may run in the VS
     params[4].InitAsConstants(4, 2, 0, D3D12_SHADER_VISIBILITY_VERTEX);        // EdgeCB b2
     params[5].InitAsShaderResourceView(4, 0, D3D12_SHADER_VISIBILITY_VERTEX);   // previous bones t4
-    CD3DX12_STATIC_SAMPLER_DESC sampler;
-    sampler.Init(0, D3D12_FILTER_ANISOTROPIC, D3D12_TEXTURE_ADDRESS_MODE_WRAP,
-                 D3D12_TEXTURE_ADDRESS_MODE_WRAP, D3D12_TEXTURE_ADDRESS_MODE_WRAP, 0, 8);
+    CD3DX12_DESCRIPTOR_RANGE packTable;   // pack outlines: pack_api.hlsli gPackTex (t0, space5)
+    packTable.Init(D3D12_DESCRIPTOR_RANGE_TYPE_SRV, kPackMaxTextures, 0, 5);
+    params[6].InitAsDescriptorTable(1, &packTable, D3D12_SHADER_VISIBILITY_ALL);
+    CD3DX12_STATIC_SAMPLER_DESC samplers[2];
+    samplers[0].Init(0, D3D12_FILTER_ANISOTROPIC, D3D12_TEXTURE_ADDRESS_MODE_WRAP,
+                     D3D12_TEXTURE_ADDRESS_MODE_WRAP, D3D12_TEXTURE_ADDRESS_MODE_WRAP, 0, 8);
+    samplers[1].Init(1, D3D12_FILTER_MIN_MAG_MIP_LINEAR, D3D12_TEXTURE_ADDRESS_MODE_CLAMP,   // gClamp (pack API)
+                     D3D12_TEXTURE_ADDRESS_MODE_CLAMP, D3D12_TEXTURE_ADDRESS_MODE_CLAMP);
     CD3DX12_ROOT_SIGNATURE_DESC rs;
-    rs.Init(6, params, 1, &sampler, D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT);
+    rs.Init(7, params, 2, samplers, D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT);
     if (!CreateRootSignature(device, rs, m.edgeRootSig, "OfflineRenderer: edge root signature")) return false;
 
     const std::filesystem::path edge = shaderDir / L"offline_edge.hlsl";
@@ -841,6 +914,9 @@ bool OfflineRenderer::Initialize(Dx12Context& ctx, const std::filesystem::path& 
     }
     if (!CheckHr(device->CreateGraphicsPipelineState(&pso, IID_PPV_ARGS(&m.edgePso)), "OfflineRenderer: PSO edge"))
         return false;
+    m.edgeDesc = pso;   // pack outline PSOs (PreparePackEdges) replace VS / PS
+    m.edgeDesc.VS = {};
+    m.edgeDesc.PS = {};
 
     // Present (present.hlsl, same as PresentPass::CreatePipelines).
     CD3DX12_DESCRIPTOR_RANGE presentRange[1];
@@ -933,6 +1009,7 @@ void OfflineRenderer::Shutdown() {
     m.depthCullBack.Reset();
     m.depthNoCull.Reset();
     m.edgePso.Reset();
+    m.packEdgePsos.clear();
     m.presentRootSig.Reset();
     m.presentPso.Reset();
     m.list.Reset();
@@ -971,6 +1048,7 @@ void OfflineRenderer::Begin(ID3D12GraphicsCommandList* cmd, TransientDescriptors
 
     // 1b. PT pack pipeline selection
     m.render = m.ptVariants.Resolve(*m.ctx, m.shaderDir, m.view.models, m.defaultRender, "offline_gi.hlsl", "CSRender", "offline");
+    m.PreparePackEdges();
 
     // 2. per-image constants
     memcpy(m.sceneCbMapped, &sc, sizeof(sc));

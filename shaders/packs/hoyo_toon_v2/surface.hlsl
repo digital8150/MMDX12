@@ -16,12 +16,7 @@
 //   4 FaceLightmap   linear SDF for a light from the character's right; mirrored for the other side
 //   5 MetalMap       matcap for metal parts
 
-#define T_BODY_LM   0u
-#define T_HAIR_LM   1u
-#define T_BODY_RAMP 2u
-#define T_HAIR_RAMP 3u
-#define T_FACE_SDF  4u
-#define T_METAL     5u
+#include "hoyo_toon_v2_core.hlsli"
 
 // ---- parameters (pack.json "params", same order) ---------------------------------------------------------------------
 #define P_SOFTNESS        PackParam(0)    // shadow edge width
@@ -43,11 +38,6 @@
 bool HasMap(uint i) { return PackTexSize(i).x > 1u; }   // a missing map is a 1 x 1 white texture
 
 // ---- maps --------------------------------------------------------------------------------------------------------------
-
-// light map alpha (1.0 / 0.7 / 0.5 / 0.3 / 0.0) -> ramp row 0..4
-uint MaterialRow(float a) {
-    return a > 0.85 ? 0u : (a > 0.6 ? 1u : (a > 0.4 ? 2u : (a > 0.15 ? 3u : 4u)));
-}
 
 float3 RampColour(uint tex, uint row, float u) {
     float v = (row * 2.0 + 1.0) / 20.0;
@@ -72,20 +62,16 @@ float FaceSdfLight(PackSurface s) {
 
 // ---- fallback (hoyo_toon v1) -----------------------------------------------------------------------------------------
 
+// Uses the head-relative cylindrical horizontal normal so frontal light leaves the face clean,
+// and side light sweeps a clean terminator across the face without vertical planar artifacts.
 float FaceGeometricLight(PackSurface s) {
     if (!s.hasHead) return 1.0;
-    float lx = dot(s.L, s.headRight);
-    float lz = dot(s.L, s.headForward);
-    float theta = atan2(abs(lx), lz);
-    float boundary = lerp(-1.15, 1.15, theta / 3.14159265);
-    float side = dot(s.worldPos - s.headPos, s.headRight) / (P_FB_FACE_WIDTH * s.headScale);
-    side = clamp(side, -1.0, 1.0) * (lx >= 0.0 ? 1.0 : -1.0);
-    return smoothstep(boundary - P_FACE_SOFTNESS, boundary + P_FACE_SOFTNESS, side);
+    return HoyoFaceGeometricLight(s.worldPos, s.headPos, s.headScale, s.headRight, s.headUp, s.headForward, s.L, P_FB_FACE_WIDTH, P_FACE_SOFTNESS);
 }
 
 float3 FallbackShadowTint(float extraWarmth) {   // linear multiplier for the shadow side
     float3 toonDark = SrgbToLinear(PackSampleToon(1.0));
-    float3 warm = lerp(float3(1, 1, 1), float3(1.0, 0.68, 0.70), saturate(P_FB_WARMTH + extraWarmth));
+    float3 warm = HoyoV2WarmFactor(extraWarmth, P_FB_WARMTH);
     return lerp(float3(1, 1, 1), toonDark * warm, P_FB_DARKNESS);
 }
 

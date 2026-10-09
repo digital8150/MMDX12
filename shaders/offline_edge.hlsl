@@ -6,6 +6,7 @@
 // over the path-traced image by offline_post.hlsl CSFinalize.
 // Root signature (OfflineRenderer.cpp): b0 SceneConstants, b1 MaterialConstants, b2 EdgeCB (root
 // constants), t0 bones, t4 previous bones (root SRVs), t1..t3 material table, s0 anisotropic wrap.
+// Packs that draw their own outlines (PACK_HAS_EDGE) use offline_edge_pack.hlsl for the edge draw.
 #include "common.hlsli"
 #include "offline_common.hlsli"
 #include "skinning.hlsli"
@@ -16,8 +17,6 @@ cbuffer MaterialCB : register(b1) {
     // material morph factors (ApplyTexFactor): texture, sphere, toon
     float4 gTexMul; float4 gTexAdd; float4 gSphereMul; float4 gSphereAdd; float4 gToonMul; float4 gToonAdd;
 };
-// time: shutter time 0..1 (0 = previous pose / camera); lens: view-space lens offset; focus: view z
-cbuffer EdgeCB : register(b2) { float gShutter; float2 gLens; float gFocus; };
 #define MAT_HAS_TEXTURE 1u
 
 struct BoneMatrix { row_major float4x4 m; };
@@ -33,28 +32,7 @@ struct VSIn {
     float3 sdefC : TEXCOORD4; float3 sdefR0 : TEXCOORD5; float3 sdefR1 : TEXCOORD6; float sdef : TEXCOORD7;
 };
 
-// Skinning at the shutter time: per-bone blended matrices and morphs (as skin.hlsl does for the BLAS).
-void SkinAt(VSIn v, out float3 wp, out float3 wn) {
-    float4x4 b0 = gBones[v.bones.x].m, b1 = gBones[v.bones.y].m, b2 = gBones[v.bones.z].m, b3 = gBones[v.bones.w].m;
-    float3 morph = v.morph;
-    if (gShutter < 1.0) {
-        b0 = lerp(gPrevBones[v.bones.x].m, b0, gShutter);
-        b1 = lerp(gPrevBones[v.bones.y].m, b1, gShutter);
-        b2 = lerp(gPrevBones[v.bones.z].m, b2, gShutter);
-        b3 = lerp(gPrevBones[v.bones.w].m, b3, gShutter);
-        morph = lerp(v.prevMorph, v.morph, gShutter);
-    }
-    SkinVertex(b0, b1, b2, b3, v.weights, v.pos + morph, v.nrm, v.sdef, v.sdefC, v.sdefR0, v.sdefR1, wp, wn);
-    wn = normalize(wn);
-}
-
-float4 ToClip(float3 wp) {
-    float3x3 basis;
-    float3 eye;
-    OfflineCameraAt(gShutter, basis, eye);
-    float3 vp = OfflineLensView(mul(basis, wp - eye), gLens, gFocus);
-    return mul(float4(vp, 1.0), gProj);
-}
+#include "offline_edge_skin.hlsli"   // EdgeCB (b2), SkinAt, ToClip, OfflineEdgeClip
 
 struct DepthOut { float4 pos : SV_Position; float2 uv : TEXCOORD0; };
 
@@ -77,13 +55,7 @@ float4 VSEdge(VSIn v) : SV_Position {
     float3 wp, wn;
     SkinAt(v, wp, wn);
     float px = gEdgeSize * v.edge * gEdgeScale;   // outline width in pixels (scaled with height / 1080)
-    float4 clip = ToClip(wp);
-    float4 clipN = ToClip(wp + wn * 0.01);        // screen direction of the normal
-    float2 dirPx = (clipN.xy / clipN.w - clip.xy / clip.w) * gViewportSize;
-    float len = length(dirPx);
-    dirPx = len > 1e-6 ? dirPx / len : float2(0, 0);
-    clip.xy += dirPx * px * 2.0 / gViewportSize * clip.w;
-    return clip;
+    return OfflineEdgeClip(wp, wn, px);
 }
 
 // Premultiplied output (blend ONE / INV_SRC_ALPHA). Same colour as mmd.hlsl PSEdge.

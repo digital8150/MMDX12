@@ -1,7 +1,8 @@
 {
   "format": 1,
   "id": "hoyo_toon",
-  "version": "1.0.0",
+  "version": "1.1.0",
+  "minAppVersion": "1.5.0",
   "name": {
     "ko": "호요 툰",
     "en": "HoYo Toon",
@@ -9,10 +10,10 @@
     "zh": "HoYo卡通"
   },
   "description": {
-    "ko": "원신·스타레일·젠존제 공식 MMD 모델용 셀 셰이딩. 얼굴은 머리 방향으로만 그림자가 지고(SDF 근사), 몸은 2단 램프와 평평한 환경광을 씁니다.",
-    "en": "HoYoverse-style cel shading for the official Genshin / Star Rail / ZZZ MMD models. Faces are shadowed only by the head direction (an SDF stand-in); the body uses a two-tone ramp and a flat ambient.",
-    "ja": "原神・スターレイル・ゼンレスゾーンゼロ公式MMDモデル向けのセルシェーディング。顔は頭の方向だけで影が付き(SDF近似)、体は2段ランプとフラットな環境光を使います。",
-    "zh": "为原神·星穹铁道·绝区零官方MMD模型制作的卡通着色。脸部仅随头部方向产生阴影(SDF近似)，身体使用双段明暗与平坦环境光。"
+    "ko": "원신·스타레일·젠존제 공식 MMD 모델용 셀 셰이딩 (패스 트레이싱 / 오프라인 GI 지원). 얼굴은 머리 방향으로만 그림자가 지고(SDF 근사), 몸은 2단 램프와 평평한 환경광을 씁니다.",
+    "en": "HoYoverse-style cel shading for the official Genshin / Star Rail / ZZZ MMD models, with path tracing and offline GI support. Faces are shadowed only by the head direction (an SDF stand-in); the body uses a two-tone ramp and a flat ambient.",
+    "ja": "原神・スターレイル・ゼンレスゾーンゼロ公式MMDモデル向けのセルシェーディング（パストレーシング／オフラインGI対応）。顔は頭の方向だけで影が付き(SDF近似)、体は2段ランプとフラットな環境光を使います。",
+    "zh": "为原神·星穹铁道·绝区零官方MMD模型制作的卡通着色（支持路径追踪与离线GI）。脸部仅随头部方向产生阴影(SDF近似)，身体使用双段明暗与平坦环境光。"
   },
   "recommendedFor": {
     "ko": "원신 / 붕괴: 스타레일 / 젠존제 공식 MMD 모델",
@@ -24,10 +25,10 @@
     { "name": "MMDX12", "role": "shader" }
   ],
   "license": "MIT",
-  "tags": ["toon", "anime", "hoyoverse"],
+  "tags": ["toon", "anime", "hoyoverse", "pt"],
   "classes": [
     { "class": "eye",  "match": ["目", "眼", "瞳", "eye", "Eye", "白目", "ハイライト", "高光"] },
-    { "class": "face", "match": ["顔", "颜", "脸", "face", "Face", "表情", "眉", "brow", "口", "歯", "牙", "舌", "mouth"] },
+    { "class": "face", "match": ["面", "顔", "颜", "脸", "face", "Face", "表情", "眉", "brow", "口", "歯", "牙", "舌", "mouth"] },
     { "class": "hair", "match": ["髪", "髮", "发", "頭髪", "hair", "Hair"] },
     { "class": "skin", "match": ["肌", "皮肤", "skin", "Skin", "体", "body_skin"] }
   ],

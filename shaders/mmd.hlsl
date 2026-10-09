@@ -587,6 +587,13 @@ PSOut PSEdge(EdgeOut i) {
     return o;
 }
 
+// Depth only (path tracer outlines, ScenePass in PT mode): the edges' depth pre-pass, the alpha test of the ray
+// tracer's binary alpha (>= 0.5), as offline_edge.hlsl PSDepth. Colour writes are masked off by the PSO.
+void PSDepthAlpha(VSOut i) {
+    float a = gDiffuse.a * ((gFlags & MAT_HAS_TEXTURE) ? gTexture.Sample(gWrap, i.uv).a : 1.0);
+    clip(a - 0.5);
+}
+
 // Pack outlines (PACK_HAS_EDGE in the pack's surface.hlsl): PackEdge sets the colour and width scale.
 // Compiled only for the pack's edge PSO (MMDX_PACK); otherwise the default PSEdge above draws.
 #if PACK_HAS_EDGE
@@ -699,6 +706,8 @@ PSOut PSWireFloor(VSOut i) {
 }
 
 // ---- shadow map ------------------------------------------------------------------
+// (left out by includers that use b2 themselves: offline_edge_pack.hlsl)
+#ifndef MMDX_NO_SHADOW_PASS
 
 cbuffer ShadowCB : register(b2) {
     uint gCascade;
@@ -724,3 +733,4 @@ void PSShadowAlpha(ShadowOut i) {
     float a = gDiffuse.a * ((gFlags & MAT_HAS_TEXTURE) ? gTexture.Sample(gWrap, i.uv).a : 1.0);
     clip(a - 0.5);
 }
+#endif

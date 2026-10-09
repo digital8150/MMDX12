@@ -74,7 +74,11 @@ private:
     ComPtr<ID3D12PipelineState> psoWireBack_, psoWireNoCull_, psoWireFloor_, psoFlatBg_;
     // RayTracing variants (DXC, ps_6_5, RT_SHADOWS=1); null when DXC/DXR is unavailable
     ComPtr<ID3D12PipelineState> psoCullBackRt_, psoNoCullRt_, psoFloorRt_;
+    // path tracer outlines: depth-only pre-pass (PSDepthAlpha, colour writes off); null = PT draws no outlines
+    ComPtr<ID3D12PipelineState> psoDepthBack_, psoDepthNoCull_;
     ComPtr<ID3D12RootSignature> rootSig_;
+    // PT mode: the outline layer (depth pre-pass + edges, default or PackEdge) for PathTracePass to composite
+    void DrawPtEdges(PassContext& pc);
 
     // Shader packs (render/ShaderPack.h): PSOs compiled on first use from mmd.hlsl's PSPack with the pack's surface,
     // PSOs keyed by pack id (compile defines depend only on the manifest), dropped when the registry generation
@@ -151,6 +155,7 @@ public:
 
 private:
     ComputePipeline trace_, temporal_, atrous_, modulate_;
+    ComputePipeline edgeComposite_;   // pt_edge.hlsl: ScenePass's outline layer over the denoised colour
     PtPackVariants ptVariants_;
     std::filesystem::path shaderDir_;
     Texture light_, albedo_;        // noisy demodulated radiance, primary albedo (RGBA16F)

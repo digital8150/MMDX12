@@ -987,3 +987,51 @@ real-time raster as well; DoF made the orthographic quad views blurry.
 - Worker: Antigravity did 4c well (19 min, no scope creep, one real bug). The specular run was correct but died on API errors twice; I finished
   the verification.
 - Rendering stays forward (toon materials, shader packs, alpha, MSAA, outlines); if lights grow past ~16, Forward+ light culling, not deferred.
+
+## 2026-10-09 (14) — HoYo Toon PT / GI + face shadow fix (gallery 1.1.0 / 2.1.0), pack flat-face fix, PT and GI pack outlines
+
+Request: 1) PT / GI support for hoyo_toon v1 / v2, version bump, publish to the public gallery; 2) fix the hard vertical face
+shadow of both packs (Hu Tao screenshot); 3) find out why shader-pack outlines (nimble_toon) do not show in GI. Follow-ups: the
+nimble_toon PT / GI look, GI pack outlines, PT outlines that follow GI. Worker: Antigravity (agy, Gemini) for 1+2 (level high,
+smoke review); Claude did the review, publish, the engine fixes and both outline features.
+
+### Done
+- Face shadow (v1, and v2 without a FaceLightmap): the old stand-in used only the head-right coordinate, so the boundary was a
+  vertical plane (a straight cut from forehead to chin) and a 36 degree light already shaded a quarter of the face. Now a
+  cylindrical head-space normal against the light projected into the head's horizontal plane (`hoyo_toon_core.hlsli` /
+  `hoyo_toon_v2_core.hlsli`, shared by surface.hlsl and the new pt_surface.hlsl). v1 face class rule gained `面` (Hu Tao's face
+  material; v2 had it).
+- hoyo_toon 1.1.0 / hoyo_toon_v2 2.1.0: `pt_surface.hlsl` for both (v2 with light maps / ramps / face SDF through
+  `PtPackSampleTex*`, v1 fallback per missing map), minAppVersion 1.5.0, descriptions (4 languages) and a `pt` tag. Published from
+  the website repo (b2ff748, pushed): build-packs, `pack_check --compile` on both zips, deploy.sh; live index / zip SHA-256 match.
+- Engine: PT / GI OR-ed `MAT_FLAT` (a material without toon) into the pack's `flatFace`, which drops the pack's terminator and
+  shadowBias. The pack's `flatFace` now decides (`pathtrace.hlsl`, `offline_gi.hlsl`; the GI cache prepass gathers around the
+  normal for PT pack surfaces). Affects Summer Fest_Felix (18 of 19 materials without toon); Darko / Magnus / Vanya use shared toons.
+- Offline GI pack outlines: `offline_edge_pack.hlsl` (mmd.hlsl with `MMDX_NO_SHADOW_PASS`, PackEdge colour / width with the
+  offline shutter / lens camera from the new `offline_edge_skin.hlsli`), one DXC PSO per pack (`PreparePackEdges`), pack texture
+  table + clamp sampler in the edge root signature.
+- PT outlines (new, packless too): `ScenePass::DrawPtEdges` (depth pre-pass `PSDepthAlpha` + default / pack edges into the cleared
+  MSAA targets, jittered camera) and `PathTracePass` composites them over the denoised colour (`pt_edge.hlsl`, outline velocity).
+
+### Verified
+- Before / after captures of the face (`captures/hoyo_pt/`); v1 raster / PT / GI and v2 with the game textures
+  (`library/gamerip/hutao`) raster / PT / GI with no `[E]`. A diagnostic pt_surface showed the PT face SDF term matches raster.
+- Packless DXIL of `CSPathTrace` / `CSRender` identical after the flat-face fix; packless GI still md5-identical; Felix GI with
+  nimble changed (face / hair modelling back), Hu Tao v2 GI 0.03 levels.
+- FXC output of mmd.hlsl's 11 raster entries and offline_edge.hlsl's 4 entries identical to HEAD (raster and packless GI unchanged).
+- Outline renders with pinned lighting (`captures/edges/`): GI nimble violet outlines vs default, PT outlines in nimble / packless.
+- PT being brighter than raster is the traced indirect, not a pack bug (packless: face +40 levels, nimble +21).
+
+### Not verified / notes
+- PT outline cost, TAA ghosting with fast camera motion, studio viewport / PT video outlines not checked.
+- Packs that return `flatFace = true` on faces now gather the GI cache around the normal (no public pack does).
+- `build_dev` did not recompile the `src/app` objects after a `RenderPass.h` change (stale layout crashed `Renderer::Initialize`);
+  touching the sources fixed it. Header dependency tracking of that build dir is suspect; not fixed.
+- `build` / `build_au` ini still point Hu Tao's texture folder at the old F: path; `build_dev` ini settings changed during the
+  session (lighting 3, motion lighting on, Hu Tao's pack choice cleared) and were left as they are.
+- The engine changes need an app release to reach users (gallery packs work without them; their PT / GI faces then lose the
+  terminator only on toon-less materials).
+
+### Next
+- App release with the flat-face fix and PT / GI outlines; refresh the website PT / GI docs.
+- Check PT outline + TAA under fast motion, and PT outline cost.

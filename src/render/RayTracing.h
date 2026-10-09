@@ -29,6 +29,7 @@ public:
     RtScene& operator=(const RtScene&) = delete;
 
     void SetPackTextures(PackTextures* pt) { packTextures_ = pt; }
+    PackTextures* GetPackTextures() const { return packTextures_; }   // the PT / GI pack texture sets (or null)
 
     // False (logged) when the device lacks raytracing tier 1.1 / shader model 6.5 /
     // ID3D12Device5, or skin.hlsl does not compile.

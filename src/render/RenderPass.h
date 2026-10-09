@@ -89,6 +89,7 @@ struct RenderTargets {
     Texture* bloom = nullptr;     // half output res, BloomPass
     Texture* uiBackdrop = nullptr;  // RGBA8, blurred final image for frosted UI panels
     Texture* lut = nullptr;         // colour LUT strip (kColorLutSize^2 x kColorLutSize RGBA8), Renderer::SetColorLut; null = none
+    bool ptEdges = false;           // PT mode: ScenePass drew this frame's outline layer into colorMsaa / velocityMsaa
 };
 
 class RtScene;

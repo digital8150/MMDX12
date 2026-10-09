@@ -194,7 +194,8 @@ void CSPathTrace(uint3 id : SV_DispatchThreadID) {
 
                         PtPackOut ptPackOut = PackEvaluate(packIn);
                         albedo = ptPackOut.albedo;
-                        flat = ((g.flags & MAT_FLAT) || ptPackOut.flatFace) ? 1.0 : 0.0;
+                        // the pack decides: MAT_FLAT (a material without toon) would drop its terminator
+                        flat = ptPackOut.flatFace ? 1.0 : 0.0;
 
                         if (!diffuseChain) {
                             toon = true;

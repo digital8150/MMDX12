@@ -888,7 +888,8 @@ void CSPrepassLevel(uint3 id : SV_DispatchThreadID) {
     }
     // indirect irradiance: multi-bounce diffuse gather (faces: around the view direction, nearby
     // geometry skipped, like the render's face fill)
-    bool face = sf.character && sf.flat;
+    // PT pack surfaces: the pack's flatFace decides at render time (not known here), so gather around the normal
+    bool face = sf.character && sf.flat && (sf.g.flags & RTG_PT_PACK) == 0;
     float3 axis = face ? -d : sf.n;
     float tMin = face ? kFlatGatherSkip : 0.0;
     uint rays = max((uint)gP1.w, 1u);
@@ -1075,7 +1076,7 @@ void CSRender(uint3 id : SV_DispatchThreadID) {
 
             ptPackOut = PackEvaluate(packIn);
             s.albedo = ptPackOut.albedo;
-            if (ptPackOut.flatFace) s.flat = true;
+            s.flat = ptPackOut.flatFace;   // the pack decides, not MAT_FLAT (as in pathtrace.hlsl)
         }
 #endif
         if (specChain) {

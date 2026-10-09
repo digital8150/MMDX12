@@ -41,7 +41,7 @@ PtPackOut PackEvaluate(PtPackIn i);
 - `float shadowBias`: shifts the terminator, in N.L units. A pack that shades with a smoothed normal (faces) returns `dot(Nsmooth, L) - dot(normal, L)`
 - `float2 terminator`: (lo, hi) N.L edges of the terminator smoothstep. `hi <= lo` (e.g. `float2(0, 0)`) = the engine default (-0.12, 0.22). A half-Lambert ramp `threshold +- softness` maps to `2*(threshold -+ softness) - 1`.
 - `float3 specular`: additive linear radiance (rim, matcap, highlights)
-- `bool flatFace`: whether to use the engine's flat face handling (no GI gradient)
+- `bool flatFace`: whether to use the engine's flat face handling (no GI gradient). The pack decides: a material the engine would shade flat on its own (no toon texture, `MAT_FLAT`) still uses the pack's `terminator` / `shadowBias` when this is false
 
 **Assign every field of `PtPackOut`**: an unassigned field is undefined (`tools/pack_check` warns).
 
