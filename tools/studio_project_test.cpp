@@ -40,6 +40,8 @@ static bool Vec3Eq(const XMFLOAT3& a, const XMFLOAT3& b, float tol) {
     return std::abs(a.x - b.x) <= tol && std::abs(a.y - b.y) <= tol && std::abs(a.z - b.z) <= tol;
 }
 
+static bool Near(float a, float b, float tol = 1e-4f) { return std::abs(a - b) <= tol; }
+
 static bool QuatEq(const XMFLOAT4& a, const XMFLOAT4& b) {
     return a.x == b.x && a.y == b.y && a.z == b.z && a.w == b.w;
 }
@@ -62,6 +64,7 @@ static std::string DiffValues(const LightValues& a, const LightValues& b) {
     if (a.range != b.range) return "range";
     if (a.coneOuter != b.coneOuter) return "coneOuter";
     if (a.coneInner != b.coneInner) return "coneInner";
+    if (a.size.x != b.size.x || a.size.y != b.size.y) return "size";
     return "";
 }
 
@@ -631,6 +634,88 @@ static void TestSceneLightReading() {
     }
 }
 
+// Area light project round trip: size + keys survive, missing size loads the default {20, 20}.
+static void TestAreaLightProject() {
+    const std::filesystem::path projDir = kTemp / "arealight";
+    std::filesystem::create_directories(projDir);
+    const std::filesystem::path projFile = projDir / "area.mmdxproj";
+
+    ProjectData data;
+    SceneLight al;
+    al.uid = 1;
+    al.name = "\xEB\xA9\xB4\xEA\xB4\x91\xEC\x9B\x90 1";  // 면광원 1
+    al.kind = LightKind::Area;
+    al.v.position = {5.0f, 15.0f, -10.0f};
+    al.v.aim = {0.0f, 10.0f, 0.0f};
+    al.v.size = {30.0f, 15.0f};
+    al.v.color = {0.8f, 0.7f, 0.9f};
+    al.v.intensity = 2.5f;
+    al.v.range = 50.0f;
+    al.shadow = ShadowType::Soft;
+    al.shadowSoftness = 0.6f;
+    al.falloff = FalloffType::InverseSquare;
+
+    LightKey k0, k1;
+    k0.frame = 0;
+    k0.v = al.v;
+    k1.frame = 30;
+    k1.v = al.v;
+    k1.v.size = {45.0f, 25.0f};
+    al.keys = {k0, k1};
+    data.editor.lights = {al};
+
+    std::string err;
+    Check(SaveProject(projFile, data, &err), "SaveProject with area light", "%s", err.c_str());
+
+    // Verify raw JSON contents
+    {
+        std::ifstream in(projFile, std::ios::binary);
+        std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+        const nlohmann::json j = nlohmann::json::parse(text, nullptr, false);
+        Check(!j.is_discarded() && j.value("version", 0) == 2, "area light project format is version 2");
+        const nlohmann::json& l = j["editor"]["lights"][0];
+        Check(l["kind"] == "area", "area light JSON kind is \"area\"");
+        Check(l["values"].contains("size") && l["values"]["size"].is_array() && l["values"]["size"].size() == 2 &&
+              Near(l["values"]["size"][0].get<float>(), 30.0f, 1e-4f) && Near(l["values"]["size"][1].get<float>(), 15.0f, 1e-4f),
+              "area light base values serialize size [30, 15]");
+        Check(l["keys"].size() == 2 && l["keys"][1]["values"].contains("size") &&
+              Near(l["keys"][1]["values"]["size"][0].get<float>(), 45.0f, 1e-4f) &&
+              Near(l["keys"][1]["values"]["size"][1].get<float>(), 25.0f, 1e-4f),
+              "area light key values serialize size [45, 25]");
+    }
+
+    ProjectData loaded;
+    std::vector<std::string> warnings;
+    Check(LoadProject(projFile, loaded, &err, &warnings) && warnings.empty(), "LoadProject with area light", "%s", err.c_str());
+    Check(loaded.editor.lights.size() == 1, "1 area light loaded");
+    if (loaded.editor.lights.size() == 1) {
+        const SceneLight& loadedAl = loaded.editor.lights[0];
+        const std::string diff = DiffLight(al, loadedAl);
+        Check(diff.empty(), "area light round-trip field by field", "differs: %s", diff.c_str());
+        Check(al == loadedAl, "area light round-trip exactly (operator==)");
+        Check(loadedAl.v.size.x == 30.0f && loadedAl.v.size.y == 15.0f, "loaded area light has correct base size");
+        Check(loadedAl.keys.size() == 2 && loadedAl.keys[1].v.size.x == 45.0f && loadedAl.keys[1].v.size.y == 25.0f,
+              "loaded area light has correct key size");
+    }
+
+    // Missing "size" loads the default {20.0f, 20.0f}
+    {
+        const std::filesystem::path noSizeFile = projDir / "nosize.mmdxproj";
+        {
+            std::ofstream f(noSizeFile, std::ios::binary);
+            f << "{\"format\":\"mmdx12-studio-project\",\"version\":2,\"models\":[],\"camera\":null,\"audio\":null,\"editor\":{"
+                 "\"lights\":[{\"kind\":\"area\",\"uid\":10,\"values\":{\"position\":[1,2,3]}}]}}";
+        }
+        ProjectData d;
+        warnings.clear();
+        Check(LoadProject(noSizeFile, d, &err, &warnings) && d.editor.lights.size() == 1, "area light without size loads");
+        if (d.editor.lights.size() == 1) {
+            Check(d.editor.lights[0].v.size.x == 20.0f && d.editor.lights[0].v.size.y == 20.0f,
+                  "area light without size gets default size {20, 20}");
+        }
+    }
+}
+
 // Version 1 projects: the old lighting source + key override + spot rig become scene lights.
 static void TestLegacyConversion() {
     const std::filesystem::path projDir = kTemp / "legacy";
@@ -1009,6 +1094,7 @@ int main() {
     TestRoundTrip();
     TestSceneLightFile();
     TestSceneLightReading();
+    TestAreaLightProject();
     TestLegacyConversion();
     TestLegacyLightMigration();
     TestDuplicateNamesAndCleanup();

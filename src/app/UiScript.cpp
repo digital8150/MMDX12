@@ -205,18 +205,32 @@ void App::PumpUiScript() {
                     if (l.kind == studio::LightKind::Spot) {
                         aim = ResolveSpotAim(l, cur, d.time, anchors);
                     }
-                    LOG_INFO("STUDIOLIGHT %zu uid=%u kind=%s name='%s' enabled=%d pos=(%.3f,%.3f,%.3f) "
-                             "aim=(%.3f,%.3f,%.3f) dir=(%.3f,%.3f,%.3f) col=(%.3f,%.3f,%.3f) "
-                             "intensity=%.3f range=%.1f coneOuter=%.4f (%.1f deg) coneInner=%.4f (%.1f deg) keys=%zu visible=%d",
-                             i, l.uid, studio::LightKindName(l.kind), l.name.c_str(), (int)l.enabled,
-                             cur.position.x, cur.position.y, cur.position.z,
-                             aim.x, aim.y, aim.z,
-                             cur.direction.x, cur.direction.y, cur.direction.z,
-                             cur.color.x, cur.color.y, cur.color.z,
-                             cur.intensity, cur.range,
-                             cur.coneOuter, DirectX::XMConvertToDegrees(cur.coneOuter),
-                             cur.coneInner, DirectX::XMConvertToDegrees(cur.coneInner),
-                             l.keys.size(), (int)l.viewportVisible);
+                    if (l.kind == studio::LightKind::Area) {
+                        LOG_INFO("STUDIOLIGHT %zu uid=%u kind=%s name='%s' enabled=%d pos=(%.3f,%.3f,%.3f) "
+                                 "aim=(%.3f,%.3f,%.3f) dir=(%.3f,%.3f,%.3f) col=(%.3f,%.3f,%.3f) "
+                                 "intensity=%.3f range=%.1f size=(%.1f,%.1f) keys=%zu visible=%d",
+                                 i, l.uid, studio::LightKindName(l.kind), l.name.c_str(), (int)l.enabled,
+                                 cur.position.x, cur.position.y, cur.position.z,
+                                 aim.x, aim.y, aim.z,
+                                 cur.direction.x, cur.direction.y, cur.direction.z,
+                                 cur.color.x, cur.color.y, cur.color.z,
+                                 cur.intensity, cur.range,
+                                 cur.size.x, cur.size.y,
+                                 l.keys.size(), (int)l.viewportVisible);
+                    } else {
+                        LOG_INFO("STUDIOLIGHT %zu uid=%u kind=%s name='%s' enabled=%d pos=(%.3f,%.3f,%.3f) "
+                                 "aim=(%.3f,%.3f,%.3f) dir=(%.3f,%.3f,%.3f) col=(%.3f,%.3f,%.3f) "
+                                 "intensity=%.3f range=%.1f coneOuter=%.4f (%.1f deg) coneInner=%.4f (%.1f deg) keys=%zu visible=%d",
+                                 i, l.uid, studio::LightKindName(l.kind), l.name.c_str(), (int)l.enabled,
+                                 cur.position.x, cur.position.y, cur.position.z,
+                                 aim.x, aim.y, aim.z,
+                                 cur.direction.x, cur.direction.y, cur.direction.z,
+                                 cur.color.x, cur.color.y, cur.color.z,
+                                 cur.intensity, cur.range,
+                                 cur.coneOuter, DirectX::XMConvertToDegrees(cur.coneOuter),
+                                 cur.coneInner, DirectX::XMConvertToDegrees(cur.coneInner),
+                                 l.keys.size(), (int)l.viewportVisible);
+                    }
                 }
             }
         } else if (s.cmd == "studiobone") {  // studiobone <name>: click the bone's joint in the viewport
@@ -301,7 +315,7 @@ void App::PumpUiScript() {
 
                     const bool isKeyable = (f == "pos" || f == "position" || f == "aim" || f == "dir" ||
                                             f == "direction" || f == "col" || f == "color" || f == "intensity" ||
-                                            f == "range" || f == "coneouter" || f == "coneinner");
+                                            f == "range" || f == "coneouter" || f == "coneinner" || f == "size");
 
                     if (isKeyable) {
                         studio::LightKey* k = studio::FindKey(light->keys, frame);
@@ -319,6 +333,7 @@ void App::PumpUiScript() {
                         else if (f == "col" || f == "color") target.color = {num(2), num(3), num(4)};
                         else if (f == "intensity") target.intensity = num(2);
                         else if (f == "range") target.range = num(2);
+                        else if (f == "size") target.size = {num(2), num(3)};
                         else if (f == "coneouter") {
                             float v = num(2);
                             if (v > 1.6f) v = DirectX::XMConvertToRadians(v);

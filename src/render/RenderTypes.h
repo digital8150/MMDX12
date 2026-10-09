@@ -118,6 +118,7 @@ struct PunctualLight {
     bool affectDiffuse = true;
     bool affectSpecular = true;
     bool castPointShadow = false;  // opt-in point-light shadow; set by BuildSceneLighting (studio only)
+    DirectX::XMFLOAT2 areaSize{0, 0}; // width, height (zero = not an area light)
 };
 
 struct LightParams {

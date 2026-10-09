@@ -178,7 +178,7 @@ void BuildSceneLighting(const std::vector<studio::SceneLight>& lights, const std
     }
 
     for (const studio::SceneLight& l : lights) {
-        if (!l.enabled || (l.kind != LightKind::Point && l.kind != LightKind::Spot)) continue;
+        if (!l.enabled || (l.kind != LightKind::Point && l.kind != LightKind::Spot && l.kind != LightKind::Area)) continue;
         if (out.punctual.size() >= Renderer::kMaxPunctualLights) break;
         const studio::LightValues v = studio::SampleLightValues(l, frame);
         PunctualLight p;
@@ -202,6 +202,19 @@ void BuildSceneLighting(const std::vector<studio::SceneLight>& lights, const std
                 p.direction = {0.0f, -1.0f, 0.0f};
             p.spotCosOuter = std::cos(std::clamp(v.coneOuter, 0.02f, 1.5f));
             p.spotCosInner = std::cos(std::clamp(v.coneInner, 0.01f, std::max(v.coneOuter, 0.01f)));
+        } else if (l.kind == LightKind::Area) {
+            p.castPointShadow = (l.shadow != studio::ShadowType::NoCast);
+            p.areaSize = v.size;
+            p.direction = {v.aim.x - v.position.x, v.aim.y - v.position.y, v.aim.z - v.position.z};
+            float lenSq = p.direction.x * p.direction.x + p.direction.y * p.direction.y + p.direction.z * p.direction.z;
+            if (lenSq < 1e-6f) {
+                p.direction = {0.0f, -1.0f, 0.0f};
+            } else {
+                float invLen = 1.0f / std::sqrt(lenSq);
+                p.direction.x *= invLen;
+                p.direction.y *= invLen;
+                p.direction.z *= invLen;
+            }
         }
         out.punctual.push_back(p);
     }

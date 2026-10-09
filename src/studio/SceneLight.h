@@ -14,7 +14,7 @@
 
 namespace mmdx::studio {
 
-enum class LightKind : uint8_t { Sun = 0, Point = 1, Spot = 2, Ambient = 3 };
+enum class LightKind : uint8_t { Sun = 0, Point = 1, Spot = 2, Ambient = 3, Area = 4 };
 enum class AimMode : uint8_t { Manual = 0, Target = 1, Sway = 2 };
 enum class TargetPart : uint8_t { Centre = 0, Head = 1 };
 enum class ShadowType : uint8_t { NoCast = 0, Hard = 1, Soft = 2 };
@@ -36,14 +36,15 @@ bool ParseFalloffType(const std::string& s, FalloffType& out);
 // The keyable values. The base values of a light and every key hold all of them; the ones a kind does not use stay at
 // their defaults.
 struct LightValues {
-    DirectX::XMFLOAT3 position{0, 45, -15};          // point, spot: world position (MMD space)
-    DirectX::XMFLOAT3 aim{0, 0, 0};                  // spot: aim point (Manual) or sway centre (Sway)
+    DirectX::XMFLOAT3 position{0, 45, -15};          // point, spot, area: world position (MMD space)
+    DirectX::XMFLOAT3 aim{0, 0, 0};                  // spot, area: aim point (Manual) or sway centre (Sway)
     DirectX::XMFLOAT3 direction{-0.5f, -1.0f, 0.5f}; // sun: travel direction toward the scene
     DirectX::XMFLOAT3 color{1, 1, 1};                // linear RGB
-    float intensity = 1.0f;                          // sun: sunIntensity; point / spot: intensity; ambient: hemisphere strength
-    float range = 140.0f;                            // point, spot: falloff distance
+    float intensity = 1.0f;                          // sun: sunIntensity; point / spot / area: intensity; ambient: hemisphere strength
+    float range = 140.0f;                            // point, spot, area: falloff distance
     float coneOuter = 0.24f;                         // spot: outer half-angle, radians
     float coneInner = 0.15f;                         // spot: inner half-angle, radians, <= coneOuter
+    DirectX::XMFLOAT2 size{20, 20};                  // area: width, height (MMD units)
     bool operator==(const LightValues& o) const;     // exact, every field
 };
 

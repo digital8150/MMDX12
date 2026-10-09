@@ -24,7 +24,8 @@ struct PtLight {
     float3 dir; float cosInner;
     float shadowSlice; float shadowType; float shadowSoftness; float shadowDensity;
     float3 shadowColor; float falloff;
-    float affectDiffuse; float affectSpecular; float2 pad;
+    float affectDiffuse; float affectSpecular; float pointShadowSlice; float pad;
+    float areaWidth; float areaHeight; float isArea; float pad2;
 };
 StructuredBuffer<PtLight> gPtLights : register(t2, space1);
 
@@ -269,27 +270,53 @@ void CSPathTrace(uint3 id : SV_DispatchThreadID) {
                 uint li = min((uint)(Rand(rng) * (float)nl), nl - 1u);
                 PtLight l = gPtLights[li];
                 if (l.affectDiffuse > 0.0) {
-                    float3 d = l.pos - pos;
-                    float dist = length(d);
-                    float3 ld = d / max(dist, 1e-4);
-                    float atten = PunctualFalloff(dist, l.invRange, l.falloff);
-                    if (l.cosOuter > -1.0) atten *= smoothstep(l.cosOuter, l.cosInner, dot(-ld, l.dir));
-                    float ndlp = dot(n, ld);
-                    // characters: the raster soft toon terminator (flat: almost no N.L)
-                    float diff = toon ? lerp(smoothstep(-0.05, 0.25, ndlp), saturate(ndlp * 0.3 + 0.7), flat) : ndlp;
-                    if (atten > 0.0 && diff > 0.0) {
-                        float rawVis = 1.0;
-                        if (l.shadowType > 0.5) {
-                            float3 rayDir = ld;
-                            if (l.shadowType > 1.5) {
-                                float cosCone = lerp(0.9999, 0.985, l.shadowSoftness);
-                                rayDir = SampleCone(float2(Rand(rng), Rand(rng)), ld, cosCone);
+                    if (l.isArea > 0.5) {
+                        float3 norm = l.dir;
+                        float3 c = cross(float3(0, 1, 0), norm);
+                        float cLen = length(c);
+                        float3 right = (cLen > 1e-4) ? (c / cLen) : float3(1, 0, 0);
+                        float3 up = cross(norm, right);
+                        float u = (Rand(rng) - 0.5) * l.areaWidth;
+                        float v = (Rand(rng) - 0.5) * l.areaHeight;
+                        float3 samplePos = l.pos + right * u + up * v;
+                        float3 d = samplePos - pos;
+                        float dist = length(d);
+                        float3 ld = d / max(dist, 1e-4);
+                        float atten = PunctualFalloff(dist, l.invRange, l.falloff) * max(0.0, dot(norm, -ld));
+                        float ndlp = dot(n, ld);
+                        float diff = toon ? lerp(smoothstep(-0.05, 0.25, ndlp), saturate(ndlp * 0.3 + 0.7), flat) : ndlp;
+                        if (atten > 0.0 && diff > 0.0) {
+                            float rawVis = 1.0;
+                            if (l.shadowType > 0.5) {
+                                rawVis = TraceShadowRayMasked(OffsetRayOrigin(pos, faceN), ld, max(dist - 0.05, 0.0),
+                                                              RT_MASK_CHARACTER);
                             }
-                            rawVis = TraceShadowRayMasked(OffsetRayOrigin(pos, faceN), rayDir, max(dist - 0.05, 0.0),
-                                                          RT_MASK_CHARACTER);
+                            float3 shadowFactor = ShadowTransmission(rawVis, l.shadowDensity, l.shadowColor);
+                            radiance += throughput * (1.0 - pSpec) * albedo * l.color * shadowFactor * atten * diff * (float)nl;
                         }
-                        float3 shadowFactor = ShadowTransmission(rawVis, l.shadowDensity, l.shadowColor);
-                        radiance += throughput * (1.0 - pSpec) * albedo * l.color * shadowFactor * atten * diff * (float)nl;
+                    } else {
+                        float3 d = l.pos - pos;
+                        float dist = length(d);
+                        float3 ld = d / max(dist, 1e-4);
+                        float atten = PunctualFalloff(dist, l.invRange, l.falloff);
+                        if (l.cosOuter > -1.0) atten *= smoothstep(l.cosOuter, l.cosInner, dot(-ld, l.dir));
+                        float ndlp = dot(n, ld);
+                        // characters: the raster soft toon terminator (flat: almost no N.L)
+                        float diff = toon ? lerp(smoothstep(-0.05, 0.25, ndlp), saturate(ndlp * 0.3 + 0.7), flat) : ndlp;
+                        if (atten > 0.0 && diff > 0.0) {
+                            float rawVis = 1.0;
+                            if (l.shadowType > 0.5) {
+                                float3 rayDir = ld;
+                                if (l.shadowType > 1.5) {
+                                    float cosCone = lerp(0.9999, 0.985, l.shadowSoftness);
+                                    rayDir = SampleCone(float2(Rand(rng), Rand(rng)), ld, cosCone);
+                                }
+                                rawVis = TraceShadowRayMasked(OffsetRayOrigin(pos, faceN), rayDir, max(dist - 0.05, 0.0),
+                                                              RT_MASK_CHARACTER);
+                            }
+                            float3 shadowFactor = ShadowTransmission(rawVis, l.shadowDensity, l.shadowColor);
+                            radiance += throughput * (1.0 - pSpec) * albedo * l.color * shadowFactor * atten * diff * (float)nl;
+                        }
                     }
                 }
             }

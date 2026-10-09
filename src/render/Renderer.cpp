@@ -472,6 +472,10 @@ uint32_t Renderer::FillGpuLights(const LightParams& light, GpuLight* out, uint32
             g.pointShadowSlice = -1.0f;
         }
         g._pad = 0.0f;
+        g.areaWidth = p.areaSize.x;
+        g.areaHeight = p.areaSize.y;
+        g.isArea = (p.areaSize.x > 0.0f && p.areaSize.y > 0.0f) ? 1.0f : 0.0f;
+        g._pad2 = 0.0f;
     }
     return (uint32_t)count;
 }

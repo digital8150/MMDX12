@@ -55,7 +55,8 @@ struct PtLight {
     float3 dir; float cosInner;
     float shadowSlice; float shadowType; float shadowSoftness; float shadowDensity;
     float3 shadowColor; float falloff;
-    float affectDiffuse; float affectSpecular; float2 pad;
+    float affectDiffuse; float affectSpecular; float pointShadowSlice; float pad;
+    float areaWidth; float areaHeight; float isArea; float pad2;
 };
 StructuredBuffer<PtLight> gPtLights : register(t2, space1);
 
@@ -322,6 +323,7 @@ float3 PunctualUnshadowed(Surf s, uint li, bool toon, out float3 ld, out float d
     ld = d / max(dist, 1e-4);
     float atten = PunctualFalloff(dist, l.invRange, (int)l.falloff);
     if (l.cosOuter > -1.0) atten *= smoothstep(l.cosOuter, l.cosInner, dot(-ld, l.dir));
+    else if (l.isArea > 0.5) atten *= max(0.0, dot(l.dir, -ld));
     float ndl = dot(s.n, ld);
     float flat = s.flat ? 1.0 : 0.0;
     float diff = toon ? lerp(smoothstep(-0.05, 0.25, ndl), saturate(ndl * 0.3 + 0.7), flat) : ndl;
@@ -353,7 +355,32 @@ float3 PunctualIrradiance(Surf s, bool toon, inout uint rng) {
             PtLight l = gPtLights[j];
             int shadowType = (int)l.shadowType;
             float3 vis = 1.0;
-            if (shadowType != 0) {
+            if (l.isArea > 0.5) {
+                float3 norm = l.dir;
+                float3 c = cross(float3(0, 1, 0), norm);
+                float cLen = length(c);
+                float3 right = (cLen > 1e-4) ? (c / cLen) : float3(1, 0, 0);
+                float3 up = cross(norm, right);
+                float uA = (Rand(rng) - 0.5) * l.areaWidth;
+                float vA = (Rand(rng) - 0.5) * l.areaHeight;
+                float3 samplePos = l.pos + right * uA + up * vA;
+                float3 d = samplePos - s.pos;
+                dist = length(d);
+                ld = d / max(dist, 1e-4);
+                float atten = PunctualFalloff(dist, l.invRange, (int)l.falloff);
+                atten *= max(0.0, dot(norm, -ld));
+                float ndl = dot(s.n, ld);
+                float flat = s.flat ? 1.0 : 0.0;
+                float diff = toon ? lerp(smoothstep(-0.05, 0.25, ndl), saturate(ndl * 0.3 + 0.7), flat) : ndl;
+                if (atten <= 0.0 || diff <= 0.0 || l.affectDiffuse <= 0.5) return 0.0;
+                e = PI * l.color * atten * diff;
+                if (shadowType != 0) {
+                    float3 po = OffsetRayOrigin(s.pos, s.faceN);
+                    float hitVis = TraceShadowRayMasked(po, ld, max(dist - 0.05, 0.0), RT_MASK_CHARACTER);
+                    float3 shadowTrans = ShadowTransmission(hitVis, l.shadowDensity, l.shadowColor);
+                    vis = shadowTrans * (hitVis > 0.0 ? GlassShadow(po, ld, max(dist - 0.05, 0.0)) : float3(1, 1, 1));
+                }
+            } else if (shadowType != 0) {
                 float3 po = OffsetRayOrigin(s.pos, s.faceN);
                 float3 dir = ld;
                 if (shadowType == 2 && l.shadowSoftness > 0.0) {
@@ -483,6 +510,7 @@ float3 SkinTranslucency(Surf s, float skin, inout uint rng) {
         float3 ld = d / max(dist, 1e-4);
         float atten = PunctualFalloff(dist, l.invRange, (int)l.falloff);
         if (l.cosOuter > -1.0) atten *= smoothstep(l.cosOuter, l.cosInner, dot(-ld, l.dir));
+        else if (l.isArea > 0.5) atten *= max(0.0, dot(l.dir, -ld));
         if (atten > 0.0 && dot(s.faceN, ld) < 0.2 && l.affectDiffuse > 0.5)
             c += PI * l.color * atten * (float)nl * SkinTransmittance(s, ld, dist);
     }
@@ -564,6 +592,7 @@ float3 GlassGlint(Surf s, float3 V, inout uint rng) {
         float3 ld = dl / max(dist, 1e-4);
         float atten = PunctualFalloff(dist, l.invRange, (int)l.falloff);
         if (l.cosOuter > -1.0) atten *= smoothstep(l.cosOuter, l.cosInner, dot(-ld, l.dir));
+        else if (l.isArea > 0.5) atten *= max(0.0, dot(l.dir, -ld));
         float nl2 = dot(s.n, ld);
         if (atten <= 0.0 || nl2 <= 0.0) continue;
         float3 hh = normalize(ld + V);

@@ -100,6 +100,24 @@ void App::StudioAddLight(LightKind kind) {
             if (!taken) { l.name = candidate; break; }
             ++n;
         }
+    } else if (kind == LightKind::Area) {
+        l.v.position = {focus.x + 0.0f, focus.y + 40.0f, focus.z - 20.0f};
+        l.v.aim = focus;
+        l.aimMode = AimMode::Manual;
+        l.v.size = {20.0f, 20.0f};
+        l.v.intensity = 1.0f;
+        l.v.range = 140.0f;
+        l.v.color = {1.0f, 1.0f, 1.0f};
+        int n = 1;
+        while (true) {
+            std::string candidate = "면광원 " + std::to_string(n);
+            bool taken = false;
+            for (const auto& ex : d.lights) {
+                if (ex.name == candidate) { taken = true; break; }
+            }
+            if (!taken) { l.name = candidate; break; }
+            ++n;
+        }
     } else if (kind == LightKind::Sun) {
         l.name = "메인 조명";
     } else if (kind == LightKind::Ambient) {
@@ -201,6 +219,10 @@ void App::DrawStudioLightOutliner() {
                 StudioAddLight(LightKind::Spot);
                 ImGui::CloseCurrentPopup();
             }
+            if (MenuItem("##add_ar", Tr("면광원"), icon::Image)) {
+                StudioAddLight(LightKind::Area);
+                ImGui::CloseCurrentPopup();
+            }
             bool hasSun = false, hasAmbient = false;
             for (const auto& l : d.lights) {
                 if (l.kind == LightKind::Sun) hasSun = true;
@@ -250,6 +272,7 @@ void App::DrawStudioLightOutliner() {
         if (l.kind == LightKind::Sun) { glyph = icon::Sun; sub = Tr("태양"); }
         else if (l.kind == LightKind::Spot) { glyph = icon::Aperture; sub = Tr("스팟"); }
         else if (l.kind == LightKind::Ambient) { glyph = icon::Globe; sub = Tr("환경광"); }
+        else if (l.kind == LightKind::Area) { glyph = icon::Image; sub = Tr("면광원"); }
 
         char subBuf[64];
         if (!l.keys.empty()) {
@@ -464,7 +487,8 @@ void App::DrawStudioLightInspector(float w) {
     {
         const char* kindLabel = light->kind == LightKind::Sun ? Tr("태양") :
                                 light->kind == LightKind::Point ? Tr("점광원") :
-                                light->kind == LightKind::Spot ? Tr("스팟") : Tr("환경광");
+                                light->kind == LightKind::Spot ? Tr("스팟") :
+                                light->kind == LightKind::Area ? Tr("면광원") : Tr("환경광");
         Text(cdl, Font::Regular, size::Caption, ImGui::GetCursorScreenPos(), p.ink3, kindLabel);
         ImGui::Dummy(ImVec2(w, Dp(16.0f)));
     }
@@ -745,6 +769,43 @@ void App::DrawStudioLightInspector(float w) {
                 v.coneInner = DirectX::XMConvertToRadians(innerDeg);
             });
 
+    } else if (light->kind == LightKind::Area) {
+        float pos[3] = {cur.position.x, cur.position.y, cur.position.z};
+        keyedEdit(Tr("위치"),
+            [&] { return ImGui::DragFloat3("##areapos", pos, 0.1f, 0.0f, 0.0f, "%.1f"); },
+            [&](LightValues& v) { v.position = {pos[0], pos[1], pos[2]}; });
+
+        float aim[3] = {cur.aim.x, cur.aim.y, cur.aim.z};
+        keyedEdit(Tr("조준점"),
+            [&] { return ImGui::DragFloat3("##areaaim", aim, 0.1f, 0.0f, 0.0f, "%.1f"); },
+            [&](LightValues& v) { v.aim = {aim[0], aim[1], aim[2]}; });
+
+        float sz[2] = {cur.size.x, cur.size.y};
+        keyedEdit(Tr("크기"),
+            [&] { return ImGui::DragFloat2("##areasize", sz, 0.2f, 0.1f, 10000.0f, "%.1f"); },
+            [&](LightValues& v) { v.size = {std::max(0.01f, sz[0]), std::max(0.01f, sz[1])}; });
+
+        float col[3] = {cur.color.x, cur.color.y, cur.color.z};
+        keyedEdit(Tr("색"),
+            [&] {
+                bool c = false;
+                c |= ImGui::DragFloat3("##areacol", col, 0.01f, 0.0f, 1.0f, "%.2f");
+                ImGui::SameLine();
+                c |= ImGui::ColorEdit3("##areacolpick", col, ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_NoLabel);
+                return c;
+            },
+            [&](LightValues& v) { v.color = {col[0], col[1], col[2]}; });
+
+        float intensity = cur.intensity;
+        keyedEdit(Tr("강도"),
+            [&] { return ImGui::DragFloat("##areaintensity", &intensity, 0.05f, 0.0f, 1000.0f, "%.2f"); },
+            [&](LightValues& v) { v.intensity = std::max(0.0f, intensity); });
+
+        float range = cur.range;
+        keyedEdit(Tr("범위"),
+            [&] { return ImGui::DragFloat("##arearange", &range, 0.5f, 0.1f, 10000.0f, "%.1f"); },
+            [&](LightValues& v) { v.range = std::max(0.1f, range); });
+
     } else if (light->kind == LightKind::Ambient) {
         float zenith[3] = {light->skyZenith.x, light->skyZenith.y, light->skyZenith.z};
         basePropEdit(Tr("하늘 천정"),
@@ -838,8 +899,8 @@ void App::DrawStudioLightInspector(float w) {
         }
     }
 
-    // Falloff (point and spot)
-    if (light->kind == LightKind::Point || light->kind == LightKind::Spot) {
+    // Falloff (point, spot, area)
+    if (light->kind == LightKind::Point || light->kind == LightKind::Spot || light->kind == LightKind::Area) {
         separator(8.0f);
         SectionLabel(Tr("감쇠"));
 

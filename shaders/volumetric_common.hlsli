@@ -22,7 +22,8 @@ struct VolLight {
     float3 dir;   float cosInner;
     float shadowSlice; float shadowType; float shadowSoftness; float shadowDensity;
     float3 shadowColor; float falloff;
-    float affectDiffuse; float affectSpecular; float2 _pad;
+    float affectDiffuse; float affectSpecular; float pointShadowSlice; float _pad;
+    float areaWidth; float areaHeight; float isArea; float _pad2;
 };
 StructuredBuffer<VolLight> gVolLights : register(t2, space1);
 

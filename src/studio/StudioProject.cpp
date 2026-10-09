@@ -93,6 +93,13 @@ std::string ReadString(const nlohmann::json& j, const char* key, const std::stri
     if (it == j.end() || !it->is_string()) return def;
     return it->get<std::string>();
 }
+DirectX::XMFLOAT2 ReadVec2(const nlohmann::json& j, const char* key, DirectX::XMFLOAT2 def) {
+    const auto it = j.find(key);
+    if (it == j.end() || !it->is_array() || it->size() < 2) return def;
+    for (int i = 0; i < 2; ++i)
+        if (!(*it)[i].is_number()) return def;
+    return {(float)(*it)[0].get<double>(), (float)(*it)[1].get<double>()};
+}
 DirectX::XMFLOAT3 ReadVec3(const nlohmann::json& j, const char* key, DirectX::XMFLOAT3 def) {
     const auto it = j.find(key);
     if (it == j.end() || !it->is_array() || it->size() < 3) return def;
@@ -113,7 +120,7 @@ nlohmann::json LightValuesJson(const LightValues& v) {
     return {
         {"position", Vec3Json(v.position)}, {"aim", Vec3Json(v.aim)},     {"direction", Vec3Json(v.direction)},
         {"color", Vec3Json(v.color)},       {"intensity", v.intensity},   {"range", v.range},
-        {"coneOuter", v.coneOuter},         {"coneInner", v.coneInner},
+        {"coneOuter", v.coneOuter},         {"coneInner", v.coneInner},   {"size", {v.size.x, v.size.y}},
     };
 }
 
@@ -153,6 +160,7 @@ void ReadLightValues(const nlohmann::json& j, LightValues& v) {
     v.range = (float)ReadDouble(j, "range", v.range);
     v.coneOuter = (float)ReadDouble(j, "coneOuter", v.coneOuter);
     v.coneInner = (float)ReadDouble(j, "coneInner", v.coneInner);
+    v.size = ReadVec2(j, "size", v.size);
 }
 
 // One "lights" entry. Missing keys keep the SceneLight defaults; a key without some values holds the light's base values.

@@ -43,6 +43,7 @@ struct Light {
     float shadowSlice; float shadowType; float shadowSoftness; float shadowDensity;
     float3 shadowColor; float falloff;
     float affectDiffuse; float affectSpecular; float pointShadowSlice; float pad;
+    float areaWidth; float areaHeight; float isArea; float pad2;
 };
 StructuredBuffer<Light> gLights : register(t6);
 Texture2DArray<float> gSpotShadowMap : register(t7);
@@ -254,7 +255,34 @@ float PointShadow(Light l, float3 wp, float3 n, float dist) {
     float slice = baseSlice + (float)face;
     uv = clamp(uv, 0.5 * invMapSize, 1.0 - 0.5 * invMapSize);
 
-    if (l.shadowType > 1.5) { // Soft
+    if (l.isArea > 0.5) {
+        // PCSS: blocker search over the light's footprint, then a penumbra from the average blocker distance
+        // (world size s at major-axis distance m covers s / (2 m) of a face's uv). Soft widens the light.
+        float lightSize = 0.5 * (l.areaWidth + l.areaHeight);
+        if (l.shadowType > 1.5) lightSize *= 1.0 + l.shadowSoftness * 2.0;
+        float mapSize = 1.0 / invMapSize;
+        float rot = frac(sin(dot(wp, float3(12.9898, 78.233, 37.719)) + gFrameIndex * 0.618) * 43758.5453) * 6.2831853;
+        float2x2 R = float2x2(cos(rot), -sin(rot), sin(rot), cos(rot));
+        float searchUv = clamp(lightSize / (2.0 * major), 2.0 * invMapSize, 0.1);
+        float blockerSum = 0, blockers = 0;
+        [unroll] for (int i = 0; i < 12; ++i) {
+            float2 suv = saturate(uv + mul(kPoisson[i], R) * searchUv);
+            float z = gPointShadowMap.Load(int4(min((int2)(suv * mapSize), (int)mapSize - 1), (int)slice, 0));
+            if (z < pz - 0.00002) {
+                blockerSum += nearZ * farZ / max(farZ - z * (farZ - nearZ), 1e-4); // depth -> major-axis distance
+                blockers += 1.0;
+            }
+        }
+        if (blockers < 0.5) return 1.0;
+        float b = blockerSum / blockers;
+        float radius = clamp(lightSize * max(major - b, 0.0) / max(b, 1e-3) / (2.0 * major), 0.75 * invMapSize, 0.1);
+        float sum = 0;
+        [unroll] for (int k = 0; k < 12; ++k) {
+            float2 o = mul(kPoisson[k], R) * radius;
+            sum += gPointShadowMap.SampleCmpLevelZero(gShadowCmp, float3(uv + o, slice), pz - 0.00002);
+        }
+        return sum / 12.0;
+    } else if (l.shadowType > 1.5) { // Soft
         float radius = (0.75 + l.shadowSoftness * 2.25) * invMapSize;
         float sum = 0;
         [unroll] for (int i = 0; i < 12; ++i) {
@@ -274,7 +302,7 @@ float PointShadow(Light l, float3 wp, float3 n, float dist) {
 }
 
 #ifdef RT_SHADOWS
-// Two cone-jittered rays toward the point light, honouring alpha-tested casters.
+// Two cone-jittered rays toward the point light, or random points on the area light, honouring alpha-tested casters.
 float PointShadowRt(Light l, float3 wp, float3 n, float dist, uint lightIndex) {
     if (l.shadowType < 0.5 || l.pointShadowSlice < 0.0) return 1.0;
     float3 ld = (l.pos - wp) / max(dist, 1e-4);
@@ -282,6 +310,26 @@ float PointShadowRt(Light l, float3 wp, float3 n, float dist, uint lightIndex) {
     uint2 seedCoord = (uint2)abs(float2(wp.x * 37.0 + wp.y * 17.0, wp.z * 37.0 + wp.y * 11.0));
     uint rng = RngSeed(seedCoord, (uint)gFrameIndex, 17u + lightIndex);
     float vis = 0;
+    if (l.isArea > 0.5) {
+        float3 norm = l.dir;
+        float3 c = cross(float3(0, 1, 0), norm);
+        float cLen = length(c);
+        float3 right = (cLen > 1e-4) ? (c / cLen) : float3(1, 0, 0);
+        float3 up = cross(norm, right);
+        float softMul = (l.shadowType > 1.5) ? (1.0 + l.shadowSoftness * 1.5) : 1.0;
+        float w = l.areaWidth * softMul;
+        float h = l.areaHeight * softMul;
+        [unroll] for (int k = 0; k < 2; ++k) {
+            float u = (Rand(rng) - 0.5) * w;
+            float v = (Rand(rng) - 0.5) * h;
+            float3 samplePos = l.pos + right * u + up * v;
+            float3 rayDelta = samplePos - origin;
+            float rayDist = length(rayDelta);
+            float3 rayDir = rayDelta / max(rayDist, 1e-4);
+            vis += TraceShadowRayMasked(origin, rayDir, max(rayDist - 0.05, 0.0), RT_MASK_CHARACTER);
+        }
+        return vis * 0.5;
+    }
     float cosCone = (l.shadowType > 1.5) ? lerp(0.99993, 0.995, l.shadowSoftness) : 0.99993;
     [unroll] for (int k = 0; k < 2; ++k) {
         float3 rayDir = SampleCone(float2(Rand(rng), Rand(rng)), ld, cosCone);
@@ -302,6 +350,7 @@ float3 PunctualDiffuse(float3 wp, float3 n, float toonSoft, float flat) {
         float3 ld = d / max(dist, 1e-4);
         float atten = PunctualFalloff(dist, l.invRange, l.falloff);
         if (l.cosOuter > -1.0) atten *= smoothstep(l.cosOuter, l.cosInner, dot(-ld, l.dir));
+        else if (l.isArea > 0.5) atten *= max(0.0, dot(l.dir, -ld));
         float rawVis = 1.0;
         if (atten > 0.0) {
             if (l.cosOuter > -1.0) {
@@ -334,6 +383,7 @@ float3 PunctualSpecular(float3 wp, float3 n, float3 V, float power) {
         float3 ld = d / max(dist, 1e-4);
         float atten = PunctualFalloff(dist, l.invRange, l.falloff);
         if (l.cosOuter > -1.0) atten *= smoothstep(l.cosOuter, l.cosInner, dot(-ld, l.dir));
+        else if (l.isArea > 0.5) atten *= max(0.0, dot(l.dir, -ld));
         float rawVis = 1.0;
         if (atten > 0.0) {
             if (l.cosOuter > -1.0) {

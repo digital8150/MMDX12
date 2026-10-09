@@ -28,6 +28,7 @@ const char* LightKindName(LightKind k) {
     case LightKind::Point: return "point";
     case LightKind::Spot: return "spot";
     case LightKind::Ambient: return "ambient";
+    case LightKind::Area: return "area";
     case LightKind::Sun: break;
     }
     return "sun";
@@ -38,6 +39,7 @@ bool ParseLightKind(const std::string& s, LightKind& out) {
     if (s == "point") { out = LightKind::Point; return true; }
     if (s == "spot") { out = LightKind::Spot; return true; }
     if (s == "ambient") { out = LightKind::Ambient; return true; }
+    if (s == "area") { out = LightKind::Area; return true; }
     return false;
 }
 
@@ -99,7 +101,8 @@ bool ParseFalloffType(const std::string& s, FalloffType& out) {
 
 bool LightValues::operator==(const LightValues& o) const {
     return Same(position, o.position) && Same(aim, o.aim) && Same(direction, o.direction) && Same(color, o.color) &&
-           intensity == o.intensity && range == o.range && coneOuter == o.coneOuter && coneInner == o.coneInner;
+           intensity == o.intensity && range == o.range && coneOuter == o.coneOuter && coneInner == o.coneInner &&
+           size.x == o.size.x && size.y == o.size.y;
 }
 
 bool LightKey::operator==(const LightKey& o) const { return frame == o.frame && v == o.v; }
@@ -134,6 +137,7 @@ LightValues SampleLightValues(const SceneLight& light, int frame) {
     out.range = Lerp(a.v.range, b.v.range, t);
     out.coneOuter = Lerp(a.v.coneOuter, b.v.coneOuter, t);
     out.coneInner = Lerp(a.v.coneInner, b.v.coneInner, t);
+    out.size = {Lerp(a.v.size.x, b.v.size.x, t), Lerp(a.v.size.y, b.v.size.y, t)};
     return out;
 }
 

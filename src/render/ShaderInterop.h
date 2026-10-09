@@ -86,7 +86,7 @@ struct MaterialConstants {            // b1, one 256-byte slot per material
 };
 static_assert(sizeof(MaterialConstants) == 256, "MaterialConstants layout");
 
-// StructuredBuffer element for punctual lights (t6 in the scene pass). 96 bytes.
+// StructuredBuffer element for punctual lights (t6 in the scene pass). 112 bytes.
 struct GpuLight {
     DirectX::XMFLOAT3 position; float invRange;
     DirectX::XMFLOAT3 color;    float spotCosOuter;   // colour premultiplied by intensity
@@ -100,8 +100,12 @@ struct GpuLight {
     float affectSpecular;        // 1.0 = on, 0.0 = off
     float pointShadowSlice;      // point shadow base slice (6 * shadowed point index), -1 = none
     float _pad;
+    float areaWidth;
+    float areaHeight;
+    float isArea;                // 1.0 = area light, 0.0 = punctual point/spot
+    float _pad2;
 };
-static_assert(sizeof(GpuLight) == 96, "GpuLight layout");
+static_assert(sizeof(GpuLight) == 112, "GpuLight layout");
 
 // Vertex buffer slot 0 (static, DEFAULT heap). 60 bytes.
 struct GpuVertex {

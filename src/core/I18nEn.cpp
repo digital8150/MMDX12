@@ -327,6 +327,7 @@ const Entry kEnglish[] = {
     {"모션 VMD 불러오기", "Import motion VMD"},
     {"모프", "Morphs"},
     {"모프 키는 항상 선형으로 보간돼요.", "Morph keys are always interpolated linearly."},
+    {"면광원", "Area light"},
     {"보간 곡선", "Interpolation curve"},
     {"보간 곡선 편집", "Edit interpolation curve"},
     {"보이기", "Show"},

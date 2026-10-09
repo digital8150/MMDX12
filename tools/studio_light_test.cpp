@@ -76,6 +76,9 @@ static std::string DiffParams(const LightParams& a, const LightParams& b, float 
         if (p.falloff != q.falloff) return at + "falloff";
         if (p.affectDiffuse != q.affectDiffuse) return at + "affectDiffuse";
         if (p.affectSpecular != q.affectSpecular) return at + "affectSpecular";
+        if (!Near(p.areaSize.x, q.areaSize.x, tol)) return at + "areaSize.x";
+        if (!Near(p.areaSize.y, q.areaSize.y, tol)) return at + "areaSize.y";
+        if (p.castPointShadow != q.castPointShadow) return at + "castPointShadow";
     }
     return "";
 }
@@ -695,6 +698,91 @@ static void TestPerLightProperties() {
     Check(buildLightingNeverSets, "BuildLighting never sets castPointShadow");
 }
 
+static void TestAreaLight() {
+    // Keyframe interpolation of size
+    SceneLight al;
+    al.kind = LightKind::Area;
+    al.v.size = {10.0f, 20.0f};
+    LightKey k0, k1;
+    k0.frame = 10;
+    k0.v = al.v;
+    k0.v.size = {10.0f, 20.0f};
+    k1.frame = 20;
+    k1.v = al.v;
+    k1.v.size = {30.0f, 40.0f};
+    al.keys = {k0, k1};
+    LightValues mid = SampleLightValues(al, 15);
+    Check(Near(mid.size.x, 20.0f, 1e-4f) && Near(mid.size.y, 30.0f, 1e-4f),
+          "area light size interpolates linearly across keyframes");
+
+    // BuildSceneLighting maps an area light (normal, size, castPointShadow by shadow type)
+    LightAnchors anchors;
+    SceneLight areaSoft;
+    areaSoft.uid = 1;
+    areaSoft.kind = LightKind::Area;
+    areaSoft.v.position = {1.0f, 2.0f, 3.0f};
+    areaSoft.v.aim = {1.0f, 2.0f, 8.0f};  // normal should be (0, 0, 1)
+    areaSoft.v.size = {25.0f, 15.0f};
+    areaSoft.v.color = {0.7f, 0.8f, 0.9f};
+    areaSoft.v.intensity = 3.0f;
+    areaSoft.v.range = 40.0f;
+    areaSoft.shadow = ShadowType::Soft;
+    areaSoft.shadowSoftness = 0.5f;
+    areaSoft.shadowDensity = 0.8f;
+    areaSoft.shadowColor = {0.1f, 0.1f, 0.1f};
+    areaSoft.falloff = FalloffType::InverseSquare;
+
+    SceneLight areaHard = areaSoft;
+    areaHard.uid = 2;
+    areaHard.shadow = ShadowType::Hard;
+
+    SceneLight areaNoCast = areaSoft;
+    areaNoCast.uid = 3;
+    areaNoCast.shadow = ShadowType::NoCast;
+
+    LightParams lp;
+    BuildSceneLighting({areaSoft, areaHard, areaNoCast}, {}, 0.0, anchors, lp);
+    Check(lp.punctual.size() == 3, "BuildSceneLighting maps 3 area lights");
+    if (lp.punctual.size() == 3) {
+        const PunctualLight& p0 = lp.punctual[0];
+        Check(Near3(p0.position, {1.0f, 2.0f, 3.0f}, 1e-4f), "area light position mapped");
+        Check(Near3(p0.direction, {0.0f, 0.0f, 1.0f}, 1e-4f), "area light normal mapped into direction");
+        Check(Near(p0.areaSize.x, 25.0f, 1e-4f) && Near(p0.areaSize.y, 15.0f, 1e-4f), "area light areaSize mapped");
+        Check(p0.spotCosOuter <= -1.0f, "area light has spotCosOuter <= -1.0");
+        Check(p0.castPointShadow == true, "area light with Soft shadow sets castPointShadow");
+        Check(p0.shadow == LightShadowType::Soft, "area light carries Soft shadow");
+
+        const PunctualLight& p1 = lp.punctual[1];
+        Check(p1.castPointShadow == true, "area light with Hard shadow sets castPointShadow");
+        Check(p1.shadow == LightShadowType::Hard, "area light carries Hard shadow");
+
+        const PunctualLight& p2 = lp.punctual[2];
+        Check(p2.castPointShadow == false, "area light with NoCast shadow clears castPointShadow");
+        Check(p2.shadow == LightShadowType::NoCast, "area light carries NoCast shadow");
+    }
+
+    // PresetLights and BuildLighting contain no area light
+    bool presetsHaveArea = false;
+    for (int p = 0; p < kLightingPresetCount; ++p) {
+        uint32_t nextUid = 1;
+        const std::vector<SceneLight> preset = PresetLights(p, {0, 10, 0}, nextUid);
+        for (const SceneLight& l : preset) {
+            if (l.kind == LightKind::Area) presetsHaveArea = true;
+        }
+    }
+    Check(!presetsHaveArea, "PresetLights never contains an Area light");
+
+    bool playLightingHasArea = false;
+    for (int p = 0; p < kLightingPresetCount; ++p) {
+        LightParams lpPlay;
+        BuildLighting((LightingPreset)p, 0.0, {0, 0, 0}, lpPlay);
+        for (const PunctualLight& pl : lpPlay.punctual) {
+            if (pl.areaSize.x > 0.0f || pl.areaSize.y > 0.0f) playLightingHasArea = true;
+        }
+    }
+    Check(!playLightingHasArea, "BuildLighting never produces area lights");
+}
+
 int main() {
     std::setvbuf(stdout, nullptr, _IONBF, 0);  // unbuffered: a crash mid-test loses buffered PASS lines
     TestPresetRegression();
@@ -710,6 +798,7 @@ int main() {
     TestDocLights();
     TestSongCameraLightTrack();
     TestPerLightProperties();
+    TestAreaLight();
     std::printf("studio_light_test: %d passed, %d failed\n", g_passed, g_failed);
     return g_failed > 0 ? 1 : 0;
 }

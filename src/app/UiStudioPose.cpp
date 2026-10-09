@@ -709,6 +709,7 @@ void App::StudioViewportLightHandles(bool hovered) {
         const char* glyph = icon::Lightbulb;
         if (l.kind == LightKind::Sun) glyph = icon::Sun;
         else if (l.kind == LightKind::Spot) glyph = icon::Aperture;
+        else if (l.kind == LightKind::Area) glyph = icon::Image;
         ui::Icon(dl, glyph, 12.0f, screenPos, glyphCol);
     }
 
@@ -935,6 +936,117 @@ void App::StudioViewportLightHandles(bool hovered) {
                 StudioBeginLightEdit(light->uid, willKey);
                 studioViewDrag_ = 8;
             } else if (hotAim != GizmoPart::None) {
+                studioLightGizmoDrag_ = BeginGizmoDrag(studioVp_, studioLightAimFrame_, GizmoMode::Translate, gs, hotAim, mouse);
+                if (studioLightGizmoDrag_.part != GizmoPart::None) {
+                    studioLightDragPart_ = LightDragPart::AimGizmo;
+                    studioLightValuesBase_ = cur;
+                    const bool willKey = (FindKey(light->keys, frame) != nullptr) || d.autoKey;
+                    StudioBeginLightEdit(light->uid, willKey);
+                    studioViewDrag_ = 8;
+                }
+            } else if (studioLightHotGizmo_ != GizmoPart::None) {
+                studioLightGizmoDrag_ = BeginGizmoDrag(studioVp_, studioLightPosFrame_, GizmoMode::Translate, gs, studioLightHotGizmo_, mouse);
+                if (studioLightGizmoDrag_.part != GizmoPart::None) {
+                    studioLightDragPart_ = LightDragPart::PosGizmo;
+                    studioLightValuesBase_ = cur;
+                    const bool willKey = (FindKey(light->keys, frame) != nullptr) || d.autoKey;
+                    StudioBeginLightEdit(light->uid, willKey);
+                    studioViewDrag_ = 8;
+                }
+            }
+        }
+    } else if (light->kind == LightKind::Area) {
+        const XMFLOAT3 P = cur.position;
+        const XMFLOAT3 A = cur.aim;
+        studioLightResolvedAim_ = A;
+
+        XMVECTOR axisV = XMVectorSubtract(XMLoadFloat3(&A), XMLoadFloat3(&P));
+        float aimDist = XMVectorGetX(XMVector3Length(axisV));
+        if (aimDist < 1e-4f) {
+            axisV = XMVectorSet(0, -1, 0, 0);
+            aimDist = 10.0f;
+        } else {
+            axisV = XMVectorScale(axisV, 1.0f / aimDist);
+        }
+
+        studioLightPosFrame_ = GizmoFrame{};
+        studioLightPosFrame_.center = P;
+        studioLightAimFrame_ = GizmoFrame{};
+        studioLightAimFrame_.center = A;
+
+        const XMVECTOR normalV = axisV;
+        const XMVECTOR worldUp = XMVectorSet(0, 1, 0, 0);
+        const XMVECTOR crossV = XMVector3Cross(worldUp, normalV);
+        const float crossLenSq = XMVectorGetX(XMVector3LengthSq(crossV));
+        const XMVECTOR rightV = crossLenSq > 1e-6f ? XMVector3Normalize(crossV) : XMVectorSet(1, 0, 0, 0);
+        const XMVECTOR upV = XMVector3Cross(normalV, rightV);
+
+        const float hw = cur.size.x * 0.5f;
+        const float hh = cur.size.y * 0.5f;
+        const XMVECTOR c0V = XMVectorSubtract(XMVectorSubtract(XMLoadFloat3(&P), XMVectorScale(rightV, hw)), XMVectorScale(upV, hh));
+        const XMVECTOR c1V = XMVectorSubtract(XMVectorAdd(XMLoadFloat3(&P), XMVectorScale(rightV, hw)), XMVectorScale(upV, hh));
+        const XMVECTOR c2V = XMVectorAdd(XMVectorAdd(XMLoadFloat3(&P), XMVectorScale(rightV, hw)), XMVectorScale(upV, hh));
+        const XMVECTOR c3V = XMVectorAdd(XMVectorSubtract(XMLoadFloat3(&P), XMVectorScale(rightV, hw)), XMVectorScale(upV, hh));
+
+        XMFLOAT3 c0, c1, c2, c3;
+        XMStoreFloat3(&c0, c0V);
+        XMStoreFloat3(&c1, c1V);
+        XMStoreFloat3(&c2, c2V);
+        XMStoreFloat3(&c3, c3V);
+
+        auto drawSeg = [&](const XMFLOAT3& p0, const XMFLOAT3& p1) {
+            ImVec2 sa, sb;
+            if (ProjectSegment(studioVp_, p0, p1, sa, sb)) {
+                dl->AddLine(sa, sb, IM_COL32(20, 20, 20, 160), 3.0f);
+                dl->AddLine(sa, sb, IM_COL32(255, 215, 60, 200), 1.5f);
+            }
+        };
+        drawSeg(c0, c1);
+        drawSeg(c1, c2);
+        drawSeg(c2, c3);
+        drawSeg(c3, c0);
+
+        XMFLOAT3 arrowTip;
+        XMStoreFloat3(&arrowTip, XMVectorAdd(XMLoadFloat3(&P), XMVectorScale(normalV, 10.0f)));
+        ImVec2 sa, sb;
+        if (ProjectSegment(studioVp_, P, arrowTip, sa, sb)) {
+            dl->AddLine(sa, sb, IM_COL32(20, 20, 20, 200), 3.0f);
+            dl->AddLine(sa, sb, IM_COL32(255, 215, 60, 255), 1.5f);
+            const ImVec2 sd(sb.x - sa.x, sb.y - sa.y);
+            const float len = std::hypot(sd.x, sd.y);
+            if (len > 4.0f) {
+                const ImVec2 u(sd.x / len, sd.y / len);
+                const ImVec2 n(-u.y, u.x);
+                const ImVec2 tip(sb.x + u.x * 6.0f, sb.y + u.y * 6.0f);
+                const ImVec2 left(sb.x - u.x * 4.0f + n.x * 4.0f, sb.y - u.y * 4.0f + n.y * 4.0f);
+                const ImVec2 right(sb.x - u.x * 4.0f - n.x * 4.0f, sb.y - u.y * 4.0f - n.y * 4.0f);
+                dl->AddTriangleFilled(tip, left, right, IM_COL32(255, 215, 60, 255));
+                dl->AddTriangle(tip, left, right, IM_COL32(20, 20, 20, 200), 1.0f);
+            }
+        }
+
+        if (ProjectSegment(studioVp_, P, A, sa, sb)) {
+            dl->AddLine(sa, sb, IM_COL32(20, 20, 20, 180), 3.0f);
+            dl->AddLine(sa, sb, IM_COL32(100, 200, 255, 220), 1.5f);
+        }
+
+        GizmoPart hotAim = GizmoPart::None;
+        if (studioViewDrag_ != 8) {
+            hotAim = hovered ? GizmoHitTest(studioVp_, studioLightAimFrame_, GizmoMode::Translate, gs, mouse) : GizmoPart::None;
+            studioLightHotGizmo_ = (hovered && hotAim == GizmoPart::None)
+                                       ? GizmoHitTest(studioVp_, studioLightPosFrame_, GizmoMode::Translate, gs, mouse)
+                                       : GizmoPart::None;
+        }
+
+        DrawGizmo(dl, studioVp_, studioLightPosFrame_, GizmoMode::Translate, gs,
+                  studioViewDrag_ == 8 ? GizmoPart::None : studioLightHotGizmo_,
+                  (studioViewDrag_ == 8 && studioLightDragPart_ == LightDragPart::PosGizmo) ? studioLightGizmoDrag_.part : GizmoPart::None);
+        DrawGizmo(dl, studioVp_, studioLightAimFrame_, GizmoMode::Translate, gs,
+                  studioViewDrag_ == 8 ? GizmoPart::None : hotAim,
+                  (studioViewDrag_ == 8 && studioLightDragPart_ == LightDragPart::AimGizmo) ? studioLightGizmoDrag_.part : GizmoPart::None);
+
+        if (studioViewDrag_ == 1 && hovered && !io.KeyAlt && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+            if (hotAim != GizmoPart::None) {
                 studioLightGizmoDrag_ = BeginGizmoDrag(studioVp_, studioLightAimFrame_, GizmoMode::Translate, gs, hotAim, mouse);
                 if (studioLightGizmoDrag_.part != GizmoPart::None) {
                     studioLightDragPart_ = LightDragPart::AimGizmo;
