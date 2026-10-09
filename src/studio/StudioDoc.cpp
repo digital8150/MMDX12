@@ -61,6 +61,7 @@ TrackState CaptureTrack(StudioDoc& doc, int model, RowKind kind, const std::stri
         s.existed = true;
         if (kind == RowKind::Light) s.lights = doc.camera.light;
         else if (kind == RowKind::Shadow) s.shadows = doc.camera.shadow;
+        else if (kind == RowKind::Focus) s.focuses = doc.camera.focus;
         else s.cameras = doc.camera.camera;
         return s;
     }
@@ -88,6 +89,7 @@ void RestoreTrack(StudioDoc& doc, const TrackState& s) {
     if (IsCameraKind(s.kind)) {
         if (s.kind == RowKind::Light) doc.camera.light = s.lights;
         else if (s.kind == RowKind::Shadow) doc.camera.shadow = s.shadows;
+        else if (s.kind == RowKind::Focus) doc.camera.focus = s.focuses;
         else doc.camera.camera = s.cameras;
         doc.TouchModel(-1);
         return;

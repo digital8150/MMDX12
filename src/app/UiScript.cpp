@@ -119,6 +119,9 @@ bool App::ExecuteUiCommand(const std::string& cmd, const std::vector<std::string
                      (int)d.physics, d.history.UndoName().c_str(), d.history.RedoName().c_str(), d.history.Count(),
                      d.history.Bytes() / 1048576.0, d.view.scrollFrame, d.view.pxPerFrame,
                      GImGui->HoveredWindow ? GImGui->HoveredWindow->Name : "-", (unsigned)GImGui->ActiveId);
+            LOG_INFO("STUDIOFOCUS keys=%zu distance=%.2f aperture=%.2f subject=%u subjectName=%s dof=%d", d.camera.focus.size(),
+                     studioFocusShown_, studioFocusAperture_, studioFocusSubject_,
+                     StudioModelLabel(studioFocusSubject_).c_str(), (int)settings_.dof);
         }
         if (studio_) {
             const studio::StudioDoc& d = *studio_;
@@ -126,7 +129,7 @@ bool App::ExecuteUiCommand(const std::string& cmd, const std::vector<std::string
             std::string bone = "-", value;
             size_t poseBones = 0, poseMorphs = 0;
             int poseFrame = -1;
-            if (m && !m->IsStage()) {
+            if (m) {
                 poseBones = m->pose.bones.size();
                 poseMorphs = m->pose.morphs.size();
                 poseFrame = m->pose.frame;
@@ -277,6 +280,34 @@ bool App::ExecuteUiCommand(const std::string& cmd, const std::vector<std::string
                 StudioSelectLight(0);
             }
         }
+    } else if (cmd == "studiofocus") {
+        // studiofocus <frame> <auto|target|manual> [model index | distance] [aperture] [transition] [head|upper|center]
+        if (studio_ && args.size() >= 2) {
+            studio::StudioDoc& d = *studio_;
+            studio::FocusKf k;
+            k.frame = std::max(0, std::atoi(args[0].c_str()));
+            k.mode = args[1] == "target" ? studio::FocusMode::Target
+                     : args[1] == "manual" ? studio::FocusMode::Manual
+                                           : studio::FocusMode::Auto;
+            if (args.size() > 2) {
+                if (k.mode == studio::FocusMode::Target) {
+                    const int mi = std::atoi(args[2].c_str());
+                    k.target = mi >= 0 && mi < (int)d.models.size() ? d.models[(size_t)mi]->uid : 0;
+                } else if (k.mode == studio::FocusMode::Manual) {
+                    k.distance = std::clamp((float)std::atof(args[2].c_str()), 0.5f, 3000.0f);
+                }
+            }
+            if (args.size() > 3) k.aperture = std::clamp((float)std::atof(args[3].c_str()), 0.0f, 3.0f);
+            if (args.size() > 4) k.transition = std::clamp(std::atoi(args[4].c_str()), 0, 600);
+            if (args.size() > 5)
+                k.bone = args[5] == "upper" ? studio::FocusBone::UpperBody
+                         : args[5] == "center" ? studio::FocusBone::Center
+                                               : studio::FocusBone::Head;
+            std::vector<studio::TrackState> before{studio::CaptureTrack(d, -1, studio::RowKind::Focus, "")};
+            studio::UpsertKey(d.camera.focus, k);
+            StudioPushTrackEdit("focus key", before);
+            d.rowsKey = ~0ull;
+        }
     } else if (cmd == "studiolightkey") {  // studiolightkey <index> [frame]
         if (studio_ && !args.empty()) {
             const int idx = std::atoi(args[0].c_str());
@@ -425,6 +456,27 @@ bool App::ExecuteUiCommand(const std::string& cmd, const std::vector<std::string
         }
     } else if (cmd == "studioselect") {
         if (studio_ && !args.empty()) StudioSelectModel(std::atoi(args[0].c_str()));
+    } else if (cmd == "studioreplace") {  // studioreplace <model index> <file>
+        const int i = args.size() >= 2 ? std::atoi(args[0].c_str()) : -1;
+        if (studio_ && i >= 0 && i < (int)studio_->models.size()) {
+            const studio::StudioModel& m = *studio_->models[(size_t)i];
+            StudioAddModelFile(m.kind, std::filesystem::absolute(Utf8ToPath(args[1])), m.uid);
+        }
+    } else if (cmd == "studioreplacelib") {  // studioreplacelib <model index> <substr> (library character / stage)
+        const int i = args.size() >= 2 ? std::atoi(args[0].c_str()) : -1;
+        const std::string needle = ToLowerAscii(args.size() >= 2 ? args[1] : "");
+        if (studio_ && i >= 0 && i < (int)studio_->models.size() && !needle.empty()) {
+            const studio::StudioModel& m = *studio_->models[(size_t)i];
+            const auto find = [&](const auto& list) {
+                for (size_t k = 0; k < list.size(); ++k)
+                    if (ToLowerAscii(list[k].id).find(needle) != std::string::npos ||
+                        ToLowerAscii(list[k].displayName).find(needle) != std::string::npos)
+                        return (int)k;
+                return -1;
+            };
+            if (m.IsStage()) StudioAddLibraryStage(find(library_.stages), m.uid);
+            else if (!m.IsProp()) StudioAddLibraryCharacter(find(library_.characters), m.uid);
+        }
     } else if (cmd == "studioremove") {
         if (studio_ && !args.empty()) StudioRemoveModel(std::atoi(args[0].c_str()));
     } else if (cmd == "studiorename") {

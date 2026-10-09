@@ -1042,7 +1042,8 @@ void OfflineRenderer::Begin(ID3D12GraphicsCommandList* cmd, TransientDescriptors
     m.volReady = false;
     m.motion = view.motionBlur;
     m.focus = view.focusDistance;
-    m.lensRadius = view.focusDistance > 0.0f ? kLensScale * view.focusDistance : 0.0f;
+    const float aperture = job.dof ? job.dofAperture * std::max(0.0f, view.apertureScale) : 0.0f;
+    m.lensRadius = view.focusDistance > 0.0f && aperture > 0.0f ? kLensScale * aperture * view.focusDistance : 0.0f;
     // itemsPerFrame carries over: consecutive images (video) cost about the same per dispatch
     for (Impl::Slot& s : m.slots) { s.counted = false; s.timed = false; }
 

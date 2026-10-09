@@ -35,6 +35,23 @@ struct LightKf { int frame = 0; DirectX::XMFLOAT3 color{0.6f, 0.6f, 0.6f}; Direc
 // Self-shadow key: mode 0 off, 1 mode1, 2 mode2; distance as stored in VMD (0.1 - MMD's 0..9999 UI value * 1e-5,
 // MMD default 8875 -> 0.01125).
 struct ShadowKf { int frame = 0; uint8_t mode = 1; float distance = 0.01125f; };
+// Depth-of-field focus key (studio projects only: VMD has no focus). Each key starts a segment that lasts until the next
+// key. See StudioFocus.h for the evaluation.
+enum class FocusMode : uint8_t { Auto = 0, Target = 1, Manual = 2 };
+enum class FocusBone : uint8_t { Head = 0, UpperBody = 1, Center = 2 };
+struct FocusKf {
+    int frame = 0;
+    FocusMode mode = FocusMode::Auto;
+    FocusBone bone = FocusBone::Head;  // Target: the bone of the target model the focus follows
+    uint32_t target = 0;               // Target: model uid (project file: 1 + model index; 0 = none -> auto)
+    float distance = 40.0f;            // Manual: focus distance (view-space z, MMD units); linear to a following Manual key
+    float aperture = 1.0f;             // x the render aperture (0 = everything sharp, up to 3); linear between keys
+    int transition = 0;                // frames the focus racks over from the previous segment (0 = a cut)
+    bool operator==(const FocusKf& o) const {
+        return frame == o.frame && mode == o.mode && bone == o.bone && target == o.target && distance == o.distance &&
+               aperture == o.aperture && transition == o.transition;
+    }
+};
 
 // Bone interpolation block (64 bytes). The true table T is 16 bytes: x1 of channels X,Y,Z,R, then y1, x2, y2 (4 each).
 // MMD stores T in row 0 with bytes 2 and 3 overwritten by physics flags (0 = physics on), and rows 1..3 as T shifted
@@ -139,11 +156,14 @@ struct MotionData {
     std::vector<CameraKf> camera;                 // camera tracks live in the project's camera, not in model motions
     std::vector<LightKf> light;
     std::vector<ShadowKf> shadow;
+    std::vector<FocusKf> focus;                   // the studio's DoF focus track (never written to VMD)
 
-    bool Empty() const { return bones.empty() && morphs.empty() && ik.empty() && camera.empty() && light.empty() && shadow.empty(); }
+    bool Empty() const {
+        return bones.empty() && morphs.empty() && ik.empty() && camera.empty() && light.empty() && shadow.empty() && focus.empty();
+    }
     int EndFrame() const;  // last key frame over everything (0 when empty)
 
-    // Frame insert/delete over every track (bones, morphs, IK, camera, light, shadow); see InsertFrameSpan/DeleteFrameSpan.
+    // Frame insert/delete over every track (bones, morphs, IK, camera, light, shadow, focus); see InsertFrameSpan/DeleteFrameSpan.
     // Tracks that become empty are removed from the maps. Return true if anything changed.
     bool InsertFrames(int at, int count);
     bool DeleteFrames(int at, int count);

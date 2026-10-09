@@ -160,6 +160,12 @@ ProjectData App::StudioProjectData() const {
     pd.camera.camera = d.camera.camera;
     pd.camera.light = d.camera.light;
     pd.camera.shadow = d.camera.shadow;
+    pd.camera.focus = d.camera.focus;
+    for (FocusKf& k : pd.camera.focus) {  // focus targets: model uid -> 1 + the model's index (0 when gone)
+        if (k.target == 0) continue;
+        const int i = d.IndexOfUid(k.target);
+        k.target = i >= 0 ? (uint32_t)i + 1 : 0;
+    }
     if (d.hasAudio) pd.audioPath = d.audioPath;
     pd.audioOffset = d.audioOffset;
     ProjectEditor& e = pd.editor;
@@ -348,9 +354,10 @@ void App::DrawRecoveryPrompt() {
 // Adding models / songs / audio
 // ---------------------------------------------------------------------------
 
-void App::StudioAddModelFile(ModelKind kind, const std::filesystem::path& file) {
+void App::StudioAddModelFile(ModelKind kind, const std::filesystem::path& file, uint32_t replaceUid) {
     auto job = std::make_unique<StudioJob>();
     job->label = StemUtf8(file);
+    job->replaceUid = replaceUid;
     job->models.resize(1);
     StudioJob* j = job.get();
     const std::string label = job->label;
@@ -360,16 +367,17 @@ void App::StudioAddModelFile(ModelKind kind, const std::filesystem::path& file) 
     studioJobs_.push_back(std::move(job));
 }
 
-void App::StudioAddModelDialog(ModelKind kind) {
+void App::StudioAddModelDialog(ModelKind kind, uint32_t replaceUid) {
     const std::filesystem::path f = OpenFileDialog(hwnd_, ModelFilters());
-    if (!f.empty()) StudioAddModelFile(kind, f);
+    if (!f.empty()) StudioAddModelFile(kind, f, replaceUid);
 }
 
-void App::StudioAddLibraryCharacter(int index) {
+void App::StudioAddLibraryCharacter(int index, uint32_t replaceUid) {
     if (index < 0 || index >= (int)library_.characters.size()) return;
     const CharacterAsset c = library_.characters[(size_t)index];
     auto job = std::make_unique<StudioJob>();
     job->label = c.displayName;
+    job->replaceUid = replaceUid;
     job->models.resize(1);
     StudioJob* j = job.get();
     job->future = std::async(std::launch::async, [j, c] {
@@ -380,11 +388,12 @@ void App::StudioAddLibraryCharacter(int index) {
     studioJobs_.push_back(std::move(job));
 }
 
-void App::StudioAddLibraryStage(int index) {
+void App::StudioAddLibraryStage(int index, uint32_t replaceUid) {
     if (index < 0 || index >= (int)library_.stages.size()) return;
     const StageAsset s = library_.stages[(size_t)index];
     auto job = std::make_unique<StudioJob>();
     job->label = s.displayName;
+    job->replaceUid = replaceUid;
     StudioJob* j = job.get();
     job->future = std::async(std::launch::async, [j, s] { return LoadStudioStage(s, j->models, &j->progress, &j->error); });
     studioJobs_.push_back(std::move(job));
@@ -498,10 +507,34 @@ void App::StudioPollJobs() {
                       danceSkipped ? std::string(Tr("댄스 모션은 캐릭터를 선택하고 다시 적용하세요")) : job.label, {}, false,
                       timeSeconds_ + 5.0};
         } else {
+            // replace: the first loaded model takes the target's place, further parts (a library stage) are added
+            const int replaceAt = job.replaceUid ? d.IndexOfUid(job.replaceUid) : -1;
+            const bool targetGone = job.replaceUid && replaceAt < 0;
+            bool replaced = false;
+            if (targetGone) {
+                toast_ = {Tr("모델을 바꾸지 못했어요"), Tr("바꿀 모델이 장면에 없어요"), {}, true, timeSeconds_ + 5.0};
+            } else if (replaceAt >= 0) {
+                for (StudioPackageModel& pm : job.models) {
+                    if (!pm.pmx) continue;
+                    std::string note;
+                    const std::string before = d.models[(size_t)replaceAt]->name;
+                    if (StudioReplaceModel(replaceAt, pm, &note)) {
+                        replaced = true;
+                        toast_ = {std::string(Tr("모델을 바꿨어요")) + "  ·  " + before + " → " + pm.name,
+                                  (note.empty() ? std::string(Tr("모션 · 배치 · 셰이더는 그대로예요")) : note) + "  ·  " +
+                                      Tr("실행 취소 기록을 비웠어요"),
+                                  {}, false, timeSeconds_ + 6.0};
+                    } else {
+                        toast_ = {Tr("모델을 바꾸지 못했어요"), pm.name, {}, true, timeSeconds_ + 5.0};
+                    }
+                    pm.pmx.reset();  // not added below
+                    break;
+                }
+            }
             UploadBatch batch(ctx_);
-            int first = -1;
+            int first = -1, insertedAfter = 0;
             for (StudioPackageModel& pm : job.models) {
-                if (!pm.pmx) continue;
+                if (!pm.pmx || targetGone) continue;
                 auto sm = std::make_unique<StudioModel>();
                 sm->name = pm.name;
                 sm->libraryId = pm.libraryId;
@@ -519,21 +552,24 @@ void App::StudioPollJobs() {
                 }
                 sm->BuildRowGroups();
                 sm->inst->UpdatePose();
-                if (first < 0) first = (int)d.models.size();
-                d.models.push_back(std::move(sm));
+                // the rest of a replacing library stage goes right after the replaced part (stage parts come first)
+                const int at = replaced ? replaceAt + 1 + insertedAfter++ : (int)d.models.size();
+                if (first < 0) first = at;
+                d.models.insert(d.models.begin() + at, std::move(sm));
+                if (replaced && d.selectedModel >= at) ++d.selectedModel;
             }
             batch.Submit();
             if (first >= 0) {
                 ++d.projectVersion;
                 d.physicsFrame = -1.0f;
-                if (d.models[(size_t)first]->kind != ModelKind::Stage) StudioSelectModel(first);
-                toast_ = {Tr("모델을 추가했어요"), job.label, {}, false, timeSeconds_ + 3.0};
+                if (d.models[(size_t)first]->kind != ModelKind::Stage && !replaced) StudioSelectModel(first);
+                if (!replaced) toast_ = {Tr("모델을 추가했어요"), job.label, {}, false, timeSeconds_ + 3.0};
                 LOG_INFO("studio: added %s (%d models)", job.label.c_str(), (int)d.models.size());
             }
         }
         if (job.mcp) {  // an MCP studio_add_model waits for this
             if (!ok) job.mcp->Reject("Loading failed: " + job.label + (job.error.empty() ? "" : ": " + job.error));
-            else job.mcp->Resolve({{"status", "added"}, {"label", job.label}, {"models_count", (int)d.models.size()},
+            else job.mcp->Resolve({{"status", job.replaceUid ? "replaced" : "added"}, {"label", job.label}, {"models_count", (int)d.models.size()},
                                    {"selected_model", d.selectedModel}});
         }
         if (job.audioPreloaded) audio_.ReleasePreload(job.audio);   // the loaded sound holds its own reference
@@ -558,6 +594,16 @@ void App::StudioRemoveModel(int index) {
     for (auto& job : studioJobs_)
         if (job->targetUid == uid) job->targetUid = 0;
     // undo steps refer to models by index: they cannot survive a removal
+    StudioClearEditState();
+    if (d.selectedModel == index) d.selectedModel = -1;
+    else if (d.selectedModel > index) --d.selectedModel;
+    ++d.projectVersion;
+    toast_ = {Tr("모델을 제거했어요"), name + "  ·  " + Tr("실행 취소 기록을 비웠어요"), {}, false, timeSeconds_ + 4.0};
+    LOG_INFO("studio: removed %s (%d models left)", name.c_str(), (int)d.models.size());
+}
+
+void App::StudioClearEditState() {
+    StudioDoc& d = *studio_;
     d.history.Clear();
     d.selection.clear();
     d.selectedRows.clear();
@@ -566,20 +612,85 @@ void App::StudioRemoveModel(int index) {
     d.collapsed.clear();
     d.clipboard.clear();
     d.clipboardModel = -2;
-    if (d.selectedModel == index) d.selectedModel = -1;
-    else if (d.selectedModel > index) --d.selectedModel;
     d.rowsKey = ~0ull;
     d.physicsFrame = -1.0f;
     d.curveEditing = false;
     d.curveBefore.clear();
-    ++d.projectVersion;
     studioViewDrag_ = 0;
     studioHoverBone_ = -1;
     studioGizmoShown_ = false;
     studioKeyEdit_ = false;
     studioPoseFieldEdit_ = false;
-    toast_ = {Tr("모델을 제거했어요"), name + "  ·  " + Tr("실행 취소 기록을 비웠어요"), {}, false, timeSeconds_ + 4.0};
-    LOG_INFO("studio: removed %s (%d models left)", name.c_str(), (int)d.models.size());
+}
+
+bool App::StudioReplaceModel(int index, StudioPackageModel& pm, std::string* note) {
+    StudioDoc& d = *studio_;
+    if (index < 0 || index >= (int)d.models.size() || !pm.pmx) return false;
+    StudioModel& m = *d.models[(size_t)index];
+    UploadBatch batch(ctx_);
+    std::unique_ptr<GpuModel> gpu =
+        renderer_.CreateModel(batch, *pm.pmx, pm.textures, m.IsStage() ? ModelRole::Stage : ModelRole::Character);
+    batch.Submit();
+    if (!gpu) {
+        LOG_WARN("studio: GPU upload failed: %s", pm.name.c_str());
+        return false;
+    }
+    // the GPU may still read the old model's buffers from frames in flight
+    ctx_.WaitForGpu();
+    const std::shared_ptr<const PmxModel> old = m.pmx;
+    // unregistered viewport edits are keyed by bone / morph index: carry them over by name
+    PoseLayer pose;
+    pose.frame = m.pose.frame;
+    for (const auto& [bi, v] : m.pose.bones) {
+        const int nb = pm.pmx->FindBone(old->bones[(size_t)bi].name);
+        if (nb >= 0) pose.bones[nb] = v;
+    }
+    for (const auto& [mi, w] : m.pose.morphs) {
+        const int nm = pm.pmx->FindMorph(old->morphs[(size_t)mi].name);
+        if (nm >= 0) pose.morphs[nm] = w;
+    }
+    if (pose.Empty()) pose.frame = -1;
+    m.name = pm.name;
+    m.libraryId = pm.libraryId;
+    m.path = pm.pmx->sourcePath;
+    m.pmx = pm.pmx;
+    m.inst = std::make_unique<ModelInstance>(pm.pmx);
+    m.gpu = std::move(gpu);
+    // keys stay keyed by name; tracks the new model lacks are kept (saved / exported as they were)
+    m.motion.CanonicalizeNames(*m.pmx);
+    m.motion.modelName = m.pmx->name;
+    m.bound.reset();
+    m.boundVersion = 0;
+    m.pose = std::move(pose);
+    m.stageMotionApplied = 0;
+    m.stageFrameApplied = -1.0f;
+    m.stagePoseApplied = {};
+    m.placeApplied = {};
+    m.BuildRowGroups();
+    m.inst->UpdatePose();
+    d.TouchModel(index);
+    // pose edits in the history hold bone indices of the old model
+    StudioClearEditState();
+    ++d.projectVersion;
+
+    int missingBones = 0, missingMorphs = 0, orphanProps = 0;
+    for (const auto& [name, keys] : m.motion.bones)
+        if (!keys.empty() && m.pmx->FindBone(name) < 0) ++missingBones;
+    for (const auto& [name, keys] : m.motion.morphs)
+        if (!keys.empty() && m.pmx->FindMorph(name) < 0) ++missingMorphs;
+    for (const auto& c : d.models)
+        if (c->IsProp() && c->attach.parent == (int)m.uid && !c->attach.bone.empty() && m.pmx->FindBone(c->attach.bone) < 0)
+            ++orphanProps;
+    if (note) {
+        note->clear();
+        const auto add = [&](const std::string& t) { *note += (note->empty() ? "" : "  ·  ") + t; };
+        if (missingBones) add(std::to_string(missingBones) + Tr("개 본 트랙이 새 모델에 없어요"));
+        if (missingMorphs) add(std::to_string(missingMorphs) + Tr("개 모프 트랙이 새 모델에 없어요"));
+        if (orphanProps) add(std::to_string(orphanProps) + Tr("개 소품의 부모 본이 새 모델에 없어요"));
+    }
+    LOG_INFO("studio: replaced model %d with %s (%s; unmatched tracks: %d bones, %d morphs; props without bone: %d)", index,
+             pm.name.c_str(), PathToUtf8(m.path).c_str(), missingBones, missingMorphs, orphanProps);
+    return true;
 }
 
 void App::StudioSelectModel(int index) {
@@ -626,8 +737,14 @@ void App::DrawStudioAddMenu() {
     ImGui::SetNextWindowSize(ImVec2(Dp(300.0f), 0));
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(Dp(12.0f), Dp(12.0f)));
     if (ImGui::BeginPopup("##studioadd")) {
+        // replace mode (the model menu's "모델 바꾸기"): the library lists swap that model's file instead of adding
+        const int replaceIdx = studioReplaceUid_ ? d.IndexOfUid(studioReplaceUid_) : -1;
+        if (replaceIdx < 0) studioReplaceUid_ = 0;
         const auto header = [&](const char* title) {
-            if (IconButton("##addback", icon::CaretLeft, Tr("뒤로"), false, 28.0f)) studioAddPage_ = 0;
+            if (IconButton("##addback", icon::CaretLeft, Tr("뒤로"), false, 28.0f)) {
+                studioAddPage_ = 0;
+                studioReplaceUid_ = 0;
+            }
             const ImVec2 c = ImGui::GetItemRectMin();
             Text(ImGui::GetWindowDrawList(), Font::Semibold, size::Small, ImVec2(c.x + Dp(36.0f), c.y + Dp(5.0f)), p.ink, title);
             Gap(6.0f);
@@ -662,7 +779,20 @@ void App::DrawStudioAddMenu() {
             }
         } else if (studioAddPage_ == 1 || studioAddPage_ == 2) {
             const bool chars = studioAddPage_ == 1;
-            header(chars ? Tr("캐릭터 추가") : Tr("스테이지 추가"));
+            const uint32_t replaceUid = studioReplaceUid_;
+            const std::string title = replaceUid ? std::string(Tr("모델 바꾸기 · ")) + d.models[(size_t)replaceIdx]->name
+                                                 : std::string(chars ? Tr("캐릭터 추가") : Tr("스테이지 추가"));
+            header(title.c_str());
+            if (replaceUid) {
+                PushFont(Font::Regular, size::Caption);
+                ImGui::PushStyleColor(ImGuiCol_Text, ImGui::ColorConvertU32ToFloat4(p.ink3));
+                ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + Dp(276.0f));
+                ImGui::TextWrapped("%s", Tr("모션 키 · 배치 · 셰이더 · 소품 연결은 그대로 두고 모델만 바꿔요"));
+                ImGui::PopTextWrapPos();
+                ImGui::PopStyleColor();
+                PopFont();
+                Gap(4.0f);
+            }
             ImGui::BeginChild("##addlist", ImVec2(0, Dp(300.0f)), ImGuiChildFlags_None, ImGuiWindowFlags_NoBackground);
             int shown = 0;
             const int n = chars ? (int)library_.characters.size() : (int)library_.stages.size();
@@ -674,8 +804,8 @@ void App::DrawStudioAddMenu() {
                 ImGui::PushID(i);
                 if (MenuItemChip("##libitem", name.c_str(), chars ? icon::PersonSimple : icon::Mountains)) {
                     ImGui::CloseCurrentPopup();
-                    if (chars) StudioAddLibraryCharacter(i);
-                    else StudioAddLibraryStage(i);
+                    if (chars) StudioAddLibraryCharacter(i, replaceUid);
+                    else StudioAddLibraryStage(i, replaceUid);
                 }
                 ImGui::PopID();
             }
@@ -690,7 +820,7 @@ void App::DrawStudioAddMenu() {
             MenuSeparator();
             if (Button("##addfile", Tr("파일에서 열기…"), icon::FolderOpen, ButtonKind::Secondary, ImVec2(276.0f, 36.0f))) {
                 ImGui::CloseCurrentPopup();
-                StudioAddModelDialog(chars ? ModelKind::Character : ModelKind::Stage);
+                StudioAddModelDialog(chars ? ModelKind::Character : ModelKind::Stage, replaceUid);
             }
         } else {
             header(Tr("라이브러리 곡 적용"));
@@ -773,6 +903,17 @@ void App::DrawStudioModelMenu(int index) {
                 std::snprintf(studioRenameBuf_, sizeof(studioRenameBuf_), "%s", m.name.c_str());
                 ImGui::CloseCurrentPopup();
             }
+            if (MenuItemChip("##mreplace", m.IsProp() ? Tr("모델 파일 바꾸기…") : Tr("모델 바꾸기…"), icon::ArrowCw)) {
+                ImGui::CloseCurrentPopup();
+                if (m.IsProp()) {
+                    StudioAddModelDialog(ModelKind::Prop, m.uid);
+                } else {  // the "+" popup's library list in replace mode (with its file button)
+                    studioReplaceUid_ = m.uid;
+                    studioAddPage_ = m.IsStage() ? 2 : 1;
+                    studioOpenAdd_ = true;
+                }
+            }
+            Tooltip(Tr("모션 키 · 배치 · 셰이더는 그대로 두고 모델만 바꿔요"));
             if (!m.IsStage()) {
                 if (MenuItemChip("##mimport", Tr("모션 VMD 불러오기…"), icon::DownloadSimple)) {
                     ImGui::CloseCurrentPopup();

@@ -36,13 +36,15 @@ void DofPass::Execute(PassContext& pc) {
     RenderTargets& t = pc.targets;
     ID3D12GraphicsCommandList* cmd = pc.cmd;
     if (!pc.settings.dof || pc.offscreen || !out_ || !pc.targets.hdrFinal) return;
+    const float aperture = pc.settings.dofAperture * pc.view.apertureScale;
+    if (aperture <= 0.0f) return;  // a focus key with aperture 0: everything sharp
 
     const float maxCocPx = pc.settings.dofMaxRadius * static_cast<float>(out_.height) / 1080.0f;
     const float r = maxCocPx * 0.5f;   // max radius in half-res pixels
     const float radScale = std::max(0.5f, r * r / (2.0f * 64.0f));   // keeps the gather at ~64 samples
     // Quad view: the orthographic views are not a lens image, only the camera quadrant gets depth of field (gP2 = its uv rect)
     const bool quad = !pc.view.extraViews.empty();
-    const float c[12] = {pc.view.focusDistance, pc.settings.dofAperture, maxCocPx, radScale,
+    const float c[12] = {pc.view.focusDistance, aperture, maxCocPx, radScale,
                          1.0f / static_cast<float>(out_.width), 1.0f / static_cast<float>(out_.height),
                          1.0f / static_cast<float>(half_.width), 1.0f / static_cast<float>(half_.height),
                          quad ? pc.view.mainRect[0] : 0.0f, quad ? pc.view.mainRect[1] : 0.0f,

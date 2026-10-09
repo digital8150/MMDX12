@@ -24,8 +24,9 @@ progress.md is the session log. Read its latest entry first.
     Video renderer: `--offline-renderer raster|rt|pt|gi` (the real-time ones render frame by frame at the video size via `Renderer::Render` +
     `ReadFinalImage`; PT accumulates several passes per frame). The render dialog measures its time estimate by itself: a headless sample render behind the UI (`--screen video` shows it; log `VIDEO PROBE`,
     results in `videoProbe=` ini lines). `--offline-probe` runs the same measurement from a play scene.
-    The dialog's effects are `VideoRenderConfig` (bloom, convolution bloom, volumetric, DoF only for the real-time renderers);
-    stills use the effects chosen at scene entry (`AppSettings`). Check `build_dev` builds when `build/` is locked by a running render.
+    The dialog's effects are `VideoRenderConfig` (bloom, convolution bloom, volumetric, DoF for every renderer: GI's thin lens
+    follows `OfflineJobDesc::dof` / `dofAperture`, the render benchmark keeps the defaults); stills use the effects chosen at
+    scene entry (`AppSettings`). Check `build_dev` builds when `build/` is locked by a running render.
   - Studio: `--character <s> [--stage <s>] [--song <s>] --screen studio --seek <sec> --frames N --capture out.png`.
     `--screen studio` without `--character` opens a new empty project; `--project <file.mmdxproj>` opens a project.
     Studio render (quits when done): `--project p.mmdxproj --offline-video out.mp4 [--offline-range a b]` (timeline
@@ -39,7 +40,9 @@ progress.md is the session log. Read its latest entry first.
     part; `studiostate` also logs `STUDIOPOSE`, `STUDIOPROJ` and one `STUDIOMODEL` line per model). Projects/models
     without dialogs: `studionew`, `studiosave`/`studioopen <file>`, `studioautosave`, `studioadd <character|stage|prop> <file>`,
     `studioaddlib <character|stage> <substr>`, `studiosong <substr>`, `studioaudio <file|none> [offset]`,
-    `studioselect`/`studioremove <index>`, `studiorename <text>`, `studioattach <parent|-1> <bone|-> tx ty tz rx ry rz s`.
+    `studioselect`/`studioremove <index>`, `studioreplace <index> <file>` / `studioreplacelib <index> <substr>` (swap a model's file), `studiorename <text>`, `studioattach <parent|-1> <bone|-> tx ty tz rx ry rz s`.
+    Focus: `studiofocus <frame> <auto|target|manual> [model index|distance] [aperture] [transition] [head|upper|center]`
+    upserts a focus key (`studiostate` logs a `STUDIOFOCUS` line: distance, aperture, subject).
     Lighting rig: `studiolight <vmd|preset|custom> [presetIndex] [spotCount] [keyOverride 0|1]` sets the studio's
     lighting source (+ demo spots / key override; `studiostate` logs them), `studiokeyspot <spotIndex> [frame]` keys
     that spot's values through the ordinary undoable insert.
@@ -57,6 +60,7 @@ progress.md is the session log. Read its latest entry first.
   - `studio_edit_test`: Studio key-edit core (move/insert/delete frames, undo byte budget, 100k-key timings)
   - `studio_gizmo_test` / `studio_pose_test`: gizmo projection/hit/drag math and bone overlay; mirror names/poses, VPD pose ops
   - `studio_project_test`: .mmdxproj save/load round trip, VMD naming/cleanup, atomic writes, prop offset matrix
+  - `studio_focus_test`: DoF focus track evaluation, automatic focus (score, hysteresis, rack), focus keys in projects
   - `mmdx12_mcp [--pipe <name>] [--pid <pid>] [--launch] [--timeout <ms>]`: Model Context Protocol stdio bridge
   - `mcp_smoke.py [--handshake-only] [--scenario]`: MCP test client (protocol handshake & end-to-end scenario)
 - The play bar auto-hides while playing with no mouse movement, so captures usually don't show it.
@@ -112,6 +116,13 @@ progress.md is the session log. Read its latest entry first.
     the global preset (App.cpp `BuildFrameView`); the benchmark stays Studio/ deterministic. In the studio the shadow track
     sets `FrameView::shadowsOff`/`shadowDistance`; play mode ignores VMD light/shadow unless `settings_.motionLighting`.
     Perspective-off keys render as a 3 degree lens from far away.
+  - DoF focus (`studio/StudioFocus.*`, `app/UiStudioFocus.cpp`): the camera target's `RowKind::Focus` row = `MotionData::focus`
+    (`FocusKf`, stepped segments: Auto / Target model uid + bone / Manual distance linear to a following Manual key; per-key
+    aperture scale (linear, 0 = sharp) and `transition` frames = a smoothstep rack in 1/z). Saved in the project's editor
+    "focus" array (targets as 1 + model index), never in VMD. No keys = `AutoFocus`: visible characters scored by on-screen
+    height^1.5 x visible share x head centrality, 0.7 hysteresis, 0.35 s rack, snaps on camera cuts / time jumps (stateful:
+    the viewport and renders share `studioAutoFocus_`). `StudioComputeFocus` writes `FrameView::focusDistance` and
+    `apertureScale` (DofPass and the GI lens multiply it in). Play mode keeps the single character's head.
   - Projects (`studio/StudioProject.*`, `app/UiStudioProject.cpp`): `.mmdxproj` is UTF-8 JSON (format version, relative
     paths) next to standard VMDs (`<stem> - <model>.vmd`, `<stem> - camera.vmd`); every file is written tmp + rename.
     Dirty = `history.Version()` or `projectVersion` (add/remove/rename/visibility/audio) changed since the save. Autosave
@@ -119,7 +130,9 @@ progress.md is the session log. Read its latest entry first.
     runs); the select screen offers it at the next start; saving or leaving the studio deletes it.
   - Models are added inside the studio on worker threads (`StudioJob`, `LoadStudioModel/Stage/Song`), uploaded in
     `StudioPollJobs`. `StudioModel::uid` is stable; removal waits for the GPU and clears the undo history (commands hold
-    model indices). Kinds: character, stage (static BLAS), prop (GPU role Character so its BLAS follows it): the prop's
+    model indices). Replacing a model's file (outliner menu "모델 바꾸기", the "+" popup in replace mode: `StudioJob::replaceUid`,
+    `App::StudioReplaceModel`) keeps uid, motion keys (re-canonicalised by name), placement, prop links, shader and the
+    pose layer (remapped by name); it also clears the undo history (pose edits hold bone indices). Kinds: character, stage (static BLAS), prop (GPU role Character so its BLAS follows it): the prop's
     root = `PropOffsetMatrix(attach) * parent bone world * parent scale`, set with `ModelInstance::SetRootTransform`
     after the other models are posed (props parent to characters/stages only).
   - Rendering (`app/UiStudioRender.cpp`): the top bar's render menu opens the lobby's video dialog (`DrawVideoRenderDialog`

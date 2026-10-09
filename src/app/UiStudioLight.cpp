@@ -256,6 +256,7 @@ void App::DrawStudioLightOutliner() {
     // Light rows
     for (size_t i = 0; i < d.lights.size(); ++i) {
         SceneLight& l = d.lights[i];
+        ImGui::PushID("light");  // model rows push their index in the same scope
         ImGui::PushID((int)l.uid);
         ImDrawList* cdl = ImGui::GetWindowDrawList();
         const ImVec2 a = ImGui::GetCursorScreenPos();
@@ -309,6 +310,7 @@ void App::DrawStudioLightOutliner() {
 
         ImGui::SetCursorScreenPos(ImVec2(a.x, b.y));
         ImGui::Dummy(ImVec2(w, 0.0f));
+        ImGui::PopID();
         ImGui::PopID();
     }
 }

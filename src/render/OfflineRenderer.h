@@ -70,6 +70,10 @@ struct OfflineJobDesc {
     bool bloomConvolution = false;   // FFT convolution bloom with the starburst kernel instead of the soft glow
     bool volumetric = false;         // sun shafts + spotlight cones, sun shadowed with ray queries
     float volumetricDensity = 1.0f;  // 0.25 .. 4
+    // Thin-lens depth of field focused on FrameView::focusDistance; the lens radius scales with dofAperture and
+    // FrameView::apertureScale. Off: a pinhole camera (everything sharp). The render benchmark keeps the defaults.
+    bool dof = true;
+    float dofAperture = 1.0f;        // 0.2 .. 3 (1 = the original lens)
     // The shader packs' effect stack (RenderSettings::packEffects of the real-time frame); empty = no effects.
     std::vector<EffectStackEntry> effects;
 };

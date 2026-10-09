@@ -247,17 +247,16 @@ void App::DrawVideoRenderDialog() {
             ImGui::Unindent(Dp(16.0f));
         }
 
-        if (cfg.DofApplies()) {
-            Switch("##dof", Tr("피사계 심도"), &cfg.dof, Tr("초점 밖이 흐려집니다"));
-            if (cfg.dof) {
-                ImGui::Indent(Dp(16.0f));
-                SliderRow("##dofaperture", Tr("조리개"), &cfg.dofAperture, 0.2f, 3.0f, "%.1f");
-                ImGui::Unindent(Dp(16.0f));
-            }
-        } else {
+        Switch("##dof", Tr("피사계 심도"), &cfg.dof, Tr("초점 밖이 흐려집니다"));
+        if (cfg.dof) {
+            ImGui::Indent(Dp(16.0f));
+            SliderRow("##dofaperture", Tr("조리개"), &cfg.dofAperture, 0.2f, 3.0f, "%.1f");
+            ImGui::Unindent(Dp(16.0f));
+        }
+        if (cfg.Gi()) {
             const ImVec2 pos = ImGui::GetCursorScreenPos();
             Text(ImGui::GetWindowDrawList(), Font::Regular, size::Caption, ImVec2(pos.x, pos.y + Dp(2.0f)), p.ink3,
-                 Tr("오프라인 GI는 피사계 심도와 모션 블러를 자동으로 적용합니다"));
+                 Tr("오프라인 GI는 모션 블러를 자동으로 적용합니다"));
             ImGui::Dummy(ImVec2(colW, Dp(24.0f)));
         }
 

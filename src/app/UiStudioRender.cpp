@@ -180,7 +180,7 @@ void App::DrawStudioEffectsMenu() {
         SectionLabel(Tr("실시간 효과"));
         changed |= Switch("##bloom", Tr("블룸"), &settings_.bloom);
         changed |= Switch("##bloomconv", Tr("컨볼루션 블룸"), &settings_.bloomConvolution, Tr("FFT 스타버스트 블룸"));
-        changed |= Switch("##dof", Tr("피사계 심도"), &settings_.dof, Tr("캐릭터에 초점을 맞추고 배경을 흐림"));
+        changed |= Switch("##dof", Tr("피사계 심도"), &settings_.dof, Tr("초점 밖을 흐림 · 뷰포트와 GI 스틸 (초점은 카메라의 초점 트랙)"));
         if (settings_.dof) {
             Gap(4.0f);
             changed |= SliderRow("##dofap", Tr("조리개"), &settings_.dofAperture, 0.2f, 3.0f, "%.2f");

@@ -70,8 +70,7 @@ struct VideoRenderConfig {
     int fps = 60;          // one of kVideoFpsChoices
     int bitrateMbps = 100; // H.264 video bit rate
     int quality = 2;       // index into kVideoQualities / kVideoRealtimeQualities
-    // Effects. Depth of field exists only for the real-time renderers (the GI renderer computes its
-    // own lens blur and motion blur).
+    // Effects. Depth of field applies to every renderer (GI: a thin lens; its motion blur stays automatic).
     bool bloom = true;
     bool bloomConvolution = false;
     bool volumetric = false;
@@ -81,7 +80,7 @@ struct VideoRenderConfig {
 
     VideoRenderer Renderer() const { return (VideoRenderer)renderer; }
     bool Gi() const { return IsGiRenderer(Renderer()); }
-    bool DofApplies() const { return !Gi(); }          // whether the DoF option exists for the chosen renderer
+    bool DofApplies() const { return true; }           // whether the DoF option exists for the chosen renderer (all do)
     bool DofActive() const { return DofApplies() && dof; }
 
     void Clamp() {

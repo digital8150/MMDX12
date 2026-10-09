@@ -75,7 +75,7 @@ struct ProjectEditor {
 
 struct ProjectData {
     std::vector<ProjectModel> models;
-    MotionData camera;                 // camera, light and self-shadow keys (bones/morphs ignored)
+    MotionData camera;                 // camera, light and self-shadow keys (camera VMD) + focus keys (editor "focus"); bones/morphs ignored
     std::filesystem::path audioPath;   // absolute; empty = no audio
     double audioOffset = 0.0;          // seconds: the audio starts at this timeline time (may be negative)
     ProjectEditor editor;

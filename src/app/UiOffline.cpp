@@ -32,6 +32,8 @@ OfflineJobDesc MakeJobDesc(const AppOptions& o, const AppSettings& st, const Vid
     j.bloomConvolution = video ? v.bloomConvolution : st.bloomConvolution;
     j.volumetric = video ? v.volumetric : st.volumetric;
     j.volumetricDensity = video ? v.volumetricDensity : st.volumetricDensity;
+    j.dof = video ? v.dof : st.dof;
+    j.dofAperture = video ? v.dofAperture : st.dofAperture;
     // Shader packs: the same effect stack as the real-time frame (a video's real-time renderers get it from VideoRealtimeSettings)
     j.effects = st.effectStack;
     if (video) {

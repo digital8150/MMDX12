@@ -187,6 +187,7 @@ struct FrameView {
     bool studioFloor = false;       // draw the procedural studio floor at y = 0
     bool cameraCut = false;         // discard temporal history (seek, VMD camera cut)
     float focusDistance = 0.0f;     // DoF focus plane as view-space z (MMD units); <= 0: autofocus on the screen centre
+    float apertureScale = 1.0f;     // DoF strength of this frame (studio focus keys) x the settings' aperture; 0 = all sharp
     // Studio self-shadow track: turns the sun shadows off for this frame / overrides the cascade range (MMD units, > 0).
     bool shadowsOff = false;
     float shadowDistance = 0.0f;

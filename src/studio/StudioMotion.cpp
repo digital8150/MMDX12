@@ -68,6 +68,7 @@ int MotionData::EndFrame() const {
     if (!camera.empty()) end = std::max(end, camera.back().frame);
     if (!light.empty()) end = std::max(end, light.back().frame);
     if (!shadow.empty()) end = std::max(end, shadow.back().frame);
+    if (!focus.empty()) end = std::max(end, focus.back().frame);
     return end;
 }
 
@@ -80,6 +81,7 @@ bool MotionData::InsertFrames(int at, int count) {
     changed |= InsertFrameSpan(camera, at, count);
     changed |= InsertFrameSpan(light, at, count);
     changed |= InsertFrameSpan(shadow, at, count);
+    changed |= InsertFrameSpan(focus, at, count);
     return changed;
 }
 
@@ -92,6 +94,7 @@ bool MotionData::DeleteFrames(int at, int count) {
     changed |= DeleteFrameSpan(camera, at, count);
     changed |= DeleteFrameSpan(light, at, count);
     changed |= DeleteFrameSpan(shadow, at, count);
+    changed |= DeleteFrameSpan(focus, at, count);
     // Tracks that lost their last key are removed from the maps.
     for (auto it = bones.begin(); it != bones.end();) it = it->second.empty() ? bones.erase(it) : std::next(it);
     for (auto it = morphs.begin(); it != morphs.end();) it = it->second.empty() ? morphs.erase(it) : std::next(it);
@@ -112,6 +115,7 @@ size_t MotionData::ApproxBytes() const {
     bytes += camera.capacity() * sizeof(CameraKf);
     bytes += light.capacity() * sizeof(LightKf);
     bytes += shadow.capacity() * sizeof(ShadowKf);
+    bytes += focus.capacity() * sizeof(FocusKf);
     return bytes;
 }
 
@@ -146,6 +150,7 @@ void MotionData::Merge(const MotionData& o) {
     for (const CameraKf& k : o.camera) UpsertKey(camera, k);
     for (const LightKf& k : o.light) UpsertKey(light, k);
     for (const ShadowKf& k : o.shadow) UpsertKey(shadow, k);
+    for (const FocusKf& k : o.focus) UpsertKey(focus, k);
 }
 
 namespace {

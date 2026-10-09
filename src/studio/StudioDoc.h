@@ -53,6 +53,10 @@ struct StudioModel {
     uint64_t boundVersion = 0;     // motionVersion `bound` was built from
     std::shared_ptr<BoundMotion> bound;
     PoseLayer pose;                // unregistered viewport edits (override the motion at pose.frame)
+    // stages: what the static BLAS was last built from (StudioUpdateModel rebuilds it when this changes)
+    uint64_t stageMotionApplied = 0;
+    float stageFrameApplied = -1.0f;
+    PoseLayer stagePoseApplied;
     // Display-frame group of each bone/morph's first timeline row (CanonicalRow); filled on load.
     std::vector<uint32_t> boneRowGroup, morphRowGroup;
     void BuildRowGroups();
@@ -62,16 +66,19 @@ struct StudioModel {
 
 // Timeline row ids: kind in the top byte, then a 24-bit group and a 32-bit index. Light is the camera VMD's light
 // track; SceneLight is the keys of one scene light (SceneLight.h): MakeRowId(RowKind::SceneLight, 0, light uid).
-enum class RowKind : uint8_t { Group = 1, Bone = 2, Morph = 3, Camera = 4, Light = 5, Shadow = 6, SceneLight = 7 };
+// Focus is the studio's depth-of-field focus track (camera MotionData::focus, saved in the project, not in VMD).
+enum class RowKind : uint8_t { Group = 1, Bone = 2, Morph = 3, Camera = 4, Light = 5, Shadow = 6, SceneLight = 7, Focus = 8 };
 inline uint64_t MakeRowId(RowKind k, uint32_t group, uint32_t index) {
     return ((uint64_t)k << 56) | ((uint64_t)(group & 0xFFFFFF) << 32) | index;
 }
 inline RowKind RowKindOf(uint64_t id) { return (RowKind)(id >> 56); }
 inline uint32_t RowIndexOf(uint64_t id) { return (uint32_t)id; }
 inline uint32_t RowGroupOf(uint64_t id) { return (uint32_t)(id >> 32) & 0xFFFFFF; }
-// Camera, Light and Shadow all live in the camera MotionData (model -1): they are selected, edited and
+// Camera, Light, Shadow and Focus all live in the camera MotionData (model -1): they are selected, edited and
 // undone through it together. (SceneLight rows are offered through the camera target too, but live in the light list.)
-inline bool IsCameraKind(RowKind k) { return k == RowKind::Camera || k == RowKind::Light || k == RowKind::Shadow; }
+inline bool IsCameraKind(RowKind k) {
+    return k == RowKind::Camera || k == RowKind::Light || k == RowKind::Shadow || k == RowKind::Focus;
+}
 // The track name of a SceneLight row (StudioTrackOfRow, TrackState::name): the light's uid in decimal.
 inline std::string LightTrackName(uint32_t uid) { return std::to_string(uid); }
 inline uint32_t LightUidOfTrack(const std::string& name) { return (uint32_t)std::strtoul(name.c_str(), nullptr, 10); }
@@ -86,7 +93,7 @@ using KeyId = std::pair<uint64_t, int>;
 struct ClipboardKey {
     uint64_t row = 0;
     int offset = 0;  // frame relative to the first copied key
-    BoneKf bone; MorphKf morph; CameraKf camera; LightKf light; ShadowKf shadow; LightKey sceneLight;
+    BoneKf bone; MorphKf morph; CameraKf camera; LightKf light; ShadowKf shadow; LightKey sceneLight; FocusKf focus;
 };
 
 struct StudioDoc {
@@ -191,7 +198,7 @@ struct StudioDoc {
 // every operation (move, delete, paste, curve, insert) trivially reversible.
 struct TrackState {
     int model = -1;                // -1 camera
-    RowKind kind = RowKind::Bone;  // Bone, Morph, Camera, Light, Shadow or SceneLight
+    RowKind kind = RowKind::Bone;  // Bone, Morph, Camera, Light, Shadow, Focus or SceneLight
     std::string name;              // bone/morph name (scene light: LightTrackName); unused for the camera
     uint32_t uid = 0;              // SceneLight: the light's uid (LightUidOfTrack(name))
     bool existed = false;          // the track existed (absent tracks are erased again)
@@ -200,12 +207,14 @@ struct TrackState {
     std::vector<CameraKf> cameras;
     std::vector<LightKf> lights;   // the camera VMD's light track
     std::vector<ShadowKf> shadows;
+    std::vector<FocusKf> focuses;
     std::vector<LightKey> lightKeys;  // a scene light's keys
 
     size_t Bytes() const {
         return sizeof(TrackState) + name.size() + bones.capacity() * sizeof(BoneKf) + morphs.capacity() * sizeof(MorphKf) +
                cameras.capacity() * sizeof(CameraKf) + lights.capacity() * sizeof(LightKf) +
-               shadows.capacity() * sizeof(ShadowKf) + lightKeys.capacity() * sizeof(LightKey);
+               shadows.capacity() * sizeof(ShadowKf) + focuses.capacity() * sizeof(FocusKf) +
+               lightKeys.capacity() * sizeof(LightKey);
     }
 };
 // A SceneLight track is addressed by its uid (`name` = LightTrackName(uid)): restoring one whose light no longer

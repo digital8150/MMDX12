@@ -72,7 +72,7 @@ int MorphPanelSlot(uint8_t panel) { return panel == 2 ? 0 : panel == 1 ? 1 : pan
 StudioModel* App::StudioPoseModel() {
     if (!studio_) return nullptr;
     StudioModel* m = studio_->Selected();
-    return m && !m->IsStage() ? m : nullptr;
+    return m;  // characters, props and stages (stage motions key bones too)
 }
 
 std::vector<PoseBone> App::StudioCurrentPose(const StudioModel& m) const {
@@ -86,12 +86,13 @@ std::vector<PoseBone> App::StudioCurrentPose(const StudioModel& m) const {
     return out;
 }
 
-void App::StudioApplyPose(StudioModel& m) {
-    if (m.pose.Empty() || m.pose.frame != studio_->Frame()) return;
+bool App::StudioApplyPose(StudioModel& m) {
+    if (m.pose.Empty() || m.pose.frame != studio_->Frame()) return false;
     // a video renders the registered motion only (MMD); a still shows the edits like the viewport
-    if (offline_.studio && offline_.mode != OfflineMode::Still) return;
+    if (offline_.studio && offline_.mode != OfflineMode::Still) return false;
     for (const auto& [b, v] : m.pose.bones) m.inst->SetBoneAnim(b, v.t, v.r);
     for (const auto& [i, w] : m.pose.morphs) m.inst->SetMorphWeight(i, w);
+    return true;
 }
 
 void App::StudioSetPose(const char* undoName, const PoseLayer& before) {
@@ -396,10 +397,8 @@ void App::StudioViewportPose(float x0, float y0, float x1, float y1, bool hovere
     StudioDoc& d = *studio_;
     ImGuiIO& io = ImGui::GetIO();
     StudioModel* m = StudioPoseModel();
-    // a selected visible stage (no bones): the model gizmo only, never the bone overlay
-    StudioModel* stage = !m && d.Selected() && d.Selected()->IsStage() && d.Selected()->visible ? d.Selected() : nullptr;
     studioGizmoShown_ = false;
-    if ((!m && !stage) || (m && !m->visible) || d.playing) {
+    if (!m || !m->visible || d.playing) {
         studioHoverBone_ = -1;
         studioGizmoHot_ = GizmoPart::None;
         if (studioViewDrag_ == 2) {  // playback started mid-drag: keep the edit made so far
@@ -420,7 +419,7 @@ void App::StudioViewportPose(float x0, float y0, float x1, float y1, bool hovere
     if (m && d.activeBone >= (int)m->pmx->bones.size()) d.activeBone = -1;
     studioGizmoShown_ = m && d.activeBone >= 0 && StudioGizmoFrameOf(*m, d.activeBone, studioGizmoFrame_, studioGizmoMode_);
     // no bone picked: the toolbar's model tool moves / rotates the whole character / stage (world axes at its origin)
-    StudioModel* const mm = m ? m : stage;
+    StudioModel* const mm = m;
     const bool modelTool = d.modelGizmo && d.activeBone < 0 && mm;
     if (modelTool) {
         studioGizmoFrame_ = GizmoFrame{};
@@ -430,7 +429,7 @@ void App::StudioViewportPose(float x0, float y0, float x1, float y1, bool hovere
     }
     const ImVec2 mouse = io.MousePos;
 
-    // hover (not while dragging): the gizmo first, then the bones (stages have no bones)
+    // hover (not while dragging): the gizmo first, then the bones
     if (studioViewDrag_ != 2) {
         studioGizmoHot_ = hovered && studioGizmoShown_ ? GizmoHitTest(studioVp_, studioGizmoFrame_, studioGizmoMode_, gs, mouse)
                                                        : GizmoPart::None;
@@ -1212,8 +1211,7 @@ void App::StudioViewportLightHandles(bool hovered) {
 void App::StudioDrawPoseOverlay(const ViewProj& vp, float x0, float y0, float x1, float y1) {
     StudioDoc& d = *studio_;
     StudioModel* m = StudioPoseModel();
-    StudioModel* stage = !m && d.Selected() && d.Selected()->IsStage() && d.Selected()->visible ? d.Selected() : nullptr;
-    if ((!m && !stage) || d.playing) return;
+    if (!m || !m->visible || d.playing) return;
     ImDrawList* dl = ImGui::GetWindowDrawList();
     dl->PushClipRect(ImVec2(x0, y0), ImVec2(x1, y1), true);
     if (m && d.showBones)

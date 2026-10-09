@@ -300,6 +300,10 @@ void App::DrawStudioCameraPanel(float w) {
         ImGui::SetCursorScreenPos(c);
         ImGui::Dummy(ImVec2(w, bw));
     }
+
+    // --- depth-of-field focus track
+    separator(8.0f);
+    DrawStudioFocusSection(w);
     separator(10.0f);
     ImGui::Dummy(ImVec2(w, Dp(2.0f)));
 }
@@ -309,6 +313,7 @@ bool App::DrawStudioCameraKeyFields(float w, RowKind kind, int frame, bool live)
     StudioDoc& d = *studio_;
     const Palette& p = P();
     ImDrawList* cdl = ImGui::GetWindowDrawList();
+    if (kind == RowKind::Focus) return DrawStudioFocusKeyFields(w, frame);
     bool changed = false, ended = false;
     // label + full-width widget row
     const auto row = [&](const char* label, auto&& widget) {

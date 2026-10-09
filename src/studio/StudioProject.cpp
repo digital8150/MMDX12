@@ -592,6 +592,21 @@ bool SaveProject(const std::filesystem::path& file, const ProjectData& data, std
             nlohmann::json lights = nlohmann::json::array();
             for (const SceneLight& l : data.editor.lights) lights.push_back(SceneLightJson(l));
             ed["lights"] = std::move(lights);
+            // the DoF focus track (no VMD equivalent); a target is 1 + the model index (0 none)
+            nlohmann::json focus = nlohmann::json::array();
+            for (const FocusKf& k : data.camera.focus)
+                focus.push_back({{"frame", k.frame},
+                                 {"mode", k.mode == FocusMode::Target   ? "target"
+                                          : k.mode == FocusMode::Manual ? "manual"
+                                                                        : "auto"},
+                                 {"bone", k.bone == FocusBone::UpperBody ? "upperBody"
+                                          : k.bone == FocusBone::Center  ? "center"
+                                                                         : "head"},
+                                 {"target", k.target},
+                                 {"distance", k.distance},
+                                 {"aperture", k.aperture},
+                                 {"transition", k.transition}});
+            ed["focus"] = std::move(focus);
             j["editor"] = std::move(ed);
         }
         if (!data.recoveryOf.empty())
@@ -804,6 +819,25 @@ bool LoadProject(const std::filesystem::path& file, ProjectData& out, std::strin
                 if (const nlohmann::json* li = ObjectAt(e, "lighting")) {
                     legacy = ReadLegacyLighting(*li);
                     hadLegacyLighting = true;
+                }
+            }
+        }
+        if (j.contains("editor") && j["editor"].is_object()) {
+            const auto focusIt = j["editor"].find("focus");
+            if (focusIt != j["editor"].end() && focusIt->is_array()) {
+                for (const nlohmann::json& jk : *focusIt) {
+                    if (!jk.is_object()) continue;
+                    FocusKf k;
+                    k.frame = std::max(0, ReadInt(jk, "frame", 0));
+                    const std::string mode = ReadString(jk, "mode", "auto");
+                    k.mode = mode == "target" ? FocusMode::Target : mode == "manual" ? FocusMode::Manual : FocusMode::Auto;
+                    const std::string bone = ReadString(jk, "bone", "head");
+                    k.bone = bone == "upperBody" ? FocusBone::UpperBody : bone == "center" ? FocusBone::Center : FocusBone::Head;
+                    k.target = (uint32_t)std::max(0, ReadInt(jk, "target", 0));
+                    k.distance = std::clamp((float)ReadDouble(jk, "distance", k.distance), 0.5f, 3000.0f);
+                    k.aperture = std::clamp((float)ReadDouble(jk, "aperture", k.aperture), 0.0f, 3.0f);
+                    k.transition = std::clamp(ReadInt(jk, "transition", 0), 0, 600);
+                    UpsertKey(out.camera.focus, k);
                 }
             }
         }

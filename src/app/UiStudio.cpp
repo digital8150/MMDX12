@@ -157,6 +157,12 @@ bool App::FinishStudioLoad() {
             const int di = pi < remap.size() ? remap[pi] : -1;
             l.targetUid = di >= 0 ? doc->models[(size_t)di]->uid : 0;
         }
+        for (FocusKf& k : doc->camera.focus) {  // focus targets: 1 + the project's model index -> the model's uid
+            if (k.target == 0) continue;
+            const size_t pi = k.target - 1;
+            const int di = pi < remap.size() ? remap[pi] : -1;
+            k.target = di >= 0 ? doc->models[(size_t)di]->uid : 0;
+        }
         doc->useShadowTrack = e.useShadowTrack;
         doc->showCameraPath = e.showCameraPath;
         doc->loop = e.loop;
@@ -433,7 +439,7 @@ void App::StudioUpdateModel(StudioModel& m, uint64_t slot, float frame, float ph
     ModelInstance& inst = *m.inst;
     if (m.bound) m.bound->Evaluate(frame, inst);
     else inst.ResetPose();
-    if (!m.IsStage()) StudioApplyPose(m);
+    const bool posed = StudioApplyPose(m);
     if (m.kind == ModelKind::Character) {
         // placement: the root carries rotation + position; the display scale (library x placement) scales about the
         // origin afterwards, so the position is divided by it
@@ -471,9 +477,17 @@ void App::StudioUpdateModel(StudioModel& m, uint64_t slot, float frame, float ph
                                                       pl.rotationDeg.z * kRad)),
             DirectX::XMMatrixTranslation(pl.translation.x, pl.translation.y, pl.translation.z)));
         inst.SetRootTransform(root);
-        if (!(m.placeApplied == m.place)) {
+        // The stage BLAS is built once: rebuild it when what the stage shows changes (placement, keys, the frame of
+        // a keyed stage, viewport edits). Keyless, unedited stages are posed once.
+        const PoseLayer layer = posed ? m.pose : PoseLayer{};
+        const bool changed = !(m.placeApplied == m.place) || m.stageMotionApplied != m.motionVersion ||
+                             (m.bound && m.stageFrameApplied != frame) || !SamePoseLayer(m.stagePoseApplied, layer);
+        if (changed) {
             m.placeApplied = m.place;
-            m.gpu->Rt().blasBuilt = false;  // the stage BLAS was built once, at the old placement
+            m.stageMotionApplied = m.motionVersion;
+            m.stageFrameApplied = frame;
+            m.stagePoseApplied = layer;
+            m.gpu->Rt().blasBuilt = false;
             if (!m.bound) inst.UpdatePose(0.0f);
         }
     }
@@ -552,13 +566,11 @@ void App::BuildStudioFrameView(FrameView& view) {
 
     // stage parts first (the renderer's draw order), then characters and props
     bool anyStage = false;
-    const StudioModel* performer = nullptr;
     for (int pass = 0; pass < 2; ++pass) {
         for (const auto& m : d.models) {
             if (!m->visible || m->IsStage() != (pass == 0)) continue;
             view.models.push_back(m->gpu.get());
             if (m->IsStage()) anyStage = true;
-            else if (!performer && m->kind == ModelKind::Character) performer = m.get();
         }
     }
     view.studioFloor = !anyStage;
@@ -567,12 +579,8 @@ void App::BuildStudioFrameView(FrameView& view) {
     BuildSceneLighting(d.lights, d.camera.light, d.time, anchors, view.light);
     StudioApplyLightTracks(view);
 
-    if (performer) {
-        DirectX::XMFLOAT3 target = anchors.head;
-        const float z = DirectX::XMVectorGetZ(DirectX::XMVector3TransformCoord(
-            DirectX::XMLoadFloat3(&target), DirectX::XMLoadFloat4x4(&view.camera.view)));
-        view.focusDistance = z > view.camera.nearZ ? z : 0.0f;
-    }
+    // DoF: the focus track over the automatic focus (UiStudioFocus.cpp)
+    StudioComputeFocus(view);
     view.cameraCut = lastRenderedTime_ < 0 || std::fabs(d.time - lastRenderedTime_) > 0.25;
     lastRenderedTime_ = d.time;
 }
@@ -716,6 +724,8 @@ void App::StudioInsertKeys(const std::vector<uint64_t>& rows, int frame) {
             ShadowKf k = d.camera.shadow.empty() ? ShadowKf{frame, 1, 0.01125f} : SampleShadow(d.camera.shadow, (float)frame);
             k.frame = frame;
             UpsertKey(d.camera.shadow, k);
+        } else if (kind == RowKind::Focus) {
+            UpsertKey(d.camera.focus, StudioNewFocusKey(frame));
         } else if (kind == RowKind::SceneLight) {
             // a new light key keeps the light's current value (sampled where keys exist)
             if (SceneLight* light = d.FindLight(LightUidOfTrack(name)))
@@ -756,6 +766,8 @@ std::vector<int> App::StudioRowFrames(uint64_t row) const {
         add(d.camera.light);
     } else if (kind == RowKind::Shadow) {
         add(d.camera.shadow);
+    } else if (kind == RowKind::Focus) {
+        add(d.camera.focus);
     } else if (kind == RowKind::SceneLight) {
         if (const SceneLight* light = d.FindLight(LightUidOfTrack(name))) add(light->keys);
     } else {
@@ -802,6 +814,7 @@ void App::StudioSelectAll() {
         all.insert(MakeRowId(RowKind::Camera, 0, 0));
         all.insert(MakeRowId(RowKind::Light, 0, 0));
         all.insert(MakeRowId(RowKind::Shadow, 0, 0));
+        all.insert(MakeRowId(RowKind::Focus, 0, 0));
         for (const SceneLight& l : d.lights)
             if (l.kind != LightKind::Ambient) all.insert(MakeRowId(RowKind::SceneLight, 0, l.uid));
     }
@@ -827,6 +840,7 @@ void App::StudioDeleteSelected(const char* undoName) {
         if (IsCameraKind(kind)) {
             if (kind == RowKind::Light) EraseKeyFrames(d.camera.light, fs);
             else if (kind == RowKind::Shadow) EraseKeyFrames(d.camera.shadow, fs);
+            else if (kind == RowKind::Focus) EraseKeyFrames(d.camera.focus, fs);
             else EraseKeyFrames(d.camera.camera, fs);
         }
         else if (kind == RowKind::SceneLight) {
@@ -860,6 +874,8 @@ void App::StudioCopySelected() {
                 if (const LightKf* p = FindKey(d.camera.light, k.second)) { c.light = *p; found = true; }
             } else if (kind == RowKind::Shadow) {
                 if (const ShadowKf* p = FindKey(d.camera.shadow, k.second)) { c.shadow = *p; found = true; }
+            } else if (kind == RowKind::Focus) {
+                if (const FocusKf* p = FindKey(d.camera.focus, k.second)) { c.focus = *p; found = true; }
             } else if (const CameraKf* p = FindKey(d.camera.camera, k.second)) { c.camera = *p; found = true; }
         } else if (kind == RowKind::SceneLight) {
             if (const SceneLight* light = d.FindLight(LightUidOfTrack(name)))
@@ -926,6 +942,7 @@ void App::StudioPaste(bool curvesOnly) {
         } else if (kind == RowKind::Camera) { CameraKf k = c.camera; k.frame = f; UpsertKey(d.camera.camera, k); }
         else if (kind == RowKind::Light) { LightKf k = c.light; k.frame = f; UpsertKey(d.camera.light, k); }
         else if (kind == RowKind::Shadow) { ShadowKf k = c.shadow; k.frame = f; UpsertKey(d.camera.shadow, k); }
+        else if (kind == RowKind::Focus) { FocusKf k = c.focus; k.frame = f; UpsertKey(d.camera.focus, k); }
         else if (kind == RowKind::SceneLight) {
             if (SceneLight* light = d.FindLight(LightUidOfTrack(name))) { LightKey k = c.sceneLight; k.frame = f; UpsertKey(light->keys, k); }
         }
@@ -981,6 +998,8 @@ void App::StudioShiftFrames(bool remove) {
                 apply(d.camera.light);
             } else if (kind == RowKind::Shadow) {
                 apply(d.camera.shadow);
+            } else if (kind == RowKind::Focus) {
+                apply(d.camera.focus);
             } else if (kind == RowKind::SceneLight) {
                 if (SceneLight* light = d.FindLight(LightUidOfTrack(name))) apply(light->keys);
             } else {
@@ -1163,6 +1182,7 @@ void App::StudioHandleTimeline(const TimelineEvents& ev) {
             if (kind == RowKind::Camera) MoveKeyFrames(d.camera.camera, fs, ev.moveDelta);
             else if (kind == RowKind::Light) MoveKeyFrames(d.camera.light, fs, ev.moveDelta);
             else if (kind == RowKind::Shadow) MoveKeyFrames(d.camera.shadow, fs, ev.moveDelta);
+            else if (kind == RowKind::Focus) MoveKeyFrames(d.camera.focus, fs, ev.moveDelta);
             else if (kind == RowKind::SceneLight) {
                 if (SceneLight* light = d.FindLight(LightUidOfTrack(track.second)))
                     MoveKeyFrames(light->keys, fs, ev.moveDelta);
@@ -1207,6 +1227,12 @@ void App::StudioRebuildRows() {
         sh.selected = d.selectedRows.count(sh.id) != 0;
         keysOf(sh.id, d.camera.shadow, sh.keys);
         d.rows.push_back(std::move(sh));
+        TimelineRow fo;
+        fo.id = MakeRowId(RowKind::Focus, 0, 0);
+        fo.label = Tr("초점");
+        fo.selected = d.selectedRows.count(fo.id) != 0;
+        keysOf(fo.id, d.camera.focus, fo.keys);
+        d.rows.push_back(std::move(fo));
         // the scene lights: one row per keyable light (sun, point, spot); the ambient light has no keys
         for (const SceneLight& light : d.lights) {
             if (light.kind == LightKind::Ambient) continue;
@@ -1654,6 +1680,7 @@ void App::DrawStudioOutliner(float x0, float y0, float x1, float y1) {
     Tooltip(Tr("캐릭터, 스테이지, 소품, 음원, 곡 추가"));
     if (addClicked) {
         studioAddPage_ = 0;
+        studioReplaceUid_ = 0;
         studioAddFilter_[0] = 0;
         ImGui::OpenPopup("##studioadd");
     }
@@ -1789,6 +1816,7 @@ void App::DrawStudioOutliner(float x0, float y0, float x1, float y1) {
         if (Button("##emptyadd", Tr("캐릭터 추가"), icon::Plus, ButtonKind::Secondary, ImVec2((w - Dp(32.0f)) / Dpi(), 36.0f))) {
             openAdd = true;
             studioAddPage_ = 1;
+            studioReplaceUid_ = 0;
         }
     }
     if (menuFor != -100) ImGui::OpenPopup("##modelmenu");
@@ -1796,7 +1824,8 @@ void App::DrawStudioOutliner(float x0, float y0, float x1, float y1) {
     if (menuFor != -100) menuModel = menuFor;
     DrawStudioModelMenu(menuModel);
     ImGui::EndChild();
-    if (openAdd) {
+    if (openAdd || studioOpenAdd_) {  // studioOpenAdd_: the model menu's replace entry
+        studioOpenAdd_ = false;
         studioAddFilter_[0] = 0;
         ImGui::OpenPopup("##studioadd");
     }
@@ -1845,13 +1874,13 @@ void App::DrawStudioInspector(float x0, float y0, float x1, float y1) {
             if (m->kind == ModelKind::Character) DrawStudioShaderRow(w);
         } else {
             char counts[96];
-            std::snprintf(counts, sizeof(counts), Tr("카메라 %d · 조명 %d · 섀도 %d"), (int)d.camera.camera.size(),
-                          (int)d.camera.light.size(), (int)d.camera.shadow.size());
+            std::snprintf(counts, sizeof(counts), Tr("카메라 %d · 조명 %d · 섀도 %d · 초점 %d"), (int)d.camera.camera.size(),
+                          (int)d.camera.light.size(), (int)d.camera.shadow.size(), (int)d.camera.focus.size());
             line(Tr("키"), counts);
             DrawStudioCameraPanel(w);
         }
     }
-    // characters: keys / bone (pose) / morph tabs
+    // models: keys / bone (pose) / morph tabs
     if (StudioPoseModel()) {
         ImGui::Dummy(ImVec2(w, Dp(4.0f)));
         const char* tabs[] = {Tr("키"), Tr("본"), Tr("모프")};
@@ -1903,7 +1932,10 @@ void App::DrawStudioInspector(float x0, float y0, float x1, float y1) {
         ImGui::Dummy(ImVec2(w, Dp(26.0f)));
     }
     const SceneLight* sceneLight = kind == RowKind::SceneLight ? d.FindLight(LightUidOfTrack(name)) : nullptr;
-    const char* trackName = kind == RowKind::Camera ? Tr("카메라") : kind == RowKind::Light ? Tr("조명") : Tr("셀프 섀도");
+    const char* trackName = kind == RowKind::Camera ? Tr("카메라")
+                            : kind == RowKind::Light ? Tr("조명")
+                            : kind == RowKind::Focus ? Tr("초점")
+                                                     : Tr("셀프 섀도");
     line(IsCameraKind(kind) || kind == RowKind::SceneLight ? Tr("트랙") : (kind == RowKind::Bone ? Tr("본") : Tr("모프")),
          kind == RowKind::SceneLight ? (sceneLight ? sceneLight->name : std::string())
                                      : IsCameraKind(kind) ? std::string(trackName) : name);

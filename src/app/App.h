@@ -21,6 +21,7 @@
 #include "render/Renderer.h"
 #include "studio/Gizmo.h"
 #include "studio/StudioDoc.h"
+#include "studio/StudioFocus.h"
 #include <Windows.h>
 #include <chrono>
 #include <filesystem>
@@ -62,6 +63,7 @@ namespace mmdx {
 //                          studioopen <file> | studioautosave (writes the recovery file now) | studioadd
 //                          <character|stage|prop> <file> | studioaddlib <character|stage> <substr> | studiosong <substr>
 //                          (library song onto the selected model + camera + audio) | studioaudio <file|none> [offset s] |
+//                          studioreplace <index> <file> | studioreplacelib <index> <substr> (swap a model's file) |
 //                          studioselect <model index|-1> | studioremove <model index> | studiorename <text> |
 //                          studioattach <parent index|-1> <bone|-> <tx ty tz rx ry rz s> (selected prop).
 //                          Coordinates in window pixels.
@@ -347,6 +349,18 @@ private:
     void DrawStudioCameraPanel(float w);             // view / light / shadow sections of the camera inspector
     // true: no curve editor follows. live (camera only): the playhead's fields, shown with or without a key
     bool DrawStudioCameraKeyFields(float w, studio::RowKind kind, int frame, bool live = false);
+    // --- depth-of-field focus (UiStudioFocus.cpp): the focus track + automatic focus -> FrameView focus / aperture
+    void StudioComputeFocus(FrameView& view);        // BuildStudioFrameView: view.camera must be set
+    bool StudioFocusTargetZ(uint32_t uid, studio::FocusBone bone, const CameraParams& cam, float& z) const;
+    studio::FocusKf StudioNewFocusKey(int frame) const;  // a key inserted at `frame`: the segment in effect, or the shown subject
+    void StudioSetFocusAtPlayhead(const studio::FocusKf& k, const char* undoName);  // upsert (undoable), keeps the key's fields
+    void DrawStudioFocusSection(float w);            // camera panel: what is in focus + the segment picker at the playhead
+    bool DrawStudioFocusKeyFields(float w, int frame);  // inspector fields of a selected focus key
+    std::string StudioModelLabel(uint32_t uid) const;   // outliner name of a model uid ("" when gone)
+    studio::AutoFocus studioAutoFocus_;
+    float studioFocusShown_ = 0.0f;                  // the last frame's focus distance / aperture scale / auto subject
+    float studioFocusAperture_ = 1.0f;
+    uint32_t studioFocusSubject_ = 0;                // the model the focus follows now (0: a distance / nothing)
     // --- scene light editing (UiStudioLight.cpp)
     void StudioSelectLight(uint32_t uid);
     void StudioAddLight(studio::LightKind kind);
@@ -366,7 +380,7 @@ private:
     bool StudioPickCameraKey(ImVec2 mouse);          // click on a key dot of the path: select it and seek
     void StudioCameraPathWindow(int& lo, int& hi) const;  // frames of the path drawn: the range, else now +-3 s
     // --- pose editing (UiStudioPose.cpp): bone overlay, picking, gizmo, pose layer, morph panel, VPD, mirror
-    studio::StudioModel* StudioPoseModel();          // the selected model if it is a character (pose editable)
+    studio::StudioModel* StudioPoseModel();          // the selected model (pose editable: any kind)
     void StudioSelectBone(int bone, bool toggle);    // viewport pick / bone row click: selection sync (-1 clears)
     std::vector<studio::PoseBone> StudioCurrentPose(const studio::StudioModel& m) const;  // effective anim values
     void StudioSetPose(const char* undoName, const studio::PoseLayer& before);  // push the selected model's layer edit
@@ -378,7 +392,7 @@ private:
     void StudioImportVpdFrom(const std::filesystem::path& path);
     void StudioExportVpd();
     bool StudioExportVpdTo(const std::filesystem::path& path);
-    void StudioApplyPose(studio::StudioModel& m);    // writes the pose layer over the evaluated motion (UpdateStudioScene)
+    bool StudioApplyPose(studio::StudioModel& m);    // writes the pose layer over the evaluated motion (UpdateStudioScene); true = applied
     bool StudioGizmoFrameOf(const studio::StudioModel& m, int bone, studio::GizmoFrame& f, studio::GizmoMode& mode) const;
     void StudioViewportPose(float x0, float y0, float x1, float y1, bool hovered, bool& consumed);  // overlay + input
     void StudioViewportToolbar(float x, float y);
@@ -398,15 +412,20 @@ private:
     std::filesystem::path StudioRecoveryFile() const; // <exe>/recovery/autosave.mmdxproj
     void StudioAutosave(bool force, bool wait);       // timer: writes the recovery file on a worker thread
     void StudioDiscardRecovery();                     // waits for a running autosave, deletes the recovery files
-    void StudioAddModelFile(studio::ModelKind kind, const std::filesystem::path& file);  // async
-    void StudioAddModelDialog(studio::ModelKind kind);
-    void StudioAddLibraryCharacter(int index);
-    void StudioAddLibraryStage(int index);
+    // replaceUid != 0: the loaded model replaces that model's file (StudioReplaceModel) instead of being added
+    void StudioAddModelFile(studio::ModelKind kind, const std::filesystem::path& file, uint32_t replaceUid = 0);  // async
+    void StudioAddModelDialog(studio::ModelKind kind, uint32_t replaceUid = 0);
+    void StudioAddLibraryCharacter(int index, uint32_t replaceUid = 0);
+    void StudioAddLibraryStage(int index, uint32_t replaceUid = 0);  // replace: the first part replaces, the rest are added
     void StudioApplyLibrarySong(int index);           // dance -> selected character, camera, audio when none
     bool StudioSetAudio(const std::filesystem::path& file);  // empty: remove
     void StudioAudioDialog();
     void StudioPollJobs();                            // finished loads: GPU upload + append (main thread)
     void StudioRemoveModel(int index);                // waits for the GPU; clears the undo history
+    // Swaps model `index`'s file for `pm` and keeps everything else (motion keys by name, placement, prop parent, shader,
+    // visibility, uid). Waits for the GPU; clears the undo history (pose edits hold bone indices). False: GPU upload failed.
+    bool StudioReplaceModel(int index, studio::StudioPackageModel& pm, std::string* note);
+    void StudioClearEditState();                      // undo history, selection, clipboard, drags (model list changed)
     void StudioSelectModel(int index);                // -1 camera
     DirectX::XMFLOAT4X4 StudioPropRoot(const studio::StudioModel& m) const;  // world matrix of a prop's origin
     void StudioSeekAudio();                           // audio cursor <- timeline time (audio offset)
@@ -708,6 +727,7 @@ private:
         studio::MotionData dance, camera;
         std::filesystem::path audio;
         uint32_t targetUid = 0;                    // song: the character it was started for (0: none)
+        uint32_t replaceUid = 0;                   // model load: replaces this model (0: adds)
         std::shared_ptr<McpPromise> mcp;           // studio_add_model: answered when the job ends
         LoadProgress progress;
         std::string error;
@@ -724,6 +744,8 @@ private:
     char studioRenameBuf_[128] = {};
     char studioAddFilter_[64] = {};
     int studioAddPage_ = 0;                        // "+" popup page: 0 menu, 1 characters, 2 stages, 3 songs
+    uint32_t studioReplaceUid_ = 0;                // "+" popup in replace mode: the model whose file is swapped (0: add)
+    bool studioOpenAdd_ = false;                   // the outliner opens the "+" popup next frame (model menu's replace)
     bool studioHelpOpen_ = false;                  // shortcut overlay
     bool studioEffectsOpen_ = false;               // screen effects popup
     bool studioRenderWhole_ = false;               // render dialog: whole project instead of the timeline range
