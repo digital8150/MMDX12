@@ -1087,3 +1087,7 @@ smoke review); Claude did the review, publish, the engine fixes and both outline
 - The concert spots' soft shadows were not seen up close (the captured frames' camera hid them).
 - Existing Soft scenes look softer than before (intended); saved studio projects keep their own light settings.
 - Raster PCSS rotation is per pixel and static (no TAA dependence); very wide penumbrae near the camera hit the 0.04 uv cap.
+- Release 1.6.0 (after the session close): version bump `6c18c1b`, GitHub release v1.6.0 (notes in 4 languages, no cover image;
+  asset SHA-256 a93a74b4… = local zip), packaged exe reports 1.6.0 with no `[E]` on the select screen. Website deployed:
+  /latest.json -> 1.6.0 (sha256 matches), home pages 200 in all four languages. `package_release.ps1` needed ninja on PATH
+  (`%APPDATA%\Python\Python314\Scripts`; the pip copy under miniconda is gone) and a cleared `build_release` cache.
