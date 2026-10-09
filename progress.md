@@ -1128,3 +1128,37 @@ smoke review); Claude did the review, publish, the engine fixes and both outline
 - `list_instances` reports pid 0 for the base pipe `mmdx12_mcp`.
 - The MCP `effects` value replaces the stack with default parameters.
 - Not yet tried from a real MCP client (`claude mcp add mmdx12 -- <path>\mmdx12_mcp.exe --launch`).
+
+## 2026-10-10 (evening): ENB-derived effect packs, effect API v4 (persistent state), studio focus track committed
+
+### ENB port (PI-CHO ENB N9.5, local only)
+- Ported the preset's techniques into single-pass effect packs: `enb_mxao`, `enb_mcdof` (screen-centre autofocus only),
+  `enb_lens_dirt`, `enb_anamorphic_flare`, `enb_ghost_flare`, `enb_starburst`, `enb_lens_reflection`, `enb_lens_ca`, `enb_sss`.
+  All pre-bloom; <= 16 sliders per pack, the rest as named constants. Written by Antigravity (3 parallel specs), compile-checked
+  with `pack_check --compile` and rendered once each (captures/enb_test).
+- **Licence: the ENB sources are CC BY-NC-ND 4.0 (McFly DoF BY-NC-ND 3.0). The ports live only in `captures/enb_packs/`
+  (git-ignored) and must never be committed or redistributed.**
+- Known: `enb_sss` has no skin mask (colour heuristic) and also catches skin-coloured floors; needs a material-class mask
+  target for effects. Flare packs show nothing in scenes without bright lights at their default thresholds (starburst
+  default threshold raised to 1.5). Eye adaptation was held back until the state contract existed (now possible).
+
+### Effect pack API v4: persistent state
+- Design investigated by Antigravity (investigate mode), implemented by it (default level), reviewed and fixed here:
+  `passExecutionCount_` now counts every execution (gaps -> reset), and the 64-step still loop reuses two descriptor tables
+  (it exhausted the transient window). Contract in docs/shader_effect_api.md; CLAUDE.md has the architecture lines.
+- Backward compatible by construction: no `state` = same root signature, defines, PSO and no extra targets; older apps reject
+  `apiVersion 4`, `pack_check` forces apiVersion 4 for packs with `state`.
+
+### Verified
+- Clean build; `shader_choice_test`, `studio_project_test`, `studio_edit_test`, `studio_light_test`, `studio_focus_test` pass;
+  `pack_check --compile` on state_probe (PSEffect + PSEffectState) and the v3 packs; negative manifests (state with apiVersion 3,
+  floats 0 / 17 / 2.5, missing PackEffectState) are reported.
+- `captures/state_test/state_probe` (frame counter bar): play capture at 20 / 90 frames = 19 / 89 steps (one per frame, reset on
+  frame 0); GI still = 63 (64 steps, reset at step 0); raster video 0..14 and GI video 0..11 across frames (extracted with ffmpeg).
+- v3 packs (auto_luminous, film_grain) render with no `[E]`.
+
+### Not verified / notes
+- Reset on `cameraCut` during playback, PT video (`advance` only on the last pass), studio viewport, and the RT / PT real-time
+  video paths were not exercised; GI video below 960x540 via CLI cancels at BeginOffline (also without effects).
+- The studio DoF focus track (d66b57a) was committed as found from an earlier session; only its unit test was run here.
+- Next: McDoF focus smoothing + an `enb_adaptation` (eye adaptation) pack on the new state contract.

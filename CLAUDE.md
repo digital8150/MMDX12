@@ -207,7 +207,7 @@ progress.md is the session log. Read its latest entry first.
   t0 space5), frame inputs are t0..t3 space6, params 16 root constants at b2. UI: `App::DrawEffectStackEditor` (shader manager detail
   of an effect pack + the play bar's effect button); surface pickers list surface packs only. Templates `shaders/pack_template`
   (surface) / `pack_template_effect`; online-gallery-only examples chromatic_aberration, film_grain, crt_scanlines, auto_luminous (not bundled; sources in the website
-  repo). Studio projects don't store the stack yet (app-level setting). Offline GI runs the stack too (`job.effects`, `OfflineRenderer::Impl::Finish`):
+  repo). Studio projects don't store the stack yet (app-level setting). API v4 effect state (docs/shader_effect_api.md): pack.json `"state": {"floats": N}` (<= 16, apiVersion 4) gives each stack entry a 4x1 RGBA32F ping-pong slot (`PackEffectPass::stateSlots_`, key = stack index + pack id) updated by `PackEffectState` in a pre-pass before `PackEffect` (`PackState(i)`, `PackEffectInput::dt`); state packs use their own root signature (`t0, space7`), packs without state keep the v3 PSO / defines. dt / reset / advance come from `FrameView::effectDt / effectStateReset / effectStateAdvance` and `OfflineJobDesc::effectDt / still / effectReset` (GI stills run the state pass 64x). Offline GI runs the stack too (`job.effects`, `OfflineRenderer::Impl::Finish`):
   pre-bloom entries run on the lit HDR before the bloom (`CSLitCompose`, the bloom then reads the effect output), post entries on the sRGB
   result (`PackEffectPass::RunOffline`). Their depth / normal come from the offline G-buffer (depth from `offline_effect.hlsl`, the normal in view
   space like the real-time normal target), motion is zero.
