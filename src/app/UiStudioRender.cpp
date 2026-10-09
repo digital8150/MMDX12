@@ -163,6 +163,79 @@ void App::DrawStudioRenderMenu() {
     ImGui::PopStyleVar();
 }
 
+void App::DrawStudioEffectsMenu() {
+    using namespace ui;
+    ImGui::SetNextWindowSize(ImVec2(Dp(360.0f), 0));
+    ImGui::SetNextWindowSizeConstraints(
+        ImVec2(Dp(340.0f), Dp(100.0f)),
+        ImVec2(Dp(420.0f), std::max(Dp(200.0f), ImGui::GetMainViewport()->WorkSize.y - Dp(80.0f))));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(Dp(14.0f), Dp(14.0f)));
+    studioEffectsOpen_ = false;
+    if (ImGui::BeginPopup("##studioeffects")) {
+        studioEffectsOpen_ = true;
+        bool changed = false;
+
+        SectionLabel(Tr("실시간 효과"));
+        changed |= Switch("##bloom", Tr("블룸"), &settings_.bloom);
+        changed |= Switch("##bloomconv", Tr("컨볼루션 블룸"), &settings_.bloomConvolution, Tr("FFT 스타버스트 블룸"));
+        changed |= Switch("##dof", Tr("피사계 심도"), &settings_.dof, Tr("캐릭터에 초점을 맞추고 배경을 흐림"));
+        if (settings_.dof) {
+            Gap(4.0f);
+            changed |= SliderRow("##dofap", Tr("조리개"), &settings_.dofAperture, 0.2f, 3.0f, "%.2f");
+            Gap(4.0f);
+        }
+        changed |= Switch("##vol", Tr("볼류메트릭 라이트"), &settings_.volumetric, Tr("빛줄기와 조명 산란"));
+        if (settings_.volumetric) {
+            Gap(4.0f);
+            changed |= SliderRow("##vold", Tr("안개 밀도"), &settings_.volumetricDensity, 0.25f, 4.0f, "%.2f");
+            Gap(4.0f);
+        }
+        changed |= Switch("##ssao", Tr("앰비언트 오클루전"), &settings_.ssao);
+        changed |= Switch("##ssr", Tr("화면 공간 반사"), &settings_.ssr);
+
+        if (!luts_.empty()) {
+            Gap(10.0f);
+            SectionLabel(Tr("컬러 LUT"));
+            const float colW = ImGui::GetContentRegionAvail().x;
+            const float chipW = (colW - Dp(8.0f)) * 0.5f;
+            int lutCount = 1 + (int)luts_.size();
+            for (int i = 0; i < lutCount; ++i) {
+                if (i % 2) ImGui::SameLine(0, Dp(8.0f));
+                ImGui::PushID(i);
+                const ColorLutEntry* e = i > 0 ? &luts_[(size_t)i - 1] : nullptr;
+                if (Chip("##lut", e ? Tr(e->displayName.c_str()) : Tr("없음"), icon::Image,
+                         settings_.colorLut == (e ? e->id : std::string()), chipW)) {
+                    settings_.colorLut = e ? e->id : std::string();
+                    changed = true;
+                }
+                ImGui::PopID();
+            }
+            if (!settings_.colorLut.empty()) {
+                Gap(4.0f);
+                changed |= SliderRow("##lutint", Tr("LUT 강도"), &settings_.lutIntensity, 0.0f, 1.0f, "%.2f");
+            }
+        }
+
+        Gap(12.0f);
+        const Palette& p = P();
+        ImDrawList* dl = ImGui::GetWindowDrawList();
+        const float sepY = ImGui::GetCursorScreenPos().y;
+        dl->AddLine(ImVec2(ImGui::GetWindowPos().x + Dp(14.0f), sepY),
+                    ImVec2(ImGui::GetWindowPos().x + ImGui::GetWindowSize().x - Dp(14.0f), sepY), p.line);
+        Gap(8.0f);
+
+        changed |= DrawEffectStackEditor(settings_.effectStack, true);
+
+        if (changed) {
+            ApplyRenderSettings();
+            settings_.Save(settingsPath_);
+        }
+
+        ImGui::EndPopup();
+    }
+    ImGui::PopStyleVar();
+}
+
 // ---------------------------------------------------------------------------
 // Shortcut help
 // ---------------------------------------------------------------------------

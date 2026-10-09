@@ -284,7 +284,8 @@ void App::UpdateStudio(double dt) {
         ((ImGui::IsKeyPressed(ImGuiKey_Slash, false) && io.KeyShift) || ImGui::IsKeyPressed(ImGuiKey_F1, false)))
         studioHelpOpen_ = !studioHelpOpen_;
     // holding the right button flies the viewport camera with WASDQE: the shortcuts stay out of the way
-    if (!io.WantTextInput && !StudioModal() && !ImGui::IsMouseDown(ImGuiMouseButton_Right)) {
+    if (!io.WantTextInput && !StudioModal() && !studioEffectsOpen_ && !ImGui::IsPopupOpen("##studioeffects") &&
+        !ImGui::IsMouseDown(ImGuiMouseButton_Right)) {
         const bool ctrl = io.KeyCtrl, shift = io.KeyShift;
         if (!ctrl && !io.KeyAlt && ImGui::IsKeyPressed(ImGuiKey_F, false)) StudioFocusSelection();
         {  // numpad views (the renderer is perspective-only): 1 front, 3 right, 7 top; Ctrl = the opposite side
@@ -1595,12 +1596,20 @@ void App::DrawStudioTopBar(float x0, float y0, float x1, float y1) {
     ImGui::SetNextWindowPos(ImVec2(rx + Dp(36.0f), y1 + Dp(6.0f)), ImGuiCond_Always, ImVec2(1.0f, 0.0f));
     DrawStudioProjectMenu();
     if (!studio_) return;
-    // render (video / still) and the shortcut list
+    // render (video / still), screen effects, layout reset and the shortcut list
     rx -= Dp(4.0f + 36.0f);
     ImGui::SetCursorScreenPos(ImVec2(rx, cy - Dp(18.0f)));
     if (IconButton("##rendermenu", icon::FilmStrip, Tr("렌더: 영상, 고품질 스틸"))) ImGui::OpenPopup("##studiorender");
     ImGui::SetNextWindowPos(ImVec2(rx + Dp(36.0f), y1 + Dp(6.0f)), ImGuiCond_Always, ImVec2(1.0f, 0.0f));
     DrawStudioRenderMenu();
+    rx -= Dp(4.0f + 36.0f);
+    ImGui::SetCursorScreenPos(ImVec2(rx, cy - Dp(18.0f)));
+    const bool effectsActive = !settings_.effectStack.empty() || settings_.bloom || settings_.dof || settings_.volumetric;
+    ImGui::BeginDisabled(StudioModal());
+    if (IconButton("##effects", icon::Sparkle, Tr("화면 효과"), effectsActive)) ImGui::OpenPopup("##studioeffects");
+    ImGui::EndDisabled();
+    ImGui::SetNextWindowPos(ImVec2(rx + Dp(36.0f), y1 + Dp(6.0f)), ImGuiCond_Always, ImVec2(1.0f, 0.0f));
+    DrawStudioEffectsMenu();
     rx -= Dp(4.0f + 36.0f);
     ImGui::SetCursorScreenPos(ImVec2(rx, cy - Dp(18.0f)));
     if (IconButton("##layoutreset", icon::Stack, Tr("패널 배치 초기화 (패널은 탭을 끌어서 옮기고 크기를 바꿀 수 있어요)"))) studioResetLayout_ = true;

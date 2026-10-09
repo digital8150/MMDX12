@@ -423,6 +423,7 @@ private:
     void StudioRestoreAfterRender();                  // FinishOffline: time, camera mode, physics back to the editor's
     DirectX::XMFLOAT3 StudioPerformerCenter() const;  // center bone of the first character (teleport detection)
     void DrawStudioRenderMenu();                      // top bar popup: video / still
+    void DrawStudioEffectsMenu();                     // top bar popup: screen effects + effect stack
     void DrawStudioHelp();                            // shortcut overlay (? key / top bar button)
     bool StudioModal() const { return videoDialogOpen_ || studioHelpOpen_ || studioLeaveConfirm_ || studioLightPresetPending_ >= 0; }
 
@@ -701,6 +702,7 @@ private:
     char studioAddFilter_[64] = {};
     int studioAddPage_ = 0;                        // "+" popup page: 0 menu, 1 characters, 2 stages, 3 songs
     bool studioHelpOpen_ = false;                  // shortcut overlay
+    bool studioEffectsOpen_ = false;               // screen effects popup
     bool studioRenderWhole_ = false;               // render dialog: whole project instead of the timeline range
     // viewport pose editing (cached from the last drawn frame: overlay, picking, scripts)
     studio::ViewProj studioVp_;
