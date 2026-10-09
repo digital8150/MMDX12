@@ -6,19 +6,26 @@
 //   t0 source, t1 blur (PSCombine only), t2 depth (PSPrepare/PSCombine).
 //   gP0 = (focusZ (<= 0: autofocus), aperture, maxCocPx (output px), radScale)
 //   gP1 = (1/outWidth, 1/outHeight, 1/halfWidth, 1/halfHeight)
+//   gP2 = (x, y, w, h) of the camera rect in uv (Studio quad view: the orthographic views are not blurred and the
+//         autofocus looks at the camera quadrant); gP2.z <= 0: the whole target
 #include "fullscreen.hlsli"
 
 Texture2D<float4> gTex0 : register(t0);
 Texture2D<float4> gTex1 : register(t1);
 Texture2D<float>  gDepthTex : register(t2);   // used by PSPrepare/PSCombine; bind depth at t2 in those draws
 
+bool HasRect() { return gP2.z > 0.0; }
+bool InRect(float2 uv) { return !HasRect() || (all(uv >= gP2.xy) && all(uv <= gP2.xy + gP2.zw)); }
+
 float FocusZ() {
     if (gP0.x > 0.0) return gP0.x;
-    float z = LinearZ(gDepthTex.SampleLevel(gPoint, float2(0.5, 0.5), 0));
-    z += LinearZ(gDepthTex.SampleLevel(gPoint, float2(0.47, 0.5), 0));
-    z += LinearZ(gDepthTex.SampleLevel(gPoint, float2(0.53, 0.5), 0));
-    z += LinearZ(gDepthTex.SampleLevel(gPoint, float2(0.5, 0.46), 0));
-    z += LinearZ(gDepthTex.SampleLevel(gPoint, float2(0.5, 0.54), 0));
+    const float2 c = HasRect() ? gP2.xy + gP2.zw * 0.5 : float2(0.5, 0.5);
+    const float2 s = HasRect() ? gP2.zw : float2(1.0, 1.0);
+    float z = LinearZ(gDepthTex.SampleLevel(gPoint, c, 0));
+    z += LinearZ(gDepthTex.SampleLevel(gPoint, c + s * float2(-0.03, 0.0), 0));
+    z += LinearZ(gDepthTex.SampleLevel(gPoint, c + s * float2(0.03, 0.0), 0));
+    z += LinearZ(gDepthTex.SampleLevel(gPoint, c + s * float2(0.0, -0.04), 0));
+    z += LinearZ(gDepthTex.SampleLevel(gPoint, c + s * float2(0.0, 0.04), 0));
     return z * 0.2;
 }
 
@@ -39,6 +46,7 @@ float4 PSPrepare(FsOut i) : SV_Target {
             SignedCoc(LinearZ(gDepthTex.SampleLevel(gPoint, o2, 0)), F)),
         min(SignedCoc(LinearZ(gDepthTex.SampleLevel(gPoint, o3, 0)), F),
             SignedCoc(LinearZ(gDepthTex.SampleLevel(gPoint, o4, 0)), F)));
+    if (!InRect(i.uv)) coc = 0.0;                    // outside the camera quadrant: sharp, spreads no blur
     return float4(max(c * 0.25, 0.0), coc * 0.5);   // CoC converted to half-res pixels
 }
 
@@ -82,6 +90,7 @@ float4 PSTent(FsOut i) : SV_Target {
 
 float4 PSCombine(FsOut i) : SV_Target {
     float4 sharp = gTex0.SampleLevel(gPoint, i.uv, 0);
+    if (!InRect(i.uv)) return sharp;
     float4 blur = gTex1.SampleLevel(gLinear, i.uv, 0);
     float coc = abs(SignedCoc(LinearZ(gDepthTex.SampleLevel(gPoint, i.uv, 0)), FocusZ()));
     float blend = smoothstep(0.5, 2.0, max(coc, blur.a * 2.0));
