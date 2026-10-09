@@ -1,9 +1,11 @@
 #pragma once
 #include <atomic>
+#include <functional>
 #include "anim/ModelInstance.h"
 #include "anim/Motion.h"
 #include "app/Benchmark.h"
 #include "app/Lighting.h"
+#include "app/McpServer.h"
 #include "app/RenderBench.h"
 #include "app/LeaderboardClient.h"
 #include "app/SceneLoader.h"
@@ -148,6 +150,7 @@ struct AppOptions {
     std::string updateFeed;   // --update-feed: feed URL / file override (empty: the default feed)
     bool applyUpdate = false; // --apply-update (internal): apply a staged update, then exit
     uint32_t applyWaitPid = 0;        // --apply-wait (internal): pid the applier waits for
+    int mcp = -1;                     // --mcp (1), --no-mcp (0), auto (-1)
 };
 AppOptions ParseCommandLine(int argc, wchar_t** argv);  // unknown args are logged and ignored
 
@@ -427,8 +430,27 @@ private:
     void DrawStudioHelp();                            // shortcut overlay (? key / top bar button)
     bool StudioModal() const { return videoDialogOpen_ || studioHelpOpen_ || studioLeaveConfirm_ || studioLightPresetPending_ >= 0; }
 
-    // --- scripted UI input for tests (UiScript.cpp)
+    // --- scripted UI input for tests (UiScript.cpp) and MCP
     void PumpUiScript();  // before ImGui::NewFrame: feeds the events due at framesInScene_
+    void ScheduleUiScriptStep(int frame, std::string cmd, std::vector<std::string> args);
+    using ScheduleFunc = std::function<void(int frame, std::string cmd, std::vector<std::string> args)>;
+    bool ExecuteUiCommand(const std::string& cmd, const std::vector<std::string>& args,
+                          const ScheduleFunc& schedule = nullptr, std::string* outError = nullptr);
+
+    // --- MCP server and control (AppMcp.cpp)
+    void InitMcp();              // at startup: --mcp, --no-mcp, else the setting (not in headless runs)
+    void StartMcpServer();       // the settings switch
+    void ShutdownMcp();          // also fails the commands still waiting for a later frame
+    void PumpMcp(bool minimized);  // main thread, before ImGui::NewFrame (and while minimized)
+    void ExecuteMcp(const std::string& tool, const nlohmann::json& args, std::shared_ptr<McpPromise> promise);
+    // Leaves the current screen for a navigation tool like the UI's back buttons do. False (promise rejected) while
+    // loading / rendering / benchmarking, or with unsaved studio changes unless args.discard_unsaved.
+    bool McpLeaveScreen(const nlohmann::json& args, McpPromise& promise);
+    void McpScheduleInput(int frame, std::string cmd, std::vector<std::string> args);  // frame in mcpFrame_ units
+    const CharacterAsset* FindCharacter(const std::string& needle) const;
+    const StageAsset* FindStage(const std::string& needle) const;
+    const SongAsset* FindSong(const std::string& needle) const;
+    const char* ScreenName(Screen s) const;
 
     // --- auto-update (UiUpdate.cpp): background check, notice, staged install across a restart
     void InitUpdater();          // once after the settings load: feed URL + current version
@@ -686,6 +708,7 @@ private:
         studio::MotionData dance, camera;
         std::filesystem::path audio;
         uint32_t targetUid = 0;                    // song: the character it was started for (0: none)
+        std::shared_ptr<McpPromise> mcp;           // studio_add_model: answered when the job ends
         LoadProgress progress;
         std::string error;
         std::future<bool> future;                  // last member: destroyed first, waits for the worker
@@ -787,6 +810,32 @@ private:
     uint64_t renderBenchImage_ = 0;
     uint32_t renderBenchImageW_ = 0, renderBenchImageH_ = 0;
     std::filesystem::path renderBenchSaved_;
+
+    // MCP (AppMcp.cpp)
+    std::unique_ptr<McpServer> mcpServer_;
+    int mcpFrame_ = 0;                        // frames since start (framesInScene_ does not count on every screen)
+    std::vector<UiScriptStep> mcpInput_;      // ui_input steps, frame = mcpFrame_ they run at (sorted)
+    bool mcpInputActive_ = false;             // real mouse / keyboard input is ignored while steps are queued
+    std::filesystem::path mcpOfflineOutput_;  // render_still / render_video output for the job about to start
+    std::unique_ptr<AppOptions> mcpOptionsRestore_;  // the run's options before an MCP render's overrides
+
+    struct PendingMcpWait {
+        int waitFrames = 0;
+        std::shared_ptr<McpPromise> promise;
+    };
+    std::vector<PendingMcpWait> pendingMcpWaits_;
+
+    struct PendingMcpLoad {
+        std::chrono::steady_clock::time_point startTime;
+        std::shared_ptr<McpPromise> promise;
+    };
+    std::vector<PendingMcpLoad> pendingMcpLoads_;
+
+    struct PendingMcpInput {
+        int targetFrame = 0;
+        std::shared_ptr<McpPromise> promise;
+    };
+    std::vector<PendingMcpInput> pendingMcpInputs_;
 };
 
 } // namespace mmdx

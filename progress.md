@@ -1091,3 +1091,40 @@ smoke review); Claude did the review, publish, the engine fixes and both outline
   asset SHA-256 a93a74b4… = local zip), packaged exe reports 1.6.0 with no `[E]` on the select screen. Website deployed:
   /latest.json -> 1.6.0 (sha256 matches), home pages 200 in all four languages. `package_release.ps1` needed ninja on PATH
   (`%APPDATA%\Python\Python314\Scripts`; the pip copy under miniconda is gone) and a cleared `build_release` cache.
+
+## 2026-10-10 (1) — MCP control of a running instance (agents talk to MMDX12)
+
+### Done
+- Model Context Protocol support (docs/mcp.md): `mmdx12_mcp.exe` (tools/mmdx12_mcp.cpp, new CMake target, packaged)
+  is a stdio MCP bridge (protocol 2025-06-18) that forwards tool calls over an owner-only named pipe
+  `\.\pipe\mmdx12_mcp` (`_<pid>` for further instances) to `McpServer` (app/McpServer.*, overlapped I/O worker thread).
+  The app runs them on the main thread (`App::PumpMcp` / `ExecuteMcp`, app/AppMcp.cpp) before ImGui::NewFrame;
+  multi-frame calls (loads, wait_frames, ui_input, studio_add_model) answer later. Schemas + timeouts: app/McpTools.h.
+- 33 tools: state / logs / library, screenshot (in-memory PNG: `Dx12Context::RequestCaptureMemory`, `EncodePngRGBA8`,
+  `Base64Encode`), wait_frames, set_screen / load_scene / open_studio, play / pause / seek, render settings (validated,
+  incl. shader pack and effect stack), studio state / command / save / open / add model / select / camera / bone / key /
+  undo / redo, render_still / render_video / status / cancel, ui_input (ui-script commands, own queue counted in
+  `mcpFrame_`), quit_app; bridge-only list_instances / connect / launch_app (waits up to 60 s for the pipe).
+- `UiScript.cpp` refactored into `ExecuteUiCommand` shared by `--ui-script` and MCP (same command set).
+- Navigation uses the UI's leave paths (`McpLeaveScreen`): refuses with unsaved studio changes unless
+  `discard_unsaved`, refuses while loading / rendering / benchmarking, leaves a failed load's error screen.
+  Renders go through `mcpOfflineOutput_` (never `options_.offline*`, which quit the app) and restore the borrowed
+  run overrides when the job ends. Minimized: queries answer, other tools restore the window.
+- Setting `mcp=` (default on; lobby detail switch "MCP 제어"), CLI `--mcp` / `--no-mcp`; headless runs need `--mcp`.
+  "MCP" badge in the lobby and studio top bars while a client is connected.
+- Delegation: design investigated with Antigravity, implemented by it (level high); review found and fixed a studio-load
+  crash (`StartLoad(LoadTarget::Studio)`), 11 malformed tool schemas (arrays instead of objects), a no-op `ui_input`,
+  renders quitting the app, pipe shutdown / stale-response / cancelled-read issues. A Sonnet QA pass then found 10 more
+  (error-screen lock, studio_command guard bypass, minimized loads, effects not implemented, silent failures), all fixed.
+
+### Verified
+- `python tools/mcp_smoke.py --handshake-only` (schemas validated); full scenario scripts with screenshots: lobby badge,
+  play raster / RT, GI still (app keeps running), studio from play, bone edit + undo, F1 help via ui_input, effect stack
+  (CRT + grain visible), free vs keyed studio camera, failed-load screen; QA re-run 42 / 42. `m3_a.txt` ui-script still runs.
+- Clean build, no warnings.
+
+### Not verified / notes
+- render_video with rt / pt / gi renderers and upscaler changes over MCP were not exercised.
+- `list_instances` reports pid 0 for the base pipe `mmdx12_mcp`.
+- The MCP `effects` value replaces the stack with default parameters.
+- Not yet tried from a real MCP client (`claude mcp add mmdx12 -- <path>\mmdx12_mcp.exe --launch`).

@@ -224,6 +224,8 @@ void App::StudioEnter(std::unique_ptr<StudioDoc> doc) {
 }
 
 void App::LeaveStudio() {
+    for (auto& job : studioJobs_)
+        if (job->mcp) job->mcp->Reject("The studio was closed before the model finished loading");
     studioJobs_.clear();  // waits for running loads
     StudioDiscardRecovery();
     ctx_.WaitForGpu();
@@ -1622,6 +1624,20 @@ void App::DrawStudioTopBar(float x0, float y0, float x1, float y1) {
     rx -= Dp(4.0f + 36.0f);
     ImGui::SetCursorScreenPos(ImVec2(rx, cy - Dp(18.0f)));
     if (IconButton("##help", icon::Keyboard, Tr("단축키  (?)"), studioHelpOpen_)) studioHelpOpen_ = !studioHelpOpen_;
+    if (mcpServer_ && mcpServer_->IsConnected()) {
+        rx -= Dp(8.0f + 64.0f);
+        const ImVec2 mcpPos(rx, cy - Dp(14.0f));
+        dl->AddRectFilled(mcpPos, ImVec2(mcpPos.x + Dp(64.0f), mcpPos.y + Dp(28.0f)), WithAlpha(p.accent, 0.15f), Dp(14.0f));
+        dl->AddRect(mcpPos, ImVec2(mcpPos.x + Dp(64.0f), mcpPos.y + Dp(28.0f)), WithAlpha(p.accent, 0.4f), Dp(14.0f));
+        Icon(dl, icon::Cpu, 14.0f, ImVec2(mcpPos.x + Dp(12.0f), mcpPos.y + Dp(14.0f)), p.accentInk);
+        Text(dl, Font::Bold, size::Caption, ImVec2(mcpPos.x + Dp(26.0f), mcpPos.y + Dp(7.0f)), p.accentInk, "MCP");
+        ImGui::SetCursorScreenPos(mcpPos);
+        ImGui::InvisibleButton("##mcpbadge", ImVec2(Dp(64.0f), Dp(28.0f)));
+        if (ImGui::IsItemHovered()) {
+            std::string tip = std::string(Tr("MCP 연결됨: ")) + mcpServer_->PipeName();
+            Tooltip(tip.c_str());
+        }
+    }
 }
 
 void App::DrawStudioOutliner(float x0, float y0, float x1, float y1) {

@@ -188,6 +188,10 @@ AppOptions ParseCommandLine(int argc, wchar_t** argv) {
             opt.applyUpdate = true;
         } else if (arg == L"--apply-wait") {
             opt.applyWaitPid = (uint32_t)_wtoi(next().c_str());
+        } else if (arg == L"--mcp") {
+            opt.mcp = 1;
+        } else if (arg == L"--no-mcp") {
+            opt.mcp = 0;
         } else {
             LOG_WARN("unknown command line argument: %s", WideToUtf8(arg).c_str());
         }
@@ -318,6 +322,8 @@ int App::Run(HINSTANCE instance, const AppOptions& options) {
 
     InitUpdater();
     startupPhase("updater");
+    InitMcp();
+    startupPhase("mcp");
     StartScan();
     startupPhase("scan start");
     MainLoop();
@@ -327,6 +333,7 @@ int App::Run(HINSTANCE instance, const AppOptions& options) {
     studioJobs_.clear();
     if (studio_ && studio_->Dirty() && options_.quitAfterFrames == 0 && options_.uiScript.empty()) StudioAutosave(true, true);
     if (studioAutosave_.valid()) studioAutosave_.get();
+    ShutdownMcp();
     ctx_.WaitForGpu();
     ReleaseRenderBenchImage();
     UnloadScene();
@@ -373,8 +380,8 @@ int App::Run(HINSTANCE instance, const AppOptions& options) {
 // ---------------------------------------------------------------------------
 
 LRESULT App::HandleMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
-    // A --ui-script owns mouse and keyboard: real input (the user's cursor over or off the window) would race it.
-    const bool scripted = !options_.uiScript.empty() &&
+    // A --ui-script or MCP input step owns mouse and keyboard: real input (the user's cursor over or off the window) would race it.
+    const bool scripted = (!options_.uiScript.empty() || mcpInputActive_) &&
                           ((msg >= WM_MOUSEFIRST && msg <= WM_MOUSELAST) || msg == WM_MOUSELEAVE || msg == WM_NCMOUSEMOVE ||
                            msg == WM_NCMOUSELEAVE || (msg >= WM_KEYFIRST && msg <= WM_KEYLAST));
     if (scripted) return msg == WM_MOUSELEAVE || msg == WM_NCMOUSELEAVE ? 0 : DefWindowProcW(hwnd, msg, wParam, lParam);
@@ -553,6 +560,7 @@ void App::MainLoop() {
         if (!running_) break;
         // An offline render (video/still) keeps going while minimized.
         if (minimized_ && offline_.mode == OfflineMode::None) {
+            PumpMcp(true);
             Sleep(16);
             continue;
         }
@@ -582,6 +590,7 @@ void App::RenderFrame() {
     ImGui_ImplDX12_NewFrame();
     ImGui_ImplWin32_NewFrame();
     PumpUiScript();
+    PumpMcp(false);
     ImGui::NewFrame();
     ui::NewFrame((float)dt);
 

@@ -22,6 +22,7 @@ struct AppSettings {
     bool drawEdges = true;
     bool motionLighting = true;   // play mode: the camera VMD's light / self-shadow tracks (when not just defaults)
     bool physics = true;       // rigid-body physics (hair, skirts) on the character
+    bool mcpEnabled = true;    // named pipe server for MCP control
     // Graphics quality: 0 low, 1 medium, 2 high, 3 ultra, 4 custom (toggles below as set).
     int graphicsPreset = 2;
     bool shadows = true, ssao = true, ssr = true, bloom = true, taa = false;

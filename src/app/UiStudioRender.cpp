@@ -76,7 +76,9 @@ void App::StartStudioRender(bool video) {
     offline_.studioTime = d.time;
     offline_.studioMotionCamera = d.useMotionCamera;
     offline_.fromCli = !options_.offlineStill.empty();
-    offline_.output = offline_.fromCli ? options_.offlineStill : OfflineOutputDir(false) / Utf8ToPath(StillName());
+    offline_.output = offline_.fromCli              ? options_.offlineStill
+                      : !mcpOfflineOutput_.empty() ? mcpOfflineOutput_  // MCP render_still
+                                                   : OfflineOutputDir(false) / Utf8ToPath(StillName());
     offline_.startSeconds = d.time;
     offline_.frameCount = 1;
     offline_.startWall = timeSeconds_;

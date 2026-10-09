@@ -29,4 +29,13 @@ bool LoadImageRGBA8FromMemory(const uint8_t* bytes, size_t size, ImageRGBA8& out
 bool SavePngRGBA8(const std::filesystem::path& path, uint32_t width, uint32_t height,
                   const uint8_t* rgba, uint32_t rowPitchBytes);
 
+// Encodes an RGBA8 buffer to in-memory PNG bytes (stb_image_write).
+bool EncodePngRGBA8(uint32_t width, uint32_t height, const uint8_t* rgba,
+                    uint32_t rowPitchBytes, std::vector<uint8_t>& outPng);
+
+// Downscales an RGBA8 buffer so width <= maxWidth (preserves aspect ratio).
+// If width <= maxWidth, returns a copy.
+std::vector<uint8_t> DownscaleRgba8(uint32_t srcW, uint32_t srcH, const uint8_t* srcRgba,
+                                    uint32_t maxWidth, uint32_t& outW, uint32_t& outH);
+
 } // namespace mmdx

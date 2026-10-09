@@ -281,7 +281,8 @@ void Dx12Context::EndFrame(bool vsync) {
     if (!cmdList_ || !queue_ || !swapChain_) return;
     bool captureIssued = false;
     ID3D12Resource* bb = BackBuffer();
-    if (!capturePath_.empty() && !captureInFlight_ && bb && device_) {
+    const bool wantsCapture = (!capturePath_.empty() || captureMemoryCallback_ != nullptr);
+    if (wantsCapture && !captureInFlight_ && bb && device_) {
         D3D12_RESOURCE_DESC desc = bb->GetDesc();
         UINT64 total = 0;
         device_->GetCopyableFootprints(&desc, 0, 1, 0, &captureFootprint_, nullptr, nullptr, &total);
@@ -327,7 +328,9 @@ void Dx12Context::EndFrame(bool vsync) {
     if (captureIssued) {
         captureFence_ = fenceValue_;
         captureInFlightPath_ = capturePath_;
+        captureInFlightMemoryCallback_ = std::move(captureMemoryCallback_);
         capturePath_.clear();
+        captureMemoryCallback_ = nullptr;
         captureInFlight_ = true;
     }
 }
@@ -349,15 +352,21 @@ void Dx12Context::ProcessCapture() {
                 for (UINT x = 0; x < fp.Width; ++x) dst[x * 4 + 3] = 255;
             }
             captureReadback_->Unmap(0, nullptr);
-            if (SavePngRGBA8(captureInFlightPath_, width_, height_, tmp.data(), fp.Width * 4))
-                LOG_INFO("captured %s", PathToUtf8(captureInFlightPath_).c_str());
-            else
-                LOG_ERROR("failed to save capture %s", PathToUtf8(captureInFlightPath_).c_str());
+            if (!captureInFlightPath_.empty()) {
+                if (SavePngRGBA8(captureInFlightPath_, width_, height_, tmp.data(), fp.Width * 4))
+                    LOG_INFO("captured %s", PathToUtf8(captureInFlightPath_).c_str());
+                else
+                    LOG_ERROR("failed to save capture %s", PathToUtf8(captureInFlightPath_).c_str());
+            }
+            if (captureInFlightMemoryCallback_) {
+                captureInFlightMemoryCallback_(width_, height_, std::move(tmp));
+            }
         }
         captureReadback_.Reset();
     }
     captureInFlight_ = false;
     captureInFlightPath_.clear();
+    captureInFlightMemoryCallback_ = nullptr;
 }
 
 void Dx12Context::WaitForGpu() {
@@ -377,6 +386,10 @@ void Dx12Context::DeferRelease(ComPtr<ID3D12Resource> res) {
 
 void Dx12Context::RequestCapture(const std::filesystem::path& pngPath) {
     capturePath_ = pngPath;
+}
+
+void Dx12Context::RequestCaptureMemory(MemoryCaptureCallback callback) {
+    captureMemoryCallback_ = std::move(callback);
 }
 
 void Dx12Context::Resize(uint32_t width, uint32_t height) {
@@ -399,6 +412,8 @@ void Dx12Context::Shutdown() {
     captureInFlight_ = false;
     capturePath_.clear();
     captureInFlightPath_.clear();
+    captureMemoryCallback_ = nullptr;
+    captureInFlightMemoryCallback_ = nullptr;
     deferred_.clear();
     for (auto& a : allocators_) a.Reset();
     cmdList_.Reset();

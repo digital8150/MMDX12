@@ -5,6 +5,7 @@
 #include <wrl/client.h>
 #include <cstdint>
 #include <filesystem>
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -75,7 +76,10 @@ public:
 
     // Writes the back buffer content of the next EndFrame (including UI) to a PNG file.
     void RequestCapture(const std::filesystem::path& pngPath);
-    bool CapturePending() const { return !capturePath_.empty() || captureInFlight_; }
+    // Captures the back buffer content of the next EndFrame and passes (width, height, rgba8) to the callback.
+    using MemoryCaptureCallback = std::function<void(uint32_t width, uint32_t height, std::vector<uint8_t> rgba)>;
+    void RequestCaptureMemory(MemoryCaptureCallback callback);
+    bool CapturePending() const { return !capturePath_.empty() || captureMemoryCallback_ != nullptr || captureInFlight_; }
 
     // Keeps `res` alive until the GPU has finished the frame currently being recorded.
     void DeferRelease(ComPtr<ID3D12Resource> res);
@@ -124,6 +128,7 @@ private:
     std::vector<Deferred> deferred_;
     // capture
     std::filesystem::path capturePath_, captureInFlightPath_;
+    MemoryCaptureCallback captureMemoryCallback_, captureInFlightMemoryCallback_;
     bool captureInFlight_ = false;
     uint64_t captureFence_ = 0;
     ComPtr<ID3D12Resource> captureReadback_;

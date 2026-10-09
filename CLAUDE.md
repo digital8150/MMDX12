@@ -57,6 +57,8 @@ progress.md is the session log. Read its latest entry first.
   - `studio_edit_test`: Studio key-edit core (move/insert/delete frames, undo byte budget, 100k-key timings)
   - `studio_gizmo_test` / `studio_pose_test`: gizmo projection/hit/drag math and bone overlay; mirror names/poses, VPD pose ops
   - `studio_project_test`: .mmdxproj save/load round trip, VMD naming/cleanup, atomic writes, prop offset matrix
+  - `mmdx12_mcp [--pipe <name>] [--pid <pid>] [--launch] [--timeout <ms>]`: Model Context Protocol stdio bridge
+  - `mcp_smoke.py [--handshake-only] [--scenario]`: MCP test client (protocol handshake & end-to-end scenario)
 - The play bar auto-hides while playing with no mouse movement, so captures usually don't show it.
 
 ## Architecture (src/)
@@ -196,6 +198,13 @@ progress.md is the session log. Read its latest entry first.
   pre-bloom entries run on the lit HDR before the bloom (`CSLitCompose`, the bloom then reads the effect output), post entries on the sRGB
   result (`PackEffectPass::RunOffline`). Their depth / normal come from the offline G-buffer (depth from `offline_effect.hlsl`, the normal in view
   space like the real-time normal target), motion is zero.
+- MCP (docs/mcp.md): `tools/mmdx12_mcp.cpp` is the stdio MCP bridge; it forwards tool calls over the named pipe
+  `\\.\pipe\mmdx12_mcp[_<pid>]` to `McpServer` (app/McpServer.*, worker thread), which queues them for the main thread:
+  `App::PumpMcp` / `ExecuteMcp` (app/AppMcp.cpp) before ImGui::NewFrame. Tool schemas + timeouts live in app/McpTools.h
+  (shared by both sides). Navigation goes through `McpLeaveScreen` (the UI's own leave paths); multi-frame calls
+  (loads, wait_frames, ui_input) resolve later from PumpMcp; `ui_input` / `studio_command` reuse `ExecuteUiCommand`
+  (UiScript.cpp) with their own queue counted in `mcpFrame_`. Renders use `mcpOfflineOutput_`, never `options_.offline*`
+  paths (those make a CLI job that quits). On by default (`mcp=` ini, lobby detail switch), headless runs need `--mcp`.
 - `OfflineRenderer` (render/OfflineRenderer.h) is independent of `RenderSettings`: `Renderer::BeginOffline` builds the TLAS,
   then `Renderer::RenderOffline` replaces `Render` each frame (GPU-time-budgeted iterations, preview present) until Done.
   Motion blur: each iteration re-skins the character at its shutter time (`RtScene::Build(..., time)`) from the models'

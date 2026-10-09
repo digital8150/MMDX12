@@ -879,6 +879,9 @@ const Entry kEnglish[] = {
     {"볼륨", "Volume"},
     {"사용 중", "In use"},
     {"메인 캐릭터 (자동)", "Main character (auto)"},
+    {"MCP 제어", "MCP Control"},
+    {"AI 에이전트/외부 도구가 MMDX12를 제어할 수 있도록 MCP 파이프를 엽니다.", "Open an MCP pipe so AI agents and external tools can control MMDX12."},
+    {"MCP 연결됨: ", "MCP connected: "},
 };
 const int kEnglishCount = (int)(sizeof(kEnglish) / sizeof(kEnglish[0]));
 

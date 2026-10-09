@@ -31,4 +31,8 @@ std::filesystem::path ExecutableDir();
 // first directory D such that D / relative exists. Returns empty path if not found.
 std::filesystem::path FindUpward(const std::filesystem::path& start, const std::filesystem::path& relative);
 
+// Base64 encoding / decoding
+std::string Base64Encode(const void* data, size_t bytes);
+std::vector<uint8_t> Base64Decode(std::string_view s);
+
 } // namespace mmdx

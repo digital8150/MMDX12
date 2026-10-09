@@ -111,4 +111,51 @@ std::filesystem::path FindUpward(const std::filesystem::path& start,
     return {};
 }
 
+static const char kBase64Chars[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
+std::string Base64Encode(const void* data, size_t bytes) {
+    if (!data || bytes == 0) return {};
+    const uint8_t* p = reinterpret_cast<const uint8_t*>(data);
+    std::string out;
+    out.reserve(((bytes + 2) / 3) * 4);
+    for (size_t i = 0; i < bytes; i += 3) {
+        uint32_t b0 = p[i];
+        uint32_t b1 = (i + 1 < bytes) ? p[i + 1] : 0;
+        uint32_t b2 = (i + 2 < bytes) ? p[i + 2] : 0;
+        uint32_t triple = (b0 << 16) | (b1 << 8) | b2;
+        out.push_back(kBase64Chars[(triple >> 18) & 0x3f]);
+        out.push_back(kBase64Chars[(triple >> 12) & 0x3f]);
+        out.push_back((i + 1 < bytes) ? kBase64Chars[(triple >> 6) & 0x3f] : '=');
+        out.push_back((i + 2 < bytes) ? kBase64Chars[triple & 0x3f] : '=');
+    }
+    return out;
+}
+
+std::vector<uint8_t> Base64Decode(std::string_view s) {
+    auto b64val = [](char c) -> int {
+        if (c >= 'A' && c <= 'Z') return c - 'A';
+        if (c >= 'a' && c <= 'z') return c - 'a' + 26;
+        if (c >= '0' && c <= '9') return c - '0' + 52;
+        if (c == '+') return 62;
+        if (c == '/') return 63;
+        return -1;
+    };
+    std::vector<uint8_t> out;
+    out.reserve((s.size() * 3) / 4);
+    uint32_t val = 0;
+    int bits = -8;
+    for (char c : s) {
+        if (c == '=') break;
+        int d = b64val(c);
+        if (d < 0) continue;
+        val = (val << 6) | (uint32_t)d;
+        bits += 6;
+        if (bits >= 0) {
+            out.push_back(static_cast<uint8_t>((val >> bits) & 0xFF));
+            bits -= 8;
+        }
+    }
+    return out;
+}
+
 } // namespace mmdx

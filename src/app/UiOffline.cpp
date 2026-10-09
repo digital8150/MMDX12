@@ -147,8 +147,9 @@ void App::StartOfflineStill() {
     offline_.mode = OfflineMode::Still;
     offline_.wasPlaying = wasPlaying;
     offline_.fromCli = !options_.offlineStill.empty();
-    offline_.output = offline_.fromCli ? options_.offlineStill
-                                       : OfflineOutputDir(false) / Utf8ToPath("MMDX12_" + Timestamp() + ".png");
+    offline_.output = offline_.fromCli              ? options_.offlineStill
+                      : !mcpOfflineOutput_.empty() ? mcpOfflineOutput_  // MCP render_still
+                                                   : OfflineOutputDir(false) / Utf8ToPath("MMDX12_" + Timestamp() + ".png");
     offline_.startSeconds = playTime_;
     offline_.frame = 0;
     offline_.frameCount = 1;
@@ -212,8 +213,8 @@ void App::StartOfflineVideo(double startSeconds, double endSeconds, bool fromLob
         offline_.output = std::filesystem::temp_directory_path() / L"mmdx12_probe.mp4";
     else
         offline_.output =
-            offline_.fromCli
-                ? options_.offlineVideo
+            offline_.fromCli              ? options_.offlineVideo
+            : !mcpOfflineOutput_.empty() ? mcpOfflineOutput_  // MCP render_video
                 : OfflineOutputDir(true) / Utf8ToPath("MMDX12_" + SanitizeFileName(song) + "_" + Timestamp() + ".mp4");
     offline_.startSeconds = startSeconds;
     offline_.frameCount =

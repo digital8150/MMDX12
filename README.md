@@ -19,7 +19,8 @@
     <a href="#what-it-does">What it does</a> ·
     <a href="#getting-started">Getting started</a> ·
     <a href="#studio">Studio</a> ·
-    <a href="#benchmark">Benchmark</a>
+    <a href="#benchmark">Benchmark</a> ·
+    <a href="#mcp-control">MCP Control</a>
   </p>
 </div>
 
@@ -179,6 +180,16 @@ Projects are saved as `.mmdxproj` files, and motions are saved alongside them as
 There's a benchmark mode with real-time tests at 1080p and 4K, plus a Cinebench-style test that renders one 4K picture and times it. You can post your score to the online leaderboard from the result screen.
 
 Since no assets ship with the app, the benchmark builds its scene from your own library (the heaviest models and a suitable song). That means scores only really compare between people with similar libraries, so treat the leaderboard as a toy.
+
+## MCP Control
+
+MMDX12 can be controlled interactively by AI assistants (Claude Desktop, Cursor, Antigravity) over the [Model Context Protocol](docs/mcp.md).
+- Control playback, cameras, scene loading, and render settings.
+- Stream in-memory GPU backbuffer screenshots directly to agents.
+- Full Studio inspection, pose and light adjustments, and keyframe editing.
+- Automated offline still and video rendering.
+
+See [docs/mcp.md](docs/mcp.md) for configuration instructions and the complete 33-tool reference.
 
 ## Building from source
 

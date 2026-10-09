@@ -879,6 +879,9 @@ const Entry kJapanese[] = {
     {"볼륨", "音量"},
     {"사용 중", "使用中"},
     {"메인 캐릭터 (자동)", "メインキャラクター（自動）"},
+    {"MCP 제어", "MCP制御"},
+    {"AI 에이전트/외부 도구가 MMDX12를 제어할 수 있도록 MCP 파이프를 엽니다.", "AIエージェントや外部ツールがMMDX12を制御できるようにMCPパイプを開きます。"},
+    {"MCP 연결됨: ", "MCP接続中: "},
 };
 const int kJapaneseCount = (int)(sizeof(kJapanese) / sizeof(kJapanese[0]));
 

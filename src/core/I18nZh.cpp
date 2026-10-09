@@ -879,6 +879,9 @@ const Entry kChinese[] = {
     {"볼륨", "音量"},
     {"사용 중", "使用中"},
     {"메인 캐릭터 (자동)", "主角色（自动）"},
+    {"MCP 제어", "MCP控制"},
+    {"AI 에이전트/외부 도구가 MMDX12를 제어할 수 있도록 MCP 파이프를 엽니다.", "打开MCP命名管道，以便AI代理和外部工具控制MMDX12。"},
+    {"MCP 연결됨: ", "MCP已连接: "},
 };
 const int kChineseCount = (int)(sizeof(kChinese) / sizeof(kChinese[0]));
 

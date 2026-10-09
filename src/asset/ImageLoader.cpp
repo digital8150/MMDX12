@@ -197,21 +197,31 @@ bool LoadImageRGBA8FromMemory(const uint8_t* bytes, size_t size, ImageRGBA8& out
     }
 }
 
-bool SavePngRGBA8(const std::filesystem::path& path, uint32_t width, uint32_t height,
-                  const uint8_t* rgba, uint32_t rowPitchBytes) {
+bool EncodePngRGBA8(uint32_t width, uint32_t height, const uint8_t* rgba,
+                    uint32_t rowPitchBytes, std::vector<uint8_t>& outPng) {
     try {
         if (!rgba || width == 0 || height == 0) return false;
+        outPng.clear();
         auto writeFunc = [](void* context, void* data, int size) {
             static_cast<std::vector<uint8_t>*>(context)->insert(
                 static_cast<std::vector<uint8_t>*>(context)->end(),
                 static_cast<const uint8_t*>(data),
                 static_cast<const uint8_t*>(data) + size);
         };
-        std::vector<uint8_t> png;
-        const int ok = stbi_write_png_to_func(writeFunc, &png, static_cast<int>(width),
+        const int ok = stbi_write_png_to_func(writeFunc, &outPng, static_cast<int>(width),
                                               static_cast<int>(height), 4, rgba,
                                               static_cast<int>(rowPitchBytes));
-        if (!ok || png.empty()) return false;
+        return (ok != 0 && !outPng.empty());
+    } catch (...) {
+        return false;
+    }
+}
+
+bool SavePngRGBA8(const std::filesystem::path& path, uint32_t width, uint32_t height,
+                  const uint8_t* rgba, uint32_t rowPitchBytes) {
+    try {
+        std::vector<uint8_t> png;
+        if (!EncodePngRGBA8(width, height, rgba, rowPitchBytes, png)) return false;
         std::ofstream f(path, std::ios::binary);
         if (!f) return false;
         f.write(reinterpret_cast<const char*>(png.data()),
@@ -220,6 +230,49 @@ bool SavePngRGBA8(const std::filesystem::path& path, uint32_t width, uint32_t he
     } catch (...) {
         return false;
     }
+}
+
+std::vector<uint8_t> DownscaleRgba8(uint32_t srcW, uint32_t srcH, const uint8_t* srcRgba,
+                                    uint32_t maxWidth, uint32_t& outW, uint32_t& outH) {
+    if (!srcRgba || srcW == 0 || srcH == 0) {
+        outW = outH = 0;
+        return {};
+    }
+    if (maxWidth == 0 || srcW <= maxWidth) {
+        outW = srcW;
+        outH = srcH;
+        return std::vector<uint8_t>(srcRgba, srcRgba + (size_t)srcW * srcH * 4);
+    }
+    const float scale = static_cast<float>(maxWidth) / static_cast<float>(srcW);
+    outW = maxWidth;
+    outH = std::max(1u, static_cast<uint32_t>(std::round(srcH * scale)));
+    std::vector<uint8_t> dst(static_cast<size_t>(outW) * outH * 4);
+    for (uint32_t y = 0; y < outH; ++y) {
+        const float v = ((static_cast<float>(y) + 0.5f) / static_cast<float>(outH)) * static_cast<float>(srcH) - 0.5f;
+        const int y0 = std::clamp(static_cast<int>(std::floor(v)), 0, static_cast<int>(srcH) - 1);
+        const int y1 = std::clamp(y0 + 1, 0, static_cast<int>(srcH) - 1);
+        const float fy = v - std::floor(v);
+        for (uint32_t x = 0; x < outW; ++x) {
+            const float u = ((static_cast<float>(x) + 0.5f) / static_cast<float>(outW)) * static_cast<float>(srcW) - 0.5f;
+            const int x0 = std::clamp(static_cast<int>(std::floor(u)), 0, static_cast<int>(srcW) - 1);
+            const int x1 = std::clamp(x0 + 1, 0, static_cast<int>(srcW) - 1);
+            const float fx = u - std::floor(u);
+
+            const uint8_t* p00 = srcRgba + ((size_t)y0 * srcW + x0) * 4;
+            const uint8_t* p10 = srcRgba + ((size_t)y0 * srcW + x1) * 4;
+            const uint8_t* p01 = srcRgba + ((size_t)y1 * srcW + x0) * 4;
+            const uint8_t* p11 = srcRgba + ((size_t)y1 * srcW + x1) * 4;
+
+            uint8_t* d = dst.data() + ((size_t)y * outW + x) * 4;
+            for (int c = 0; c < 4; ++c) {
+                const float top = p00[c] * (1.0f - fx) + p10[c] * fx;
+                const float bot = p01[c] * (1.0f - fx) + p11[c] * fx;
+                const float val = top * (1.0f - fy) + bot * fy;
+                d[c] = static_cast<uint8_t>(std::clamp(std::round(val), 0.0f, 255.0f));
+            }
+        }
+    }
+    return dst;
 }
 
 } // namespace mmdx

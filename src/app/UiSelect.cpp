@@ -100,6 +100,22 @@ void App::DrawAppBar(int activeNav) {
     const float pillW = Dp(300.0f);
     const float right = W - Dp(kPad);
     const ImVec2 pa(right - pillW - Dp(126.0f), (h - Dp(36.0f)) * 0.5f);
+
+    if (mcpServer_ && mcpServer_->IsConnected()) {
+        const float mcpW = Dp(68.0f);
+        const ImVec2 mcpPos(pa.x - mcpW - Dp(12.0f), (h - Dp(28.0f)) * 0.5f);
+        dl->AddRectFilled(mcpPos, ImVec2(mcpPos.x + mcpW, mcpPos.y + Dp(28.0f)), WithAlpha(p.accent, 0.15f), Dp(14.0f));
+        dl->AddRect(mcpPos, ImVec2(mcpPos.x + mcpW, mcpPos.y + Dp(28.0f)), WithAlpha(p.accent, 0.4f), Dp(14.0f));
+        Icon(dl, icon::Cpu, 14.0f, ImVec2(mcpPos.x + Dp(14.0f), mcpPos.y + Dp(14.0f)), p.accentInk);
+        Text(dl, Font::Bold, size::Caption, ImVec2(mcpPos.x + Dp(28.0f), mcpPos.y + Dp(7.0f)), p.accentInk, "MCP");
+        ImGui::SetCursorScreenPos(mcpPos);
+        ImGui::InvisibleButton("##mcpbadge", ImVec2(mcpW, Dp(28.0f)));
+        if (ImGui::IsItemHovered()) {
+            std::string tip = std::string(Tr("MCP 연결됨: ")) + mcpServer_->PipeName();
+            Tooltip(tip.c_str());
+        }
+    }
+
     ImGui::SetCursorScreenPos(pa);
     bool hovered = false;
     const bool clicked = CardItem("##libpath", pa, ImVec2(pa.x + pillW, pa.y + Dp(36.0f)), &hovered);
@@ -798,6 +814,12 @@ void App::DrawSelect() {
                 changed |= SliderRow("##exposure", Tr("노출"), &settings_.exposure, 0.5f, 2.0f, "%.2f");
                 Gap(10.0f);
                 if (Switch("##physics", Tr("물리 연산"), &settings_.physics, Tr("머리카락과 옷의 흔들림"))) settings_.Save(settingsPath_);
+                if (Switch("##mcp", Tr("MCP 제어"), &settings_.mcpEnabled,
+                           Tr("AI 에이전트/외부 도구가 MMDX12를 제어할 수 있도록 MCP 파이프를 엽니다."))) {
+                    settings_.Save(settingsPath_);
+                    if (settings_.mcpEnabled) StartMcpServer();
+                    else ShutdownMcp();
+                }
                 Gap(14.0f);
                 SectionLabel(Tr("효과"));
                 bool fx = false;

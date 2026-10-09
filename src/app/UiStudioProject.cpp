@@ -531,6 +531,11 @@ void App::StudioPollJobs() {
                 LOG_INFO("studio: added %s (%d models)", job.label.c_str(), (int)d.models.size());
             }
         }
+        if (job.mcp) {  // an MCP studio_add_model waits for this
+            if (!ok) job.mcp->Reject("Loading failed: " + job.label + (job.error.empty() ? "" : ": " + job.error));
+            else job.mcp->Resolve({{"status", "added"}, {"label", job.label}, {"models_count", (int)d.models.size()},
+                                   {"selected_model", d.selectedModel}});
+        }
         if (job.audioPreloaded) audio_.ReleasePreload(job.audio);   // the loaded sound holds its own reference
         studioJobs_.erase(studioJobs_.begin() + (ptrdiff_t)ji);
     }
