@@ -471,6 +471,7 @@ void App::StudioUpdateCameraPath() {
         CameraMotion::ToView(pose, &pt.view, &pt.eye);
         pt.target = pose.target;
         pt.fovY = DirectX::XMConvertToRadians(pose.fovDeg);
+        pt.frame = f;
         return pt;
     };
     for (int f = first; f <= last; f += stride) studioCamPath_.push_back(sample((float)f));
@@ -604,7 +605,8 @@ void App::DrawStudioFrameMask(float x0, float y0, float x1, float y1) {
 void App::DrawStudioCameraPath(float x0, float y0, float x1, float y1) {
     using namespace ui;
     StudioDoc& d = *studio_;
-    if (!d.showCameraPath || (d.useMotionCamera && d.cameraEval) || !d.cameraEval) return;
+    const bool cameraSelected = (d.selectedModel < 0 && d.selectedLightUid == 0);
+    if (!cameraSelected || !d.showCameraPath || (d.useMotionCamera && d.cameraEval) || !d.cameraEval) return;
     StudioUpdateCameraPath();
     if (studioCamPath_.empty()) return;
     const float frame = (float)(d.time * kMmdFps);
@@ -630,10 +632,13 @@ void App::DrawStudioCameraPath(float x0, float y0, float x1, float y1) {
     CameraMotion::ToView(pose, &cur.view, &cur.eye);
     cur.target = pose.target;
     cur.fovY = DirectX::XMConvertToRadians(pose.fovDeg);
+    cur.frame = frame;
     CameraPathStyle style;
     style.lineWidth = Dp(2.0f);
     style.keyRadius = Dp(4.0f);
     style.currentRadius = Dp(5.5f);
+    style.currentFrame = frame;
+    style.windowHalfWidth = std::max(1.0f, (float)(hi - lo) * 0.5f);
     // The frustum is as deep as a fraction of the eye -> target distance: it scales with the scene, so the pyramid
     // shows the real lens (a fixed screen-size icon could not). The render aspect is 16:9 (every video size).
     const float toTarget = std::sqrt((cur.eye.x - cur.target.x) * (cur.eye.x - cur.target.x) +
@@ -657,9 +662,13 @@ void App::DrawStudioCameraPath(float x0, float y0, float x1, float y1) {
         std::nth_element(steps.begin(), steps.begin() + steps.size() / 2, steps.end());
         cut = std::max(cut, steps[steps.size() / 2] * 8.0f);
     }
+    std::vector<float> keyFrames;
+    keyFrames.reserve((size_t)(k1 - k0));
+    for (int i = k0; i < k1; ++i) keyFrames.push_back((float)keys[(size_t)i].frame);
+
     ImDrawList* dl = ImGui::GetWindowDrawList();
     dl->PushClipRect(ImVec2(x0, y0), ImVec2(x1, y1), true);
-    DrawCameraPath(dl, studioVp_, studioCamPath_.data() + p0, p1 - p0 + 1, studioCamKeys_.data() + k0, k1 - k0, selected, &cur, kRenderAspect, frustum, cut, style);
+    DrawCameraPath(dl, studioVp_, studioCamPath_.data() + p0, p1 - p0 + 1, studioCamKeys_.data() + k0, k1 - k0, selected, &cur, kRenderAspect, frustum, cut, style, keyFrames.data());
     dl->PopClipRect();
 }
 

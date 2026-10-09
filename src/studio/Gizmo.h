@@ -56,7 +56,13 @@ struct BoneOverlayStyle {
     ImU32 active = IM_COL32(255, 220, 60, 255);     // the active (gizmo) bone
     ImU32 hovered = IM_COL32(255, 255, 255, 255);   // hover ring
     ImU32 outline = IM_COL32(10, 14, 20, 200);      // dark outline behind everything (contrast on bright scenes)
+    ImU32 chain = IM_COL32(255, 195, 70, 255);      // chain leading to active / selected bone
 };
+
+// Returns true for minor bones (fingers, twist/補助 bones, tip/dummy bones).
+bool IsMinorBone(const PmxModel& model, int bone);
+// Returns true for bones in the face/eyes/mouth area that cause visual clutter in the face.
+bool IsFaceBone(const PmxModel& model, int bone);
 
 // A bone is shown when it has PmxBone_Visible and (PmxBone_Rotatable or PmxBone_Movable or PmxBone_IK), and no
 // simulated rigid body (physicsMode 1/2) drives it.
@@ -153,6 +159,8 @@ struct CameraPathStyle {
     ImU32 current = IM_COL32(64, 220, 255, 255);    // camera at the current frame: dot + frustum
     ImU32 target = IM_COL32(64, 220, 255, 160);     // line eye -> look-at target of the current frame
     ImU32 outline = IM_COL32(10, 14, 20, 190);      // dark outline under lines and dots (contrast)
+    float currentFrame = 0.0f;
+    float windowHalfWidth = 0.0f;
 };
 
 // One sample of the motion camera (built by the caller with CameraMotion::Evaluate + ToView).
@@ -161,6 +169,7 @@ struct CameraPathPoint {
     DirectX::XMFLOAT3 target{};
     DirectX::XMFLOAT4X4 view{};    // the motion camera's LH view matrix (for the frustum)
     float fovY = 0.5f;             // radians
+    float frame = 0.0f;
 };
 
 // Draws the motion camera's path as seen from the viewing camera `vp`:
@@ -181,7 +190,7 @@ struct CameraPathPoint {
 void DrawCameraPath(ImDrawList* dl, const ViewProj& vp, const CameraPathPoint* path, int pathCount,
                     const DirectX::XMFLOAT3* keys, int keyCount, const std::set<int>& selectedKeys,
                     const CameraPathPoint* current, float aspect, float frustumLength, float cutDistance,
-                    const CameraPathStyle& style);
+                    const CameraPathStyle& style, const float* keyFrames = nullptr);
 // Index of the key (in `keys`) whose projected position is nearest to `mouse` within `radius` px, -1 if none.
 int PickCameraKey(const ViewProj& vp, const DirectX::XMFLOAT3* keys, int keyCount, ImVec2 mouse, float radius);
 

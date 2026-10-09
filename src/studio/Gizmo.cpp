@@ -6,6 +6,7 @@
 #include "asset/PmxModel.h"
 #include <algorithm>
 #include <cmath>
+#include <unordered_set>
 #include <vector>
 
 namespace mmdx::studio {
@@ -201,22 +202,101 @@ bool BoneTailWorld(const PmxModel& model, const ModelInstance& inst, int bone, X
 // jointRadius px at kJointRefDistance world units from the camera, shrinking when farther and growing when nearer,
 // clamped so markers never vanish or blow up. Ortho views have no perspective: constant screen size.
 constexpr float kJointRefDistance = 40.0f;
-float JointPixelRadius(const ViewProj& vp, float depth, const BoneOverlayStyle& style) {
-    if (vp.ortho || depth <= 0.0f) return style.jointRadius;
-    return std::clamp(style.jointRadius * kJointRefDistance / depth, style.minPixelRadius, style.maxPixelRadius);
+
+bool IsMinorBone(const PmxModel& model, int bone) {
+    if (bone < 0 || bone >= (int)model.bones.size()) return false;
+    const PmxBone& b = model.bones[(size_t)bone];
+    if (b.flags & (PmxBone_FixedAxis | PmxBone_AppendRotate | PmxBone_AppendTranslate)) return true;
+    const std::string& name = b.name;
+    // Finger bones (Japanese "指" or English naming)
+    if (name.find("\xE6\x8C\x87") != std::string::npos) return true;  // 指
+    // Twist / helper / dummy / tip
+    if (name.find("\xE6\x8D\xA9") != std::string::npos ||       // 捩 (twist)
+        name.find("\xE8\xA3\x9C\xE5\x8A\xA9") != std::string::npos || // 補助 (helper)
+        name.find("\xE3\x83\x80\xE3\x83\x9F\xE3\x83\xBC") != std::string::npos || // ダミー
+        name.find("\xE5\x85\x88") != std::string::npos ||       // 先 (tip)
+        name.find("\xE7\xAB\xAF") != std::string::npos) return true;  // 端
+    if (name.find("twist") != std::string::npos || name.find("Twist") != std::string::npos ||
+        name.find("dummy") != std::string::npos || name.find("Dummy") != std::string::npos ||
+        name.find("thumb") != std::string::npos || name.find("Thumb") != std::string::npos ||
+        name.find("index") != std::string::npos || name.find("Index") != std::string::npos ||
+        name.find("pinky") != std::string::npos || name.find("Pinky") != std::string::npos ||
+        name.find("finger") != std::string::npos || name.find("Finger") != std::string::npos ||
+        name.find("helper") != std::string::npos || name.find("Helper") != std::string::npos ||
+        name.find("tip") != std::string::npos || name.find("Tip") != std::string::npos) return true;
+    return false;
+}
+
+bool IsFaceBone(const PmxModel& model, int bone) {
+    if (bone < 0 || bone >= (int)model.bones.size()) return false;
+    const std::string& name = model.bones[(size_t)bone].name;
+    // Eyes: 目, 眼
+    if (name.find("\xE7\x9B\xAE") != std::string::npos || // 目
+        name.find("\xE7\x9C\xBC") != std::string::npos) return true; // 眼
+    // Eyebrows, mouth, tongue, lips, teeth, nose, cheek
+    if (name.find("\xE7\x9C\x89") != std::string::npos || // 眉
+        name.find("\xE5\x8F\xA3") != std::string::npos || // 口
+        name.find("\xE8\x88\x8C") != std::string::npos || // 舌
+        name.find("\xE9\xBC\xBB") != std::string::npos || // 鼻
+        name.find("\xE6\xAD\xAF") != std::string::npos || // 歯
+        name.find("\xE9\xA0\xAC") != std::string::npos || // 頬
+        name.find("\xE3\x83\xAA\xE3\x83\x83\xE3\x83\x97") != std::string::npos) return true; // リップ
+    if (name.find("eye") != std::string::npos || name.find("Eye") != std::string::npos ||
+        name.find("lip") != std::string::npos || name.find("Lip") != std::string::npos ||
+        name.find("mouth") != std::string::npos || name.find("Mouth") != std::string::npos ||
+        name.find("brow") != std::string::npos || name.find("Brow") != std::string::npos) return true;
+    return false;
+}
+
+float JointPixelRadius(const ViewProj& vp, float depth, const BoneOverlayStyle& style, bool minor) {
+    const float baseR = minor ? std::max(style.minPixelRadius, style.jointRadius * 0.65f) : style.jointRadius;
+    if (vp.ortho || depth <= 0.0f) return baseR;
+    const float r = baseR * kJointRefDistance / depth;
+    const float minR = minor ? std::max(1.5f, style.minPixelRadius * 0.8f) : style.minPixelRadius;
+    const float maxR = minor ? std::max(minR, style.maxPixelRadius * 0.65f) : style.maxPixelRadius;
+    return std::clamp(r, minR, maxR);
 }
 
 void DrawBoneOverlay(ImDrawList* dl, const ViewProj& vp, const PmxModel& model, const ModelInstance& inst,
                      const std::set<int>& selected, int active, int hovered, const BoneOverlayStyle& style) {
     const auto& bones = model.bones;
 
+    // Collect bone chain (ancestors of active / selected / hovered bones, and IK links)
+    std::unordered_set<int> chainBones;
+    const auto addChain = [&](int start) {
+        int cur = start;
+        while (cur >= 0 && cur < (int)bones.size()) {
+            chainBones.insert(cur);
+            cur = bones[(size_t)cur].parentIndex;
+        }
+    };
+    if (active >= 0) addChain(active);
+    for (int s : selected) addChain(s);
+    if (hovered >= 0) addChain(hovered);
+    for (int b = 0; b < (int)bones.size(); ++b) {
+        const auto& bone = bones[(size_t)b];
+        if ((bone.flags & PmxBone_IK) && (b == active || selected.count(b) || hovered == b)) {
+            if (bone.ikTargetIndex >= 0) chainBones.insert(bone.ikTargetIndex);
+            for (const auto& l : bone.ikLinks) {
+                if (l.boneIndex >= 0) chainBones.insert(l.boneIndex);
+            }
+        }
+    }
+
     const auto colorOf = [&](int b) -> ImU32 {
         if (active == b) return style.active;
         if (selected.count(b)) return style.selected;
+        if (chainBones.count(b)) return style.chain;
         const uint16_t f = bones[b].flags;
         if (f & PmxBone_IK) return style.ik;
         if (f & PmxBone_Movable) return style.movable;
         return style.normal;
+    };
+
+    // Precalculate depth factor: farther bones recede
+    const auto depthFactor = [&](float depth) -> float {
+        if (vp.ortho || depth <= 0.0f) return 1.0f;
+        return std::clamp(35.0f / std::max(depth, 15.0f), 0.38f, 1.0f);
     };
 
     // Links first, then joints, so joints are drawn on top.
@@ -226,33 +306,98 @@ void DrawBoneOverlay(ImDrawList* dl, const ViewProj& vp, const PmxModel& model, 
         if (!BoneTailWorld(model, inst, b, tail)) continue;
         const XMFLOAT3 joint = BoneJointWorld(model, inst, b);
         ImVec2 j, t;
-        if (!vp.Project(joint, j) || !vp.Project(tail, t)) continue;
+        float depth = 0.0f;
+        if (!vp.Project(joint, j, &depth) || !vp.Project(tail, t)) continue;
         const ImVec2 d = t - j;
         if (LenV(d) < 2.0f) continue;
         const ImVec2 n = ImVec2(-d.y, d.x) / LenV(d);
-        dl->AddQuadFilled(j + n * (style.linkWidth + 1.5f), j - n * (style.linkWidth + 1.5f),
-                          t - n * 2.0f, t + n * 2.0f, style.outline);
-        const ImU32 colour = colorOf(b);
-        dl->AddQuadFilled(j + n * style.linkWidth, j - n * style.linkWidth,
-                          t - n * 0.5f, t + n * 0.5f, colour);
+
+        const bool isSelected = (selected.count(b) > 0 || b == active);
+        const bool inChain = chainBones.count(b) > 0;
+        const bool isHovered = (b == hovered);
+        const bool isMinor = IsMinorBone(model, b);
+        const bool isFace = IsFaceBone(model, b);
+
+        // Clutter in the face: omit unselected face links
+        if (isFace && !isSelected && !isHovered && !inChain) continue;
+
+        const float df = (isSelected || isHovered) ? 1.0f : depthFactor(depth);
+
+        if (isSelected || isHovered) {
+            // Prominent highlight for active/selected/hovered
+            const float lw = style.linkWidth * 1.5f;
+            dl->AddQuadFilled(j + n * (lw + 2.0f), j - n * (lw + 2.0f),
+                              t - n * 2.5f, t + n * 2.5f, style.outline);
+            dl->AddQuadFilled(j + n * lw, j - n * lw,
+                              t - n * 1.0f, t + n * 1.0f, colorOf(b));
+        } else if (inChain) {
+            // Clearly stronger highlight for chain
+            const float lw = style.linkWidth * 1.2f;
+            dl->AddQuadFilled(j + n * (lw + 1.5f), j - n * (lw + 1.5f),
+                              t - n * 2.0f, t + n * 2.0f, AlphaScaled(style.outline, 0.85f * df));
+            dl->AddQuadFilled(j + n * lw, j - n * lw,
+                              t - n * 0.8f, t + n * 0.8f, AlphaScaled(style.chain, 0.90f * df));
+        } else {
+            // Calmer, thinner, lower-alpha links for unselected bones
+            const float lw = isMinor ? style.linkWidth * 0.45f : style.linkWidth * 0.65f;
+            const float alpha = (isMinor ? 0.22f : 0.38f) * df;
+            dl->AddQuadFilled(j + n * (lw + 0.8f), j - n * (lw + 0.8f),
+                              t - n * 1.2f, t + n * 1.2f, AlphaScaled(style.outline, alpha * 0.8f));
+            dl->AddQuadFilled(j + n * lw, j - n * lw,
+                              t - n * 0.4f, t + n * 0.4f, AlphaScaled(colorOf(b), alpha));
+        }
     }
+
+    // Joints
     for (int b = 0; b < (int)bones.size(); ++b) {
         if (!BoneShownInOverlay(model, b)) continue;
         const XMFLOAT3 joint = BoneJointWorld(model, inst, b);
         ImVec2 c;
-        if (!vp.Project(joint, c)) continue;
-        const float r = JointPixelRadius(vp, std::max(XMVectorGetZ(XMVector3TransformCoord(Load(joint), XMLoadFloat4x4(&vp.view))), 0.0f), style);
+        float depth = 0.0f;
+        if (!vp.Project(joint, c, &depth)) continue;
+
+        const bool isSelected = (selected.count(b) > 0 || b == active);
+        const bool inChain = chainBones.count(b) > 0;
+        const bool isHovered = (b == hovered);
+        const bool isMinor = IsMinorBone(model, b);
+        const bool isFace = IsFaceBone(model, b);
+
+        const float r = JointPixelRadius(vp, depth, style, isMinor || isFace);
         const bool movable = (bones[b].flags & PmxBone_Movable) != 0;
         const bool ik = (bones[b].flags & PmxBone_IK) != 0;
-        const ImU32 colour = colorOf(b);
-        if (movable && !ik) {
-            dl->AddRectFilled(c - ImVec2(r + 1.5f, r + 1.5f), c + ImVec2(r + 1.5f, r + 1.5f), style.outline);
-            dl->AddRectFilled(c - ImVec2(r, r), c + ImVec2(r, r), colour);
+        const ImU32 baseCol = colorOf(b);
+
+        if (isSelected || isHovered) {
+            // Selected / active: full opacity, bold outline, slightly larger
+            const float bonusR = (b == active) ? 2.0f : 1.5f;
+            if (movable && !ik) {
+                dl->AddRectFilled(c - ImVec2(r + bonusR + 1.5f, r + bonusR + 1.5f),
+                                  c + ImVec2(r + bonusR + 1.5f, r + bonusR + 1.5f), style.outline);
+                dl->AddRectFilled(c - ImVec2(r + bonusR, r + bonusR),
+                                  c + ImVec2(r + bonusR, r + bonusR), baseCol);
+            } else {
+                dl->AddCircleFilled(c, r + bonusR + 1.5f, style.outline, 16);
+                dl->AddCircleFilled(c, r + bonusR, baseCol, 16);
+            }
+            if (b == active) {
+                dl->AddCircle(c, r + bonusR + 3.0f, style.active, 18, 1.5f);
+            }
         } else {
-            dl->AddCircleFilled(c, r + 1.5f, style.outline, 16);
-            dl->AddCircleFilled(c, r, colour, 16);
+            // Unselected bones: depth-based alpha, smaller for minor bones, calm face
+            const float df = depthFactor(depth);
+            const float alphaScale = isFace ? 0.22f * df : (isMinor ? 0.45f : (inChain ? 0.85f : 0.65f)) * df;
+            const ImU32 colour = AlphaScaled(baseCol, alphaScale);
+            const ImU32 outlineCol = AlphaScaled(style.outline, alphaScale * 0.75f);
+
+            if (movable && !ik) {
+                dl->AddRectFilled(c - ImVec2(r + 1.0f, r + 1.0f), c + ImVec2(r + 1.0f, r + 1.0f), outlineCol);
+                dl->AddRectFilled(c - ImVec2(r, r), c + ImVec2(r, r), colour);
+            } else {
+                dl->AddCircleFilled(c, r + 1.0f, outlineCol, 16);
+                dl->AddCircleFilled(c, r, colour, 16);
+            }
         }
-        if (b == hovered) dl->AddCircle(c, r + 4.0f, style.hovered, 20, 1.5f);
+        if (b == hovered) dl->AddCircle(c, r + 4.5f, style.hovered, 20, 1.8f);
     }
 }
 
@@ -270,8 +415,10 @@ int PickBone(const ViewProj& vp, const PmxModel& model, const ModelInstance& ins
         float depth = 0.0f;
         if (!vp.Project(joint, c, &depth)) continue;
         const float d = std::hypot(mouse.x - c.x, mouse.y - c.y);
-        // the pick radius follows the drawn marker size, with the base pickRadius as the floor
-        const float r = std::max(style.pickRadius, JointPixelRadius(vp, depth, style));
+        const bool isMinor = IsMinorBone(model, b);
+        // The pick radius follows the exact drawn marker size, with the base pickRadius as the floor
+        const float drawnR = JointPixelRadius(vp, depth, style, isMinor || IsFaceBone(model, b));
+        const float r = std::max(style.pickRadius, drawnR);
         if (d <= r) candidates.push_back({d, depth, b});
     }
     if (candidates.empty()) return -1;
@@ -619,19 +766,33 @@ bool ProjectSegment(const ViewProj& vp, const DirectX::XMFLOAT3& a, const Direct
 void DrawCameraPath(ImDrawList* dl, const ViewProj& vp, const CameraPathPoint* path, int pathCount,
                     const DirectX::XMFLOAT3* keys, int keyCount, const std::set<int>& selectedKeys,
                     const CameraPathPoint* current, float aspect, float frustumLength, float cutDistance,
-                    const CameraPathStyle& style) {
+                    const CameraPathStyle& style, const float* keyFrames) {
     const auto dist2 = [](const XMFLOAT3& a, const XMFLOAT3& b) {
         return (a.x - b.x)*(a.x - b.x) + (a.y - b.y)*(a.y - b.y) + (a.z - b.z)*(a.z - b.z);
     };
     const float cutSq = cutDistance * cutDistance;
 
+    const auto fadeOf = [&](float f) -> float {
+        if (style.windowHalfWidth <= 0.0f) return 1.0f;
+        const float dist = std::fabs(f - style.currentFrame);
+        const float t = std::clamp(dist / style.windowHalfWidth, 0.0f, 1.0f);
+        // smoothstep: 1.0 at playhead, 0.0 at window edge
+        float alpha = 1.0f - (t * t * (3.0f - 2.0f * t));
+        // past keys / segments fade too (fainter than future ones)
+        if (f < style.currentFrame) alpha *= 0.70f;
+        return alpha;
+    };
+
     for (int pass = 0; pass < 2; ++pass) {
         const float thick = pass == 0 ? style.lineWidth + 2.0f : style.lineWidth;
-        const ImU32 col = pass == 0 ? style.outline : style.path;
         for (int i = 0; i < pathCount - 1; ++i) {
             if (dist2(path[i].eye, path[i+1].eye) > cutSq) continue;
+            const float segFrame = (path[i].frame + path[i+1].frame) * 0.5f;
+            const float alpha = fadeOf(segFrame);
+            if (alpha <= 0.005f) continue;
             ImVec2 pa, pb;
             if (ProjectSegment(vp, path[i].eye, path[i+1].eye, pa, pb)) {
+                const ImU32 col = pass == 0 ? AlphaScaled(style.outline, alpha) : AlphaScaled(style.path, alpha);
                 dl->AddLine(pa, pb, col, thick);
             }
         }
@@ -705,11 +866,14 @@ void DrawCameraPath(ImDrawList* dl, const ViewProj& vp, const CameraPathPoint* p
     for (int i = 0; i < keyCount; ++i) {
         ImVec2 pk;
         if (vp.Project(keys[i], pk)) {
+            const float kf = keyFrames ? keyFrames[i] : style.currentFrame;
+            const float alpha = fadeOf(kf);
+            if (alpha <= 0.005f) continue;
             const bool sel = selectedKeys.count(i) > 0;
             const float r = sel ? style.keyRadius + 1.5f : style.keyRadius;
             const ImU32 col = sel ? style.selectedKey : style.key;
-            dl->AddCircleFilled(pk, r + 1.5f, style.outline);
-            dl->AddCircleFilled(pk, r, col);
+            dl->AddCircleFilled(pk, r + 1.5f, AlphaScaled(style.outline, alpha));
+            dl->AddCircleFilled(pk, r, AlphaScaled(col, alpha));
         }
     }
 

@@ -429,8 +429,14 @@ int main() {
         int prevSize = dl->VtxBuffer.Size;
         DrawCameraPath(dl, vp, nullptr, 0, nullptr, 0, selected, nullptr, 1.5f, 10.0f, 90.0f, style);
         bool ok2 = dl->VtxBuffer.Size == prevSize;
-        
-        Check(ok && ok2, "DrawCameraPath smoke test");
+
+        style.currentFrame = 50.0f;
+        style.windowHalfWidth = 90.0f;
+        float kf[5] = {0.0f, 20.0f, 40.0f, 60.0f, 80.0f};
+        DrawCameraPath(dl, vp, path.data(), 100, keys, 5, selected, &path[0], 1.5f, 10.0f, 90.0f, style, kf);
+        bool ok3 = dl->VtxBuffer.Size > prevSize;
+
+        Check(ok && ok2 && ok3, "DrawCameraPath smoke test");
         
         ImGui::EndFrame();
         ImGui::DestroyContext();
