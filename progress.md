@@ -950,3 +950,40 @@ real-time raster as well; DoF made the orthographic quad views blurry.
 
 ### Next
 - Phase 4c: area light (data model, save format, UI, rendering); lift the point-shadow cap; decide the fill light; see the handoff.
+
+## 2026-10-09 (15) — studio lights: no shadow caps, area lights (4c), PT / GI punctual specular
+
+### Done
+- `94ab1fc` Point-light shadow cap removed. Raster allocates 6 slices per shadowed point light (grow-only; faces 1024 while the lights fit the
+  4-light budget, x2 at shadow quality 4096, then halved down to 256), DSV heap 64 -> 192. RT has no cap (the slice is only a "casts" flag:
+  `FillGpuLights(..., pointCap)`). The concert preset's fill light is NoCast (user decision: a fill casts no shadow of its own); play mode unchanged.
+- `9e28a42` Phase 4c, rectangular area lights (Antigravity worker, spec `docs/handoff/specs/04c-area-lights.md`): `LightKind::Area`, keyable
+  `LightValues::size`, manual aim, saved as `values.size`; inspector / outliner / add menu; viewport outline + normal arrow + position / aim handles;
+  `studiolightadd area`, `studiolightset <i> size w h`. Width axis = cross(worldUp, normal) everywhere. Real-time: centre point x one-sided cosine;
+  raster shadow through the point-shadow map with PCSS (blocker search -> penumbra; written by me in review, the worker's radius saturated at its
+  clamp so the size had no effect); RT: rays to random points on the rectangle. PT / offline GI sample the rectangle. `GpuLight` 96 -> 112 bytes.
+- `1412da1` PT / offline GI punctual specular (worker, spec `04d-pt-punctual-specular.md`): next-event estimation of point / spot / area lights for
+  the specular lobe (the same uniform reflection cone the specular continuation samples, 1/Omega), sharing the diffuse shadow ray, honouring
+  `affectSpecular`. Before, delta lights had no highlight in PT / GI at all (raster only), so "specular off" did nothing there.
+- `4d05c59` Spot shadow cap 8 -> 16 (= kMaxPunctualLights); `kSceneCbSize` 2048 -> 2560 for the 16 spot matrices; point matrix indices start at
+  3 + 16. Falloff "None" is labelled "기본" (Default): it is the engine's default curve, not a constant. Area PCSS: 24 taps, rotation per position
+  (constant over time: TAA is usually off and always off for raster videos, a per-frame rotation shimmered).
+
+### Verified (my runs)
+- 6 coloured point lights: raster with lights 5-6 NoCast vs Hard removes exactly their floor shadows; RT offline frame shows them too.
+- Area light: outline faces the aim, size changes the outline and the penumbra (small = contact-hard, large = soft), facing away goes dark, PT frame ok.
+- Offline PT point-light properties (`build_dev/captures_pt`, noise floor 0.23 / 1.0 char): linear 6.4, inverse square 43, diffuse off 40 (floor).
+  Linear is brighter than "None" at d/range 0.28 by definition (0.72 vs 0.55).
+- Specular: light behind the character (reflection in view): PT and GI show the same floor highlight, off = none. GI with specular off is
+  bit-identical to before the change; PT within noise.
+- 10 spots (concert + 4): spots 9-10 NoCast removes their floor and beam shadows.
+- Tests: studio_project_test 146, studio_light_test 106, edit 15, gizmo 19, pose 38, shader_choice; no `[E]`.
+
+### Not verified / open
+- No baseline-build comparison for "no area light / no point light" scenes after 4c and the specular change (the code skips the new paths; GI
+  specular-off scene was bit-identical to before).
+- The area PCSS penumbra keeps a fine static grain on wide penumbrae (24 taps, 512-texel faces with > 4 lights).
+- PT / GI highlights of the glossy floor are small sharp discs (rough 0.12 cone); raster draws a broad Blinn 64 highlight there.
+- Worker: Antigravity did 4c well (19 min, no scope creep, one real bug). The specular run was correct but died on API errors twice; I finished
+  the verification.
+- Rendering stays forward (toon materials, shader packs, alpha, MSAA, outlines); if lights grow past ~16, Forward+ light culling, not deferred.
