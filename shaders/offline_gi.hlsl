@@ -331,49 +331,86 @@ float3 PunctualUnshadowed(Surf s, uint li, bool toon, out float3 ld, out float d
     return PI * l.color * atten * diff;
 }
 
-// Punctual irradiance with a single shadow ray: one light is picked in proportion to its unshadowed
-// contribution (unbiased; lights out of range or outside their cone cost nothing). Preset lights
-// hang on a virtual truss outside the stage, so only characters occlude them (pathtrace.hlsl).
-float3 PunctualIrradiance(Surf s, bool toon, inout uint rng) {
+// Punctual light direct lighting: diffuse irradiance with a single picked shadow ray, plus specular NEE
+// for the specular lobe around reflect(-V, s.n) with half-angle rough * 0.5. Shadow rays are reused
+// when diffuse and specular evaluate the same light.
+void PunctualLighting(Surf s, float3 V, bool toon, float pSpec, inout uint rng, out float3 diffE, out float3 specR) {
+    diffE = 0;
+    specR = 0;
     uint nl = (uint)gNumLights;
+    if (nl == 0u) return;
+
+    float3 R = reflect(-V, s.n);
+    float cosHalfAngle = cos(s.rough * 0.5);
+    float omega = max(2.0 * PI * (1.0 - cosHalfAngle), 1e-6);
+    bool canSpec = (pSpec > 0.0);
+
     float total = 0.0;
     for (uint i = 0; i < nl; ++i) {
         float3 ld;
         float dist;
         total += Luminance(PunctualUnshadowed(s, i, toon, ld, dist));
     }
-    if (total <= 0.0) return 0.0;
-    float u = Rand(rng) * total;
-    for (uint j = 0; j < nl; ++j) {
+
+    int pickedJ = -1;
+    float pickedW = 0.0;
+    if (total > 0.0) {
+        float u = Rand(rng) * total;
+        for (uint j = 0; j < nl; ++j) {
+            float3 ld;
+            float dist;
+            float3 e = PunctualUnshadowed(s, j, toon, ld, dist);
+            float w = Luminance(e);
+            if (w <= 0.0) continue;
+            u -= w;
+            if (u <= 0.0 || j == nl - 1u) {
+                pickedJ = (int)j;
+                pickedW = w;
+                break;
+            }
+        }
+    }
+
+    if (pickedJ >= 0) {
+        PtLight l = gPtLights[(uint)pickedJ];
+        int shadowType = (int)l.shadowType;
         float3 ld;
         float dist;
-        float3 e = PunctualUnshadowed(s, j, toon, ld, dist);
-        float w = Luminance(e);
-        if (w <= 0.0) continue;
-        u -= w;
-        if (u <= 0.0 || j == nl - 1u) {
-            PtLight l = gPtLights[j];
-            int shadowType = (int)l.shadowType;
+        float atten;
+        float diff;
+        if (l.isArea > 0.5) {
+            float3 norm = l.dir;
+            float3 c = cross(float3(0, 1, 0), norm);
+            float cLen = length(c);
+            float3 right = (cLen > 1e-4) ? (c / cLen) : float3(1, 0, 0);
+            float3 up = cross(norm, right);
+            float uA = (Rand(rng) - 0.5) * l.areaWidth;
+            float vA = (Rand(rng) - 0.5) * l.areaHeight;
+            float3 samplePos = l.pos + right * uA + up * vA;
+            float3 d = samplePos - s.pos;
+            dist = length(d);
+            ld = d / max(dist, 1e-4);
+            atten = PunctualFalloff(dist, l.invRange, (int)l.falloff) * max(0.0, dot(norm, -ld));
+            float ndl = dot(s.n, ld);
+            float flat = s.flat ? 1.0 : 0.0;
+            diff = toon ? lerp(smoothstep(-0.05, 0.25, ndl), saturate(ndl * 0.3 + 0.7), flat) : ndl;
+        } else {
+            float3 d = l.pos - s.pos;
+            dist = length(d);
+            ld = d / max(dist, 1e-4);
+            atten = PunctualFalloff(dist, l.invRange, (int)l.falloff);
+            if (l.cosOuter > -1.0) atten *= smoothstep(l.cosOuter, l.cosInner, dot(-ld, l.dir));
+            float ndl = dot(s.n, ld);
+            float flat = s.flat ? 1.0 : 0.0;
+            diff = toon ? lerp(smoothstep(-0.05, 0.25, ndl), saturate(ndl * 0.3 + 0.7), flat) : ndl;
+        }
+
+        bool evalDiff = (atten > 0.0) && (diff > 0.0) && (l.affectDiffuse > 0.5);
+        bool evalSpecForPicked = canSpec && (l.affectSpecular > 0.5) && (atten > 0.0) && (dot(R, ld) >= cosHalfAngle) && (dot(s.faceN, ld) > 0.0);
+
+        if (evalDiff || evalSpecForPicked) {
             float3 vis = 1.0;
             if (l.isArea > 0.5) {
-                float3 norm = l.dir;
-                float3 c = cross(float3(0, 1, 0), norm);
-                float cLen = length(c);
-                float3 right = (cLen > 1e-4) ? (c / cLen) : float3(1, 0, 0);
-                float3 up = cross(norm, right);
-                float uA = (Rand(rng) - 0.5) * l.areaWidth;
-                float vA = (Rand(rng) - 0.5) * l.areaHeight;
-                float3 samplePos = l.pos + right * uA + up * vA;
-                float3 d = samplePos - s.pos;
-                dist = length(d);
-                ld = d / max(dist, 1e-4);
-                float atten = PunctualFalloff(dist, l.invRange, (int)l.falloff);
-                atten *= max(0.0, dot(norm, -ld));
-                float ndl = dot(s.n, ld);
-                float flat = s.flat ? 1.0 : 0.0;
-                float diff = toon ? lerp(smoothstep(-0.05, 0.25, ndl), saturate(ndl * 0.3 + 0.7), flat) : ndl;
-                if (atten <= 0.0 || diff <= 0.0 || l.affectDiffuse <= 0.5) return 0.0;
-                e = PI * l.color * atten * diff;
                 if (shadowType != 0) {
                     float3 po = OffsetRayOrigin(s.pos, s.faceN);
                     float hitVis = TraceShadowRayMasked(po, ld, max(dist - 0.05, 0.0), RT_MASK_CHARACTER);
@@ -391,10 +428,77 @@ float3 PunctualIrradiance(Surf s, bool toon, inout uint rng) {
                 float3 shadowTrans = ShadowTransmission(hitVis, l.shadowDensity, l.shadowColor);
                 vis = shadowTrans * (hitVis > 0.0 ? GlassShadow(po, dir, max(dist - 0.05, 0.0)) : float3(1, 1, 1));
             }
-            return e * (total / w) * vis;
+
+            if (evalDiff) {
+                float3 e = PI * l.color * atten * diff;
+                diffE = e * (total / pickedW) * vis;
+            }
+            if (evalSpecForPicked) {
+                specR += pSpec * l.color * atten * vis / omega;
+            }
         }
     }
-    return 0.0;
+
+    if (canSpec) {
+        for (uint k = 0; k < nl; ++k) {
+            if ((int)k == pickedJ) continue;
+            PtLight lk = gPtLights[k];
+            if (lk.affectSpecular <= 0.5) continue;
+            float3 ld;
+            float dist;
+            float atten;
+            if (lk.isArea > 0.5) {
+                float3 norm = lk.dir;
+                float3 c = cross(float3(0, 1, 0), norm);
+                float cLen = length(c);
+                float3 right = (cLen > 1e-4) ? (c / cLen) : float3(1, 0, 0);
+                float3 up = cross(norm, right);
+                float uA = (Rand(rng) - 0.5) * lk.areaWidth;
+                float vA = (Rand(rng) - 0.5) * lk.areaHeight;
+                float3 samplePos = lk.pos + right * uA + up * vA;
+                float3 d = samplePos - s.pos;
+                dist = length(d);
+                ld = d / max(dist, 1e-4);
+                atten = PunctualFalloff(dist, lk.invRange, (int)lk.falloff) * max(0.0, dot(norm, -ld));
+            } else {
+                float3 d = lk.pos - s.pos;
+                dist = length(d);
+                ld = d / max(dist, 1e-4);
+                atten = PunctualFalloff(dist, lk.invRange, (int)lk.falloff);
+                if (lk.cosOuter > -1.0) atten *= smoothstep(lk.cosOuter, lk.cosInner, dot(-ld, lk.dir));
+            }
+
+            if (atten > 0.0 && dot(R, ld) >= cosHalfAngle && dot(s.faceN, ld) > 0.0) {
+                int shadowType = (int)lk.shadowType;
+                float3 vis = 1.0;
+                if (lk.isArea > 0.5) {
+                    if (shadowType != 0) {
+                        float3 po = OffsetRayOrigin(s.pos, s.faceN);
+                        float hitVis = TraceShadowRayMasked(po, ld, max(dist - 0.05, 0.0), RT_MASK_CHARACTER);
+                        float3 shadowTrans = ShadowTransmission(hitVis, lk.shadowDensity, lk.shadowColor);
+                        vis = shadowTrans * (hitVis > 0.0 ? GlassShadow(po, ld, max(dist - 0.05, 0.0)) : float3(1, 1, 1));
+                    }
+                } else if (shadowType != 0) {
+                    float3 po = OffsetRayOrigin(s.pos, s.faceN);
+                    float3 dir = ld;
+                    if (shadowType == 2 && lk.shadowSoftness > 0.0) {
+                        float cosTheta = max(0.0, 1.0 - 0.005 * lk.shadowSoftness);
+                        dir = SampleCone(float2(Rand(rng), Rand(rng)), ld, cosTheta);
+                    }
+                    float hitVis = TraceShadowRayMasked(po, dir, max(dist - 0.05, 0.0), RT_MASK_CHARACTER);
+                    float3 shadowTrans = ShadowTransmission(hitVis, lk.shadowDensity, lk.shadowColor);
+                    vis = shadowTrans * (hitVis > 0.0 ? GlassShadow(po, dir, max(dist - 0.05, 0.0)) : float3(1, 1, 1));
+                }
+                specR += pSpec * lk.color * atten * vis / omega;
+            }
+        }
+    }
+}
+
+float3 PunctualIrradiance(Surf s, bool toon, inout uint rng) {
+    float3 diffE = 0, specR = 0;
+    PunctualLighting(s, float3(0, 1, 0), toon, 0.0, rng, diffE, specR);
+    return diffE;
 }
 
 // Sun visibility (soft cone sample), tinted by the glass it passes through.
@@ -620,7 +724,11 @@ float3 CameraDirect(Surf s, float3 V, float pSpec, inout uint rng) {
         if (ndl > 0.0 && dot(s.faceN, L) > 0.0)
             c += (1.0 - pSpec) * s.albedo / PI * SunIrradiance() * ndl * SunVisibility(s, rng);
     }
-    if (gNumLights >= 1.0) c += (1.0 - pSpec) * s.albedo / PI * PunctualIrradiance(s, s.character, rng);
+    if (gNumLights >= 1.0) {
+        float3 diffE = 0, specR = 0;
+        PunctualLighting(s, V, s.character, pSpec, rng, diffE, specR);
+        c += (1.0 - pSpec) * s.albedo / PI * diffE + specR;
+    }
     return c;
 }
 
@@ -996,7 +1104,14 @@ void CSRender(uint3 id : SV_DispatchThreadID) {
                 radiance += T * CameraDirect(s, V, pSpec, rng);
             }
         } else {
-            radiance += T * (s.emission + (1.0 - pSpec) * s.albedo / PI * DirectIrradiance(s, rng));
+            float3 sunE = 0;
+            float3 L = -gLightDir;
+            float ndl = dot(s.n, L);
+            if (ndl > 0.0 && dot(s.faceN, L) > 0.0) sunE = SunIrradiance() * ndl * SunVisibility(s, rng);
+            float3 diffE = 0, specR = 0;
+            if (gNumLights >= 1.0)
+                PunctualLighting(s, V, false, pSpec, rng, diffE, specR);
+            radiance += T * (s.emission + (1.0 - pSpec) * s.albedo / PI * (sunE + diffE) + specR);
         }
         if (depth == maxDepth) break;
 
