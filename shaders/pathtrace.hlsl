@@ -18,7 +18,14 @@ RWTexture2D<float4> gNormalOut : register(u2);
 RWTexture2D<float2> gVelocityOut : register(u3);
 RWTexture2D<float> gDepthOut : register(u4);
 
-struct PtLight { float3 pos; float invRange; float3 color; float cosOuter; float3 dir; float cosInner; float4 pad; };
+struct PtLight {
+    float3 pos; float invRange;
+    float3 color; float cosOuter;
+    float3 dir; float cosInner;
+    float shadowSlice; float shadowType; float shadowSoftness; float shadowDensity;
+    float3 shadowColor; float falloff;
+    float affectDiffuse; float affectSpecular; float2 pad;
+};
 StructuredBuffer<PtLight> gPtLights : register(t2, space1);
 
 static const float kSunCosMax = 0.99996;          // ~0.5 degree sun radius
@@ -33,7 +40,7 @@ float3 SunIrradiance() { return SrgbToLinear(gLightColor) * (PI * 3.0) * gSunInt
 // Character materials keep the raster toon model (mmd.hlsl PSMain) for the sun: a physical
 // Lambert term models faces into 3D shading, which MMD rigs are not authored for. The sun
 // visibility `sh` comes from a traced shadow ray instead of the shadow map. Linear output.
-float3 ToonSun(RtGeometry g, float4 tex, float2 uv, float3 n, float3 V, float sh) {
+float3 ToonSun(RtGeometry g, float4 tex, float2 uv, float3 n, float3 V, float rawSh) {
     float3 L = -gLightDir;
     float3 lit = saturate(g.ambient + g.diffuse.rgb * gLightColor) * tex.rgb;
     if (g.flags & (MAT_SPHERE_MUL | MAT_SPHERE_ADD)) {
@@ -42,6 +49,8 @@ float3 ToonSun(RtGeometry g, float4 tex, float2 uv, float3 n, float3 V, float sh
         float3 sp = ApplyTexFactor3(gBindlessTex[NonUniformResourceIndex(g.sphereSrv)].SampleLevel(gLinear, suv, 0).rgb, g.sphereMul, g.sphereAdd, (g.flags & MAT_SPHERE_MUL) ? 1.0 : 0.0);
         if (g.flags & MAT_SPHERE_MUL) lit *= sp; else lit += sp;
     }
+    float occ = (1.0 - rawSh) * gSunShadowParams.z;
+    float sh = 1.0 - occ;
     float ndl = dot(n, L);
     float flat = (g.flags & MAT_FLAT) ? 1.0 : 0.0;
     float3 c;
@@ -61,6 +70,7 @@ float3 ToonSun(RtGeometry g, float4 tex, float2 uv, float3 n, float3 V, float sh
         float3 shade = c * lerp(1.0, saturate(c), 0.55) * float3(0.90, 0.90, 0.96);
         c = lerp(shade, c, term);
     }
+    c += lit * gSunShadowColor.rgb * occ;
     if (g.specularPower > 0.0)
         c += pow(saturate(dot(normalize(L + V), n)), g.specularPower) * g.specular * gLightColor * sh;
     float3 color = SrgbToLinear(saturate(c)) * gSunIntensity;
@@ -202,8 +212,9 @@ void CSPathTrace(uint3 id : SV_DispatchThreadID) {
                         toon = true;
                         flat = (g.flags & MAT_FLAT) ? 1.0 : 0.0;
                         float sh = 1.0;
-                        if (receive && gShadowParams.w < 0.5) {
-                            float3 sd = SampleCone(float2(Rand(rng), Rand(rng)), -gLightDir, kSunCosMax);
+                        if (receive && gShadowParams.w < 0.5 && gSunShadowParams.x > 0.5) {
+                            float cosMax = (gSunShadowParams.x > 1.5) ? lerp(kSunCosMax, 0.995, gSunShadowParams.y) : kSunCosMax;
+                            float3 sd = SampleCone(float2(Rand(rng), Rand(rng)), -gLightDir, cosMax);
                             sh = TraceShadowRay(OffsetRayOrigin(pos, faceN), sd, 1e5);
                         }
                         radiance += throughput * ToonSun(g, tex, sf.uv, n, -dir, sh);
@@ -243,30 +254,43 @@ void CSPathTrace(uint3 id : SV_DispatchThreadID) {
             float3 L = -gLightDir;
             float ndl = dot(n, L);
             if (!toon && ndl > 0.0 && dot(faceN, L) > 0.0) {
-                float3 sd = SampleCone(float2(Rand(rng), Rand(rng)), L, kSunCosMax);
-                float vis = receive && gShadowParams.w < 0.5 ? TraceShadowRay(OffsetRayOrigin(pos, faceN), sd, 1e5) : 1.0;
-                radiance += throughput * (1.0 - pSpec) * albedo / PI * SunIrradiance() * ndl * vis;
+                float cosMax = (gSunShadowParams.x > 1.5) ? lerp(kSunCosMax, 0.995, gSunShadowParams.y) : kSunCosMax;
+                float3 sd = SampleCone(float2(Rand(rng), Rand(rng)), L, cosMax);
+                float rawVis = receive && gShadowParams.w < 0.5 && gSunShadowParams.x > 0.5
+                                   ? TraceShadowRay(OffsetRayOrigin(pos, faceN), sd, 1e5)
+                                   : 1.0;
+                float occ = (1.0 - rawVis) * gSunShadowParams.z;
+                float3 visFactor = (1.0 - occ) + gSunShadowColor.rgb * occ;
+                radiance += throughput * (1.0 - pSpec) * albedo / PI * SunIrradiance() * ndl * visFactor;
             }
 
             // punctual-light NEE (one uniform light per bounce)
             if (gNumLights >= 1.0) {
                 uint li = min((uint)(Rand(rng) * (float)nl), nl - 1u);
                 PtLight l = gPtLights[li];
-                float3 d = l.pos - pos;
-                float dist = length(d);
-                float3 ld = d / max(dist, 1e-4);
-                float x = saturate(1.0 - pow(dist * l.invRange, 4.0));
-                float atten = x * x / (1.0 + dist * dist * 0.0004);
-                if (l.cosOuter > -1.0) atten *= smoothstep(l.cosOuter, l.cosInner, dot(-ld, l.dir));
-                float ndlp = dot(n, ld);
-                // characters: the raster soft toon terminator (flat: almost no N.L)
-                float diff = toon ? lerp(smoothstep(-0.05, 0.25, ndlp), saturate(ndlp * 0.3 + 0.7), flat) : ndlp;
-                if (atten > 0.0 && diff > 0.0) {
-                    // Preset lights hang on a virtual truss that is not part of the stage (often above
-                    // its ceiling) and are unshadowed in raster: only characters occlude them.
-                    float vis = TraceShadowRayMasked(OffsetRayOrigin(pos, faceN), ld, max(dist - 0.05, 0.0),
-                                                     RT_MASK_CHARACTER);
-                    radiance += throughput * (1.0 - pSpec) * albedo * l.color * atten * diff * vis * (float)nl;
+                if (l.affectDiffuse > 0.0) {
+                    float3 d = l.pos - pos;
+                    float dist = length(d);
+                    float3 ld = d / max(dist, 1e-4);
+                    float atten = PunctualFalloff(dist, l.invRange, l.falloff);
+                    if (l.cosOuter > -1.0) atten *= smoothstep(l.cosOuter, l.cosInner, dot(-ld, l.dir));
+                    float ndlp = dot(n, ld);
+                    // characters: the raster soft toon terminator (flat: almost no N.L)
+                    float diff = toon ? lerp(smoothstep(-0.05, 0.25, ndlp), saturate(ndlp * 0.3 + 0.7), flat) : ndlp;
+                    if (atten > 0.0 && diff > 0.0) {
+                        float rawVis = 1.0;
+                        if (l.shadowType > 0.5) {
+                            float3 rayDir = ld;
+                            if (l.shadowType > 1.5) {
+                                float cosCone = lerp(0.9999, 0.985, l.shadowSoftness);
+                                rayDir = SampleCone(float2(Rand(rng), Rand(rng)), ld, cosCone);
+                            }
+                            rawVis = TraceShadowRayMasked(OffsetRayOrigin(pos, faceN), rayDir, max(dist - 0.05, 0.0),
+                                                          RT_MASK_CHARACTER);
+                        }
+                        float3 shadowFactor = ShadowTransmission(rawVis, l.shadowDensity, l.shadowColor);
+                        radiance += throughput * (1.0 - pSpec) * albedo * l.color * shadowFactor * atten * diff * (float)nl;
+                    }
                 }
             }
 

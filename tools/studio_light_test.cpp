@@ -54,6 +54,10 @@ static std::string DiffParams(const LightParams& a, const LightParams& b, float 
     if (!Near(a.hemiStrength, b.hemiStrength, tol)) return "hemiStrength";
     if (!Near(a.rimStrength, b.rimStrength, tol)) return "rimStrength";
     if (!Near3(a.rimColor, b.rimColor, tol)) return "rimColor";
+    if (a.sunShadow != b.sunShadow) return "sunShadow";
+    if (!Near(a.sunShadowSoftness, b.sunShadowSoftness, tol)) return "sunShadowSoftness";
+    if (!Near(a.sunShadowDensity, b.sunShadowDensity, tol)) return "sunShadowDensity";
+    if (!Near3(a.sunShadowColor, b.sunShadowColor, tol)) return "sunShadowColor";
     if (a.punctual.size() != b.punctual.size()) return "punctual.size";
     for (size_t i = 0; i < a.punctual.size(); ++i) {
         const PunctualLight &p = a.punctual[i], &q = b.punctual[i];
@@ -65,6 +69,13 @@ static std::string DiffParams(const LightParams& a, const LightParams& b, float 
         if (!Near(p.intensity, q.intensity, tol)) return at + "intensity";
         if (!Near(p.spotCosOuter, q.spotCosOuter, tol)) return at + "spotCosOuter";
         if (!Near(p.spotCosInner, q.spotCosInner, tol)) return at + "spotCosInner";
+        if (p.shadow != q.shadow) return at + "shadow";
+        if (!Near(p.shadowSoftness, q.shadowSoftness, tol)) return at + "shadowSoftness";
+        if (!Near(p.shadowDensity, q.shadowDensity, tol)) return at + "shadowDensity";
+        if (!Near3(p.shadowColor, q.shadowColor, tol)) return at + "shadowColor";
+        if (p.falloff != q.falloff) return at + "falloff";
+        if (p.affectDiffuse != q.affectDiffuse) return at + "affectDiffuse";
+        if (p.affectSpecular != q.affectSpecular) return at + "affectSpecular";
     }
     return "";
 }
@@ -157,19 +168,18 @@ static void TestPresetStructure() {
               concert[8].v.range == 120.0f,
           "concert fill light position, intensity, range");
 
-    // the defaults of the common properties: every light Hard except the fill (NoCast), falloff None everywhere
+    // the defaults of the common properties: every light Hard (the ray paths always shadowed the fill: no look change), falloff None
     bool shadows = true, falloff = true, common = true;
     for (int p = 0; p < kLightingPresetCount; ++p) {
         next = 1;
         for (const SceneLight& l : PresetLights(p, focus, next)) {
-            const bool fill = l.kind == LightKind::Point;
-            shadows = shadows && l.shadow == (fill ? ShadowType::NoCast : ShadowType::Hard);
+            shadows = shadows && l.shadow == ShadowType::Hard;
             falloff = falloff && l.falloff == FalloffType::None;
             common = common && l.shadowSoftness == 0.5f && l.shadowDensity == 1.0f && Same3(l.shadowColor, {0, 0, 0}) &&
                      l.affectDiffuse && l.affectSpecular && l.viewportVisible;
         }
     }
-    Check(shadows, "preset lights: sun and spots Hard, the fill light NoCast");
+    Check(shadows, "preset lights: every light Hard");
     Check(falloff, "preset lights: falloff None");
     Check(common, "preset lights: softness 0.5, density 1, black shadow colour, affect diffuse / specular, visible");
     Check(concert[0].vmdLink && concert[0].shadow == ShadowType::Hard && concert[1].shadow == ShadowType::Hard,
@@ -193,7 +203,8 @@ static void TestNoSun() {
         BuildSceneLighting(lights, {}, 0.0, anchors, out);
         const char* name = disabled ? "a disabled sun counts as no sun: black key light, sunIntensity 1, no rim"
                                     : "no sun: black key light, sunIntensity 1, no rim";
-        Check(Same3(out.color, {0, 0, 0}) && out.sunIntensity == 1.0f && out.rimStrength == 0.0f, name);
+        Check(Same3(out.color, {0, 0, 0}) && out.sunIntensity == 1.0f && out.rimStrength == 0.0f &&
+              out.sunShadow == LightShadowType::NoCast && out.sunShadowDensity == 0.0f, name);
         const SceneLight* amb = FindKind(lights, LightKind::Ambient);
         const bool skyLit = (out.skyZenith.x + out.skyZenith.y + out.skyZenith.z) > 0.0f &&
                             (out.skyHorizon.x + out.skyHorizon.y + out.skyHorizon.z) > 0.0f &&
@@ -451,13 +462,6 @@ static void TestRenderIndependence() {
     const std::vector<LightKf> cam = {LightKf{0, {0.9f, 0.1f, 0.2f}, {0.3f, -1.0f, 0.1f}}};
     std::vector<SceneLight> changed = lights;
     for (SceneLight& l : changed) {
-        l.shadow = ShadowType::Soft;
-        l.shadowSoftness = 0.9f;
-        l.shadowDensity = 0.3f;
-        l.shadowColor = {0.2f, 0.1f, 0.4f};
-        l.falloff = FalloffType::InverseSquare;
-        l.affectDiffuse = false;
-        l.affectSpecular = false;
         l.viewportVisible = false;
     }
     bool equal = true;
@@ -469,7 +473,7 @@ static void TestRenderIndependence() {
         const std::string diff = DiffParams(a, b, 0.0f);
         if (!diff.empty()) { equal = false; where = diff; }
     }
-    Check(equal, "BuildSceneLighting does not depend on shadow / falloff / affect / viewportVisible", "differs in %s", where.c_str());
+    Check(equal, "BuildSceneLighting does not depend on viewportVisible", "differs in %s", where.c_str());
     Check(SampleLightValues(lights[0], 30) == SampleLightValues(changed[0], 30),
           "SampleLightValues does not depend on the common properties");
 }
@@ -603,6 +607,65 @@ static void TestSongCameraLightTrack() {
     std::filesystem::remove_all(dir, ec);
 }
 
+// ---- D7: per-light renderer properties (shadow, softness, density, color, falloff, affectDiffuse, affectSpecular) ----
+static void TestPerLightProperties() {
+    LightAnchors anchors;
+    SceneLight sun;
+    sun.uid = 1;
+    sun.name = "sun";
+    sun.kind = LightKind::Sun;
+    sun.v.direction = {0.1f, -0.9f, 0.2f};
+    sun.v.color = {0.8f, 0.8f, 0.8f};
+    sun.shadow = ShadowType::Soft;
+    sun.shadowSoftness = 0.75f;
+    sun.shadowDensity = 0.6f;
+    sun.shadowColor = {0.2f, 0.1f, 0.05f};
+
+    SceneLight spot = MakeSpot(10, 20, 30);
+    spot.shadow = ShadowType::Soft;
+    spot.shadowSoftness = 0.85f;
+    spot.shadowDensity = 0.4f;
+    spot.shadowColor = {0.1f, 0.2f, 0.3f};
+    spot.falloff = FalloffType::InverseSquare;
+    spot.affectDiffuse = false;
+    spot.affectSpecular = true;
+
+    SceneLight point;
+    point.uid = 3;
+    point.name = "point";
+    point.kind = LightKind::Point;
+    point.v.position = {5, 15, 25};
+    point.shadow = ShadowType::NoCast;
+    point.shadowSoftness = 0.0f;
+    point.shadowDensity = 0.0f;
+    point.shadowColor = {0, 0, 0};
+    point.falloff = FalloffType::Linear;
+    point.affectDiffuse = true;
+    point.affectSpecular = false;
+
+    std::vector<SceneLight> lights = {sun, spot, point};
+    LightParams out;
+    BuildSceneLighting(lights, {}, 0.0, anchors, out);
+
+    Check(out.sunShadow == LightShadowType::Soft && Near(out.sunShadowSoftness, 0.75f, 1e-5f) &&
+          Near(out.sunShadowDensity, 0.6f, 1e-5f) && Near3(out.sunShadowColor, {0.2f, 0.1f, 0.05f}, 1e-5f),
+          "BuildSceneLighting carries sun shadow properties");
+
+    Check(out.punctual.size() == 2, "BuildSceneLighting produces 2 punctual lights");
+    if (out.punctual.size() == 2) {
+        const PunctualLight& pSpot = out.punctual[0];
+        Check(pSpot.shadow == LightShadowType::Soft && Near(pSpot.shadowSoftness, 0.85f, 1e-5f) &&
+              Near(pSpot.shadowDensity, 0.4f, 1e-5f) && Near3(pSpot.shadowColor, {0.1f, 0.2f, 0.3f}, 1e-5f) &&
+              pSpot.falloff == LightFalloffType::InverseSquare && !pSpot.affectDiffuse && pSpot.affectSpecular,
+              "BuildSceneLighting carries spot properties (soft shadow, inverse-square falloff, spec only)");
+
+        const PunctualLight& pPoint = out.punctual[1];
+        Check(pPoint.shadow == LightShadowType::NoCast && pPoint.falloff == LightFalloffType::Linear &&
+              pPoint.affectDiffuse && !pPoint.affectSpecular,
+              "BuildSceneLighting carries point properties (NoCast, linear falloff, diffuse only)");
+    }
+}
+
 int main() {
     std::setvbuf(stdout, nullptr, _IONBF, 0);  // unbuffered: a crash mid-test loses buffered PASS lines
     TestPresetRegression();
@@ -617,6 +680,7 @@ int main() {
     TestFrameTimes();
     TestDocLights();
     TestSongCameraLightTrack();
+    TestPerLightProperties();
     std::printf("studio_light_test: %d passed, %d failed\n", g_passed, g_failed);
     return g_failed > 0 ? 1 : 0;
 }

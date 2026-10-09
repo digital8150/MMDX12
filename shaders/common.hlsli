@@ -46,6 +46,8 @@ cbuffer SceneCB : register(b0) {
     float4 gFloorParams;     // xyz albedo, w = reflectivity (< 0: default floor)
     float4x4 gSpotViewProj[8];   // spot shadow map slices (Light.pad.x = slice)
     float4 gSpotShadowParams;    // x = slices rendered this frame, y = 1/mapSize
+    float4 gSunShadowParams;     // x = shadowType (0=NoCast, 1=Hard, 2=Soft), y = softness, z = density, w = unused (sun shadows: only x/y/z are read)
+    float4 gSunShadowColor;      // xyz = shadow colour (linear RGB), w = unused
 };
 
 static const float PI = 3.14159265;
@@ -92,10 +94,37 @@ float3 SkyColor(float3 dir) {
     float3 sky = lerp(gSkyHorizon, gSkyZenith, pow(up, 0.55));
     float3 below = lerp(gSkyHorizon, gGroundColor, saturate(-y * 6.0));
     float3 c = y >= 0.0 ? sky : below;
-    // soft sun glow toward the key light
+    // soft sun glow toward the key light (driven by sun colour so black = no glow)
     float s = saturate(dot(dir, -gLightDir));
-    c += gSkyHorizon * (pow(s, 24.0) * 0.35 + pow(s, 600.0) * 2.0) * (y > -0.05 ? 1.0 : 0.0);
+    c += gSkyHorizon * ((gLightColor.r + gLightColor.g + gLightColor.b) > 1e-4 ? 1.0 : 0.0) * (pow(s, 24.0) * 0.35 + pow(s, 600.0) * 2.0) * (y > -0.05 ? 1.0 : 0.0);
     return c * gSunIntensity;
+}
+
+// Shared punctual light falloff curves (common.hlsli).
+// falloffType: 0 = None (today's curve), 1 = Linear, 2 = InverseSquare.
+float PunctualFalloff(float dist, float invRange, float falloffType) {
+    float d = dist * invRange;
+    if (d >= 1.0) return 0.0;
+    float x = saturate(1.0 - pow(d, 4.0));
+    if (falloffType > 1.5) {
+        return (x * x) / max(dist * dist, 1.0);
+    } else if (falloffType > 0.5) {
+        return saturate(1.0 - d);
+    } else {
+        return (x * x) / (1.0 + dist * dist * 0.0004);
+    }
+}
+
+// Sun shadow cone for the ray paths: Hard keeps `baseCos` (each path's own sun disc), Soft widens it with softness.
+float SunShadowConeCos(float baseCos) {
+    return (gSunShadowParams.x > 1.5) ? lerp(baseCos, 0.995, saturate(gSunShadowParams.y)) : baseCos;
+}
+
+// Shared shadow transmission factoring in density and shadow colour tint.
+// Returns a 0..1 RGB multiplier for the light term.
+float3 ShadowTransmission(float vis, float density, float3 shadowColor) {
+    float occ = (1.0 - vis) * density;
+    return (1.0 - occ) + shadowColor * occ;
 }
 
 #endif

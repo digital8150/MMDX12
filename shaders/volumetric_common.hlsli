@@ -20,7 +20,9 @@ struct VolLight {
     float3 pos;   float invRange;
     float3 color; float cosOuter;   // cosOuter <= -1: point light
     float3 dir;   float cosInner;
-    float4 pad;                     // x = spot shadow slice (-1 = none)
+    float shadowSlice; float shadowType; float shadowSoftness; float shadowDensity;
+    float3 shadowColor; float falloff;
+    float affectDiffuse; float affectSpecular; float2 _pad;
 };
 StructuredBuffer<VolLight> gVolLights : register(t2, space1);
 
@@ -122,8 +124,7 @@ float VolPunctualAtten(VolLight l, float3 wp, out float3 ld) {
     float3 dv = l.pos - wp;
     float dL = length(dv);
     ld = dv / max(dL, 1e-4);
-    float x = saturate(1.0 - pow(dL * l.invRange, 4.0));
-    float atten = x * x / (1.0 + dL * dL * 0.0004);
+    float atten = PunctualFalloff(dL, l.invRange, (int)l.falloff);
     if (l.cosOuter > -1.0) atten *= smoothstep(l.cosOuter, l.cosInner, dot(-ld, l.dir));
     return atten;
 }

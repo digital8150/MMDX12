@@ -16,9 +16,13 @@ RWTexture2D<float4> gOut : register(u0);
 
 #include "volumetric_common.hlsli"
 
-float VolSunVisibility(float3 wp) { return TraceShadowRay(wp, -gLightDir, 4000.0); }
+float VolSunVisibility(float3 wp) {
+    if (gSunShadowParams.x < 0.5) return 1.0;
+    return TraceShadowRay(wp, -gLightDir, 4000.0);
+}
 
 float VolSpotVisibility(VolLight l, float3 wp) {
+    if (l.shadowType == 0.0) return 1.0;
     float3 dv = l.pos - wp;
     float dL = length(dv);
     return TraceShadowRay(wp, dv / max(dL, 1e-4), max(dL - 0.05, 0.0));

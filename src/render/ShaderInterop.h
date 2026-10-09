@@ -44,6 +44,8 @@ struct SceneConstants {               // b0, kSceneCbSize-byte slot per frame
     // Spot light shadow maps (ShadowPass, slice = GpuLight::_pad[0]): perspective view-projection per slice.
     DirectX::XMFLOAT4X4 spotViewProj[kSpotShadowSlices];
     DirectX::XMFLOAT4 spotShadowParams;  // x = slices rendered this frame (0 = none), y = 1/mapSize
+    DirectX::XMFLOAT4 sunShadowParams;   // x = shadowType (0=NoCast, 1=Hard, 2=Soft), y = softness, z = density, w = unused
+    DirectX::XMFLOAT4 sunShadowColor;    // xyz = shadow colour (linear RGB), w = unused
 };
 static_assert(sizeof(SceneConstants) <= kSceneCbSize, "SceneConstants layout");
 
@@ -76,15 +78,21 @@ struct MaterialConstants {            // b1, one 256-byte slot per material
 };
 static_assert(sizeof(MaterialConstants) == 256, "MaterialConstants layout");
 
-// StructuredBuffer element for punctual lights (t6 in the scene pass). 64 bytes.
+// StructuredBuffer element for punctual lights (t6 in the scene pass). 96 bytes.
 struct GpuLight {
     DirectX::XMFLOAT3 position; float invRange;
     DirectX::XMFLOAT3 color;    float spotCosOuter;   // colour premultiplied by intensity
     DirectX::XMFLOAT3 direction; float spotCosInner;
     float shadowSlice;           // spot shadow map slice (valid when < spotShadowParams.x), -1 = none
-    float _pad[3];
+    float shadowType;            // 0 = NoCast, 1 = Hard, 2 = Soft
+    float shadowSoftness;        // 0..1
+    float shadowDensity;         // 0..1
+    DirectX::XMFLOAT3 shadowColor; float falloff;     // falloff: 0 = None, 1 = Linear, 2 = InverseSquare
+    float affectDiffuse;         // 1.0 = on, 0.0 = off
+    float affectSpecular;        // 1.0 = on, 0.0 = off
+    float _pad[2];
 };
-static_assert(sizeof(GpuLight) == 64, "GpuLight layout");
+static_assert(sizeof(GpuLight) == 96, "GpuLight layout");
 
 // Vertex buffer slot 0 (static, DEFAULT heap). 60 bytes.
 struct GpuVertex {

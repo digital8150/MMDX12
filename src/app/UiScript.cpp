@@ -352,13 +352,13 @@ void App::PumpUiScript() {
                         else if (f == "skyzenith") light->skyZenith = {num(2), num(3), num(4)};
                         else if (f == "skyhorizon") light->skyHorizon = {num(2), num(3), num(4)};
                         else if (f == "groundcolor") light->groundColor = {num(2), num(3), num(4)};
-                        else if (f == "shadow") studio::ParseShadowType(s.args[2], light->shadow);
-                        else if (f == "shadowsoftness") light->shadowSoftness = num(2);
-                        else if (f == "shadowdensity") light->shadowDensity = num(2);
-                        else if (f == "shadowcolor") light->shadowColor = {num(2), num(3), num(4)};
+                        else if (f == "shadow" || f == "shadowtype") studio::ParseShadowType(s.args[2], light->shadow);
+                        else if (f == "shadowsoftness" || f == "softness") light->shadowSoftness = num(2);
+                        else if (f == "shadowdensity" || f == "density") light->shadowDensity = num(2);
+                        else if (f == "shadowcolor" || f == "shadowcolour") light->shadowColor = {num(2), num(3), num(4)};
                         else if (f == "falloff") studio::ParseFalloffType(s.args[2], light->falloff);
-                        else if (f == "diffuse") light->affectDiffuse = (s.args[2] == "1" || s.args[2] == "true" || s.args[2] == "on");
-                        else if (f == "specular") light->affectSpecular = (s.args[2] == "1" || s.args[2] == "true" || s.args[2] == "on");
+                        else if (f == "diffuse" || f == "affectdiffuse") light->affectDiffuse = (s.args[2] == "1" || s.args[2] == "true" || s.args[2] == "on");
+                        else if (f == "specular" || f == "affectspecular") light->affectSpecular = (s.args[2] == "1" || s.args[2] == "true" || s.args[2] == "on");
                         else if (f == "visible" || f == "viewportvisible") light->viewportVisible = (s.args[2] == "1" || s.args[2] == "true" || s.args[2] == "on");
 
                         studioLightChanged_ = true;

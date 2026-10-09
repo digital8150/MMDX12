@@ -49,7 +49,14 @@ RWTexture2D<float4> gGbuffer : register(u3);
 RWTexture2D<uint> gCounter : register(u4);
 RWTexture2D<float4> gEdgeAccum : register(u5);
 
-struct PtLight { float3 pos; float invRange; float3 color; float cosOuter; float3 dir; float cosInner; float4 pad; };
+struct PtLight {
+    float3 pos; float invRange;
+    float3 color; float cosOuter;
+    float3 dir; float cosInner;
+    float shadowSlice; float shadowType; float shadowSoftness; float shadowDensity;
+    float3 shadowColor; float falloff;
+    float affectDiffuse; float affectSpecular; float2 pad;
+};
 StructuredBuffer<PtLight> gPtLights : register(t2, space1);
 
 static const float kSunCosMax = 0.99978;      // ~1.2 degree sun: soft, contact-hardening shadows
@@ -313,13 +320,12 @@ float3 PunctualUnshadowed(Surf s, uint li, bool toon, out float3 ld, out float d
     float3 d = l.pos - s.pos;
     dist = length(d);
     ld = d / max(dist, 1e-4);
-    float x = saturate(1.0 - pow(dist * l.invRange, 4.0));
-    float atten = x * x / (1.0 + dist * dist * 0.0004);
+    float atten = PunctualFalloff(dist, l.invRange, (int)l.falloff);
     if (l.cosOuter > -1.0) atten *= smoothstep(l.cosOuter, l.cosInner, dot(-ld, l.dir));
     float ndl = dot(s.n, ld);
     float flat = s.flat ? 1.0 : 0.0;
     float diff = toon ? lerp(smoothstep(-0.05, 0.25, ndl), saturate(ndl * 0.3 + 0.7), flat) : ndl;
-    if (atten <= 0.0 || diff <= 0.0) return 0.0;
+    if (atten <= 0.0 || diff <= 0.0 || l.affectDiffuse <= 0.5) return 0.0;
     return PI * l.color * atten * diff;
 }
 
@@ -344,9 +350,20 @@ float3 PunctualIrradiance(Surf s, bool toon, inout uint rng) {
         if (w <= 0.0) continue;
         u -= w;
         if (u <= 0.0 || j == nl - 1u) {
-            float3 po = OffsetRayOrigin(s.pos, s.faceN);
-            float3 vis = TraceShadowRayMasked(po, ld, max(dist - 0.05, 0.0), RT_MASK_CHARACTER) *
-                         GlassShadow(po, ld, max(dist - 0.05, 0.0));
+            PtLight l = gPtLights[j];
+            int shadowType = (int)l.shadowType;
+            float3 vis = 1.0;
+            if (shadowType != 0) {
+                float3 po = OffsetRayOrigin(s.pos, s.faceN);
+                float3 dir = ld;
+                if (shadowType == 2 && l.shadowSoftness > 0.0) {
+                    float cosTheta = max(0.0, 1.0 - 0.005 * l.shadowSoftness);
+                    dir = SampleCone(float2(Rand(rng), Rand(rng)), ld, cosTheta);
+                }
+                float hitVis = TraceShadowRayMasked(po, dir, max(dist - 0.05, 0.0), RT_MASK_CHARACTER);
+                float3 shadowTrans = ShadowTransmission(hitVis, l.shadowDensity, l.shadowColor);
+                vis = shadowTrans * (hitVis > 0.0 ? GlassShadow(po, dir, max(dist - 0.05, 0.0)) : float3(1, 1, 1));
+            }
             return e * (total / w) * vis;
         }
     }
@@ -356,10 +373,13 @@ float3 PunctualIrradiance(Surf s, bool toon, inout uint rng) {
 // Sun visibility (soft cone sample), tinted by the glass it passes through.
 float3 SunVisibility(Surf s, inout uint rng) {
     if (!s.receive) return 1.0;
-    float3 sd = SampleCone(float2(Rand(rng), Rand(rng)), -gLightDir, kSunCosMax);
+    if (gSunShadowParams.x < 0.5) return 1.0;                       // NoCast
+    float cosMax = SunShadowConeCos(kSunCosMax);
+    float3 sd = SampleCone(float2(Rand(rng), Rand(rng)), -gLightDir, cosMax);
     float3 po = OffsetRayOrigin(s.pos, s.faceN);
     float v = TraceShadowRay(po, sd, 1e5);
-    return v > 0.0 ? GlassShadow(po, sd, 1e5) : 0.0;
+    float3 trans = ShadowTransmission(v, gSunShadowParams.z, gSunShadowColor.rgb);
+    return trans * (v > 0.0 ? GlassShadow(po, sd, 1e5) : float3(1, 1, 1));
 }
 
 // Lambert irradiance from the sun and the punctual lights (one shadow ray each).
@@ -394,6 +414,8 @@ float SkinWeight(Surf s) {
 // incident light diffused under the skin (soft, red-fringed shadow edges).
 float3 SkinSunVisibility(Surf s, float skin, inout uint rng) {
     if (!s.receive) return 1.0;
+    if (gSunShadowParams.x < 0.5) return 1.0;                       // NoCast
+    float cosMax = SunShadowConeCos(kSunCosMax);
     float3 t, b;
     BuildBasis(s.faceN, t, b);
     float3 vis;
@@ -401,10 +423,11 @@ float3 SkinSunVisibility(Surf s, float skin, inout uint rng) {
         float r = kSkinRadius[c] * skin * sqrt(Rand(rng));
         float phi = 6.2831853 * Rand(rng);
         float3 p = s.pos + (t * cos(phi) + b * sin(phi)) * r;
-        float3 sd = SampleCone(float2(Rand(rng), Rand(rng)), -gLightDir, kSunCosMax);
+        float3 sd = SampleCone(float2(Rand(rng), Rand(rng)), -gLightDir, cosMax);
         float3 po = OffsetRayOrigin(p, s.faceN);
-        vis[c] = TraceShadowRay(po, sd, 1e5);
-        if (vis[c] > 0.0) vis[c] *= GlassShadow(po, sd, 1e5)[c];
+        float v = TraceShadowRay(po, sd, 1e5);
+        float3 trans = ShadowTransmission(v, gSunShadowParams.z, gSunShadowColor.rgb);
+        vis[c] = (v > 0.0 ? trans * GlassShadow(po, sd, 1e5) : trans)[c];
     }
     return vis;
 }
@@ -458,10 +481,9 @@ float3 SkinTranslucency(Surf s, float skin, inout uint rng) {
         float3 d = l.pos - s.pos;
         float dist = length(d);
         float3 ld = d / max(dist, 1e-4);
-        float x = saturate(1.0 - pow(dist * l.invRange, 4.0));
-        float atten = x * x / (1.0 + dist * dist * 0.0004);
+        float atten = PunctualFalloff(dist, l.invRange, (int)l.falloff);
         if (l.cosOuter > -1.0) atten *= smoothstep(l.cosOuter, l.cosInner, dot(-ld, l.dir));
-        if (atten > 0.0 && dot(s.faceN, ld) < 0.2)
+        if (atten > 0.0 && dot(s.faceN, ld) < 0.2 && l.affectDiffuse > 0.5)
             c += PI * l.color * atten * (float)nl * SkinTransmittance(s, ld, dist);
     }
     return s.albedo / PI * c * kSkinTranslucency * skin;
@@ -527,17 +549,20 @@ float3 GlassGlint(Surf s, float3 V, inout uint rng) {
         float spec = norm * pow(saturate(dot(s.n, h)), e) * FresnelDielectric(saturate(dot(h, V)), gGlassParams.z);
         if (spec > 1e-3) {
             float3 po = OffsetRayOrigin(s.pos, s.faceN);
-            c += spec * SunIrradiance() * ndl * TraceShadowRay(po, L, 1e5);
+            float vis = 1.0;
+            if (gSunShadowParams.x > 0.5)
+                vis = TraceShadowRay(po, L, 1e5);
+            c += spec * SunIrradiance() * ndl * vis;
         }
     }
     uint nl = (uint)gNumLights;
     for (uint i = 0; i < nl; ++i) {
         PtLight l = gPtLights[i];
+        if (l.affectSpecular <= 0.5) continue;
         float3 dl = l.pos - s.pos;
         float dist = length(dl);
         float3 ld = dl / max(dist, 1e-4);
-        float x = saturate(1.0 - pow(dist * l.invRange, 4.0));
-        float atten = x * x / (1.0 + dist * dist * 0.0004);
+        float atten = PunctualFalloff(dist, l.invRange, (int)l.falloff);
         if (l.cosOuter > -1.0) atten *= smoothstep(l.cosOuter, l.cosInner, dot(-ld, l.dir));
         float nl2 = dot(s.n, ld);
         if (atten <= 0.0 || nl2 <= 0.0) continue;

@@ -152,7 +152,7 @@ uint32_t SpotShadowCount(const LightParams& light, uint32_t maxLights) {
     uint32_t n = 0;
     const size_t count = std::min<size_t>(light.punctual.size(), maxLights);
     for (size_t i = 0; i < count && n < kSpotShadowSlices; ++i)
-        if (light.punctual[i].spotCosOuter > -1.0f) ++n;
+        if (light.punctual[i].spotCosOuter > -1.0f && light.punctual[i].shadow != LightShadowType::NoCast) ++n;
     return n;
 }
 
@@ -195,8 +195,8 @@ void ShadowPass::Execute(PassContext& pc) {
     Texture& spot = pc.targets.spotShadowMap;
     if (!sm) return;
     ID3D12GraphicsCommandList* cmd = pc.cmd;
-    const bool cascades = pc.settings.shadows && !pc.view.shadowsOff && !pc.view.models.empty() &&
-                          (pc.path == RenderPath::Raster || (pc.settings.volumetric && !pc.offscreen));
+    const bool cascades = pc.settings.shadows && !pc.view.shadowsOff && (pc.view.light.sunShadow != LightShadowType::NoCast) &&
+                          !pc.view.models.empty() && (pc.path == RenderPath::Raster || (pc.settings.volumetric && !pc.offscreen));
     // must match Renderer::FillSceneConstants (spotShadowParams.x)
     const uint32_t spots = (spot && SpotShadowsWanted(pc.settings, pc.path, pc.offscreen))
                                ? SpotShadowCount(pc.view.light, Renderer::kMaxPunctualLights)

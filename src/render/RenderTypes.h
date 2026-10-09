@@ -98,7 +98,10 @@ struct CameraParams {
     float nearZ = 0.5f, farZ = 3000.0f;  // projection aspect comes from the internal render target
 };
 
-// Point light (spotCosOuter <= -1) or spot light, in MMD world space. Not shadowed.
+enum class LightShadowType : uint8_t { NoCast = 0, Hard = 1, Soft = 2 };
+enum class LightFalloffType : uint8_t { None = 0, Linear = 1, InverseSquare = 2 };
+
+// Point light (spotCosOuter <= -1) or spot light, in MMD world space.
 struct PunctualLight {
     DirectX::XMFLOAT3 position{};
     float range = 60.0f;
@@ -107,6 +110,13 @@ struct PunctualLight {
     DirectX::XMFLOAT3 direction{0, -1, 0};  // spot axis
     float spotCosOuter = -2.0f;             // <= -1: point light
     float spotCosInner = 1.0f;
+    LightShadowType shadow = LightShadowType::Hard;
+    float shadowSoftness = 0.5f;
+    float shadowDensity = 1.0f;
+    DirectX::XMFLOAT3 shadowColor{0, 0, 0};
+    LightFalloffType falloff = LightFalloffType::None;
+    bool affectDiffuse = true;
+    bool affectSpecular = true;
 };
 
 struct LightParams {
@@ -121,6 +131,12 @@ struct LightParams {
     float rimStrength = 0.35f;   // anime rim light on characters
     DirectX::XMFLOAT3 rimColor{1.0f, 0.97f, 0.92f};
     std::vector<PunctualLight> punctual;  // up to Renderer::kMaxPunctualLights used
+
+    // Sun shadow properties
+    LightShadowType sunShadow = LightShadowType::Hard;
+    float sunShadowSoftness = 0.5f;
+    float sunShadowDensity = 1.0f;
+    DirectX::XMFLOAT3 sunShadowColor{0, 0, 0};
 };
 
 // Offline renderer scene extras (the render benchmark scene). Ignored by the real-time passes.

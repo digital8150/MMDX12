@@ -145,6 +145,10 @@ void BuildSceneLighting(const std::vector<studio::SceneLight>& lights, const std
         out.sunIntensity = v.intensity;
         out.rimStrength = sun->rimStrength;
         out.rimColor = sun->rimColor;
+        out.sunShadow = (LightShadowType)sun->shadow;
+        out.sunShadowSoftness = sun->shadowSoftness;
+        out.sunShadowDensity = sun->shadowDensity;
+        out.sunShadowColor = sun->shadowColor;
         // linked to the camera VMD: its light track decides the colour and direction while it has keys
         if (sun->vmdLink && !cameraLight.empty()) {
             const studio::LightKf k = studio::SampleLight(cameraLight, frameF);
@@ -158,6 +162,10 @@ void BuildSceneLighting(const std::vector<studio::SceneLight>& lights, const std
         out.color = {0.0f, 0.0f, 0.0f};
         out.sunIntensity = 1.0f;
         out.rimStrength = 0.0f;
+        out.sunShadow = LightShadowType::NoCast;
+        out.sunShadowSoftness = 0.5f;
+        out.sunShadowDensity = 0.0f;
+        out.sunShadowColor = {0.0f, 0.0f, 0.0f};
     }
 
     if (ambient) {
@@ -178,6 +186,13 @@ void BuildSceneLighting(const std::vector<studio::SceneLight>& lights, const std
         p.range = v.range;
         p.color = v.color;
         p.intensity = v.intensity;
+        p.shadow = (LightShadowType)l.shadow;
+        p.shadowSoftness = l.shadowSoftness;
+        p.shadowDensity = l.shadowDensity;
+        p.shadowColor = l.shadowColor;
+        p.falloff = (LightFalloffType)l.falloff;
+        p.affectDiffuse = l.affectDiffuse;
+        p.affectSpecular = l.affectSpecular;
         if (l.kind == LightKind::Spot) {
             DirectX::XMFLOAT3 target = ResolveSpotAim(l, v, t, anchors);
             p.direction = {target.x - v.position.x, target.y - v.position.y, target.z - v.position.z};

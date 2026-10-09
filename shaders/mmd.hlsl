@@ -36,8 +36,15 @@ Texture2D gSphere  : register(t2);
 Texture2D gToon    : register(t3);
 StructuredBuffer<BoneMatrix> gPrevBones : register(t4);
 Texture2DArray<float> gShadowMap : register(t5);
-struct Light { float3 pos; float invRange; float3 color; float cosOuter; float3 dir; float cosInner; float4 pad; };
-StructuredBuffer<Light> gLights : register(t6);   // pad.x = spot shadow slice (-1 = none)
+struct Light {
+    float3 pos; float invRange;
+    float3 color; float cosOuter;
+    float3 dir; float cosInner;
+    float shadowSlice; float shadowType; float shadowSoftness; float shadowDensity;
+    float3 shadowColor; float falloff;
+    float affectDiffuse; float affectSpecular; float2 pad;
+};
+StructuredBuffer<Light> gLights : register(t6);
 Texture2DArray<float> gSpotShadowMap : register(t7);
 SamplerState gWrap  : register(s0);
 SamplerState gClamp : register(s1);
@@ -138,13 +145,14 @@ float Shadow(float3 wp, float3 n, float viewZ, float2 pixel) {
 #ifdef RT_SHADOWS
 // Two cone-jittered rays toward the sun (soft penumbra), honouring alpha-tested casters.
 float ShadowRt(float3 wp, float3 n, float viewZ, float2 pixel) {
-    if (gCascadeSplits.w < 0.5) return 1.0;
+    if (gCascadeSplits.w < 0.5 || gSunShadowParams.x < 0.5) return 1.0;
     float3 L = -gLightDir;
     float3 origin = wp + n * (0.02 + viewZ * 0.0004) + L * 0.01;
     uint rng = RngSeed((uint2)pixel, (uint)gFrameIndex, 7u);
     float vis = 0;
+    float cosCone = (gSunShadowParams.x > 1.5) ? lerp(0.99993, 0.995, gSunShadowParams.y) : 0.99993;
     [unroll] for (int k = 0; k < 2; ++k)
-        vis += TraceShadowRay(origin, SampleCone(float2(Rand(rng), Rand(rng)), L, 0.99993), 2000.0);
+        vis += TraceShadowRay(origin, SampleCone(float2(Rand(rng), Rand(rng)), L, cosCone), 2000.0);
     return vis * 0.5;
 }
 #define SHADOW_TERM(wp, n, viewZ, pixel) ShadowRt(wp, n, viewZ, pixel)
@@ -155,9 +163,10 @@ float ShadowRt(float3 wp, float3 n, float viewZ, float2 pixel) {
 // ---- punctual lights ------------------------------------------------------------
 
 // Spot shadow map (perspective slice per spot): normal offset scaled with the texel footprint,
-// 2x2 hardware PCF taps.
+// 2x2 hardware PCF taps (Hard) or 12 Poisson taps (Soft).
 float SpotShadow(Light l, float3 wp, float3 n, float dist) {
-    float slice = l.pad.x;
+    if (l.shadowType < 0.5) return 1.0;
+    float slice = l.shadowSlice;
     if (slice < 0.0 || slice >= gSpotShadowParams.x) return 1.0;
     float c = max(l.cosOuter, 0.05);
     float texel = dist * 2.0 * sqrt(1.0 - c * c) / c * gSpotShadowParams.y;
@@ -168,13 +177,23 @@ float SpotShadow(Light l, float3 wp, float3 n, float dist) {
     float3 p = sp.xyz / sp.w;
     float2 uv = float2(p.x * 0.5 + 0.5, 0.5 - p.y * 0.5);
     if (any(uv < 0.0) || any(uv > 1.0) || p.z > 1.0) return 1.0;
-    float r = 0.75 * gSpotShadowParams.y;
-    float sum = 0;
-    [unroll] for (int k = 0; k < 4; ++k) {
-        float2 o = float2((k & 1) ? r : -r, (k & 2) ? r : -r);
-        sum += gSpotShadowMap.SampleCmpLevelZero(gShadowCmp, float3(uv + o, slice), p.z - 0.00002);
+    if (l.shadowType > 1.5) { // Soft
+        float radius = (0.75 + l.shadowSoftness * 2.25) * gSpotShadowParams.y;
+        float sum = 0;
+        [unroll] for (int i = 0; i < 12; ++i) {
+            float2 o = kPoisson[i] * radius;
+            sum += gSpotShadowMap.SampleCmpLevelZero(gShadowCmp, float3(uv + o, slice), p.z - 0.00002);
+        }
+        return sum / 12.0;
+    } else { // Hard (today)
+        float r = 0.75 * gSpotShadowParams.y;
+        float sum = 0;
+        [unroll] for (int k = 0; k < 4; ++k) {
+            float2 o = float2((k & 1) ? r : -r, (k & 2) ? r : -r);
+            sum += gSpotShadowMap.SampleCmpLevelZero(gShadowCmp, float3(uv + o, slice), p.z - 0.00002);
+        }
+        return sum * 0.25;
     }
-    return sum * 0.25;
 }
 
 float3 PunctualDiffuse(float3 wp, float3 n, float toonSoft, float flat) {
@@ -182,17 +201,19 @@ float3 PunctualDiffuse(float3 wp, float3 n, float toonSoft, float flat) {
     uint count = (uint)gNumLights;
     for (uint i = 0; i < count; ++i) {
         Light l = gLights[i];
+        if (l.affectDiffuse <= 0.0) continue;
         float3 d = l.pos - wp;
         float dist = length(d);
         float3 ld = d / max(dist, 1e-4);
-        float x = saturate(1.0 - pow(dist * l.invRange, 4.0));
-        float atten = x * x / (1.0 + dist * dist * 0.0004);
+        float atten = PunctualFalloff(dist, l.invRange, l.falloff);
         if (l.cosOuter > -1.0) atten *= smoothstep(l.cosOuter, l.cosInner, dot(-ld, l.dir));
-        if (atten > 0.0) atten *= SpotShadow(l, wp, n, dist);
+        float rawVis = 1.0;
+        if (atten > 0.0) rawVis = SpotShadow(l, wp, n, dist);
+        float3 shadowTerm = ShadowTransmission(rawVis, l.shadowDensity, l.shadowColor);
         float ndl = dot(n, ld);
         float diff = lerp(saturate(ndl), smoothstep(-0.05, 0.25, ndl), toonSoft);
         diff = lerp(diff, saturate(ndl * 0.3 + 0.7), flat);
-        sum += l.color * atten * diff;
+        sum += l.color * shadowTerm * atten * diff;
     }
     return sum;
 }
@@ -202,15 +223,17 @@ float3 PunctualSpecular(float3 wp, float3 n, float3 V, float power) {
     uint count = (uint)gNumLights;
     for (uint i = 0; i < count; ++i) {
         Light l = gLights[i];
+        if (l.affectSpecular <= 0.0) continue;
         float3 d = l.pos - wp;
         float dist = length(d);
         float3 ld = d / max(dist, 1e-4);
-        float x = saturate(1.0 - pow(dist * l.invRange, 4.0));
-        float atten = x * x / (1.0 + dist * dist * 0.0004);
+        float atten = PunctualFalloff(dist, l.invRange, l.falloff);
         if (l.cosOuter > -1.0) atten *= smoothstep(l.cosOuter, l.cosInner, dot(-ld, l.dir));
-        if (atten > 0.0) atten *= SpotShadow(l, wp, n, dist);
+        float rawVis = 1.0;
+        if (atten > 0.0) rawVis = SpotShadow(l, wp, n, dist);
+        float3 shadowTerm = ShadowTransmission(rawVis, l.shadowDensity, l.shadowColor);
         float3 h = normalize(ld + V);
-        sum += l.color * atten * pow(saturate(dot(n, h)), power) * saturate(dot(n, ld));
+        sum += l.color * shadowTerm * atten * pow(saturate(dot(n, h)), power) * saturate(dot(n, ld));
     }
     return sum;
 }
@@ -261,7 +284,9 @@ PSOut PSMain(VSOut i, bool front : SV_IsFrontFace) {
         if (gFlags & MAT_SPHERE_MUL) { lit *= s; albedo *= s; } else { lit += s; }
     }
 
-    float sh = (gFlags & MAT_RECEIVE) ? SHADOW_TERM(i.worldPos, n, i.viewZ, i.pos.xy) : 1.0;
+    float rawSh = (gFlags & MAT_RECEIVE) ? SHADOW_TERM(i.worldPos, n, i.viewZ, i.pos.xy) : 1.0;
+    float occ = (1.0 - rawSh) * gSunShadowParams.z;
+    float sh = 1.0 - occ;
     float ndl = dot(n, L);
     float flat = (gFlags & MAT_FLAT) ? 1.0 : 0.0;
     float3 c;
@@ -289,6 +314,7 @@ PSOut PSMain(VSOut i, bool front : SV_IsFrontFace) {
         float3 shade = c * lerp(1.0, saturate(c), 0.55) * float3(0.90, 0.90, 0.96);
         c = lerp(shade, c, term);
     }
+    c += lit * gSunShadowColor.rgb * occ;
     if (gSpecularPower > 0.0) {
         float3 h = normalize(L + V);
         c += pow(saturate(dot(h, n)), gSpecularPower) * gSpecular * gLightColor * sh;
@@ -341,9 +367,12 @@ PSOut PSPack(VSOut i, bool front : SV_IsFrontFace) {
     s.alpha = gDiffuse.a * s.tex.a;
     if (s.alpha < 0.004) discard;
     s.materialClass = gPackClass;
-    s.shadow = (gFlags & MAT_RECEIVE) ? SHADOW_TERM(i.worldPos, s.N, i.viewZ, i.pos.xy) : 1.0;
+    float rawShadow = (gFlags & MAT_RECEIVE) ? SHADOW_TERM(i.worldPos, s.N, i.viewZ, i.pos.xy) : 1.0;
+    float occ = (1.0 - rawShadow) * gSunShadowParams.z;
+    s.shadow = 1.0 - occ;
     PackHeadFrame(s);
     PackResult r = PackShade(s);
+    r.color += SrgbToLinear(saturate(gDiffuse.rgb * s.tex.rgb)) * gSunShadowColor.rgb * occ * gSunIntensity;
     // negative reflectivity = "no ambient occlusion here" (composite.hlsl); SSR / RT reflections skip it as well
     float refl = r.noAo ? -1.0 : (r.alpha > 0.9 ? r.reflectivity : 0.0);
     return PackOutput(r.color, r.alpha, s.N, refl, i.curClip, i.prevClip);

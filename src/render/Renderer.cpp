@@ -360,7 +360,7 @@ void Renderer::FillSceneConstants(const FrameView& view, uint32_t w, uint32_t h,
         const size_t count = std::min<size_t>(view.light.punctual.size(), kMaxPunctualLights);
         for (size_t i = 0; i < count && slice < kSpotShadowSlices; ++i) {
             const PunctualLight& p = view.light.punctual[i];
-            if (p.spotCosOuter <= -1.0f) continue;
+            if (p.spotCosOuter <= -1.0f || p.shadow == LightShadowType::NoCast) continue;
             const XMVECTOR pos = XMLoadFloat3(&p.position);
             const XMVECTOR dir = XMVector3Normalize(XMLoadFloat3(&p.direction));
             const XMVECTOR upV = std::fabs(XMVectorGetY(dir)) > 0.99f ? XMVectorSet(0, 0, 1, 0) : XMVectorSet(0, 1, 0, 0);
@@ -374,9 +374,16 @@ void Renderer::FillSceneConstants(const FrameView& view, uint32_t w, uint32_t h,
         spotSlices = slice;
     }
     sc.spotShadowParams = {(float)spotSlices, 1.0f / (float)std::max(targets_.spotShadowMap.width, 1u), 0, 0};
-    sc.cascadeSplits = {splits[1], splits[2], splits[3], settings_.shadows && !view.shadowsOff ? 1.0f : 0.0f};
-    sc.shadowParams = {1.0f / mapSize, 1.2f, 1.6f, view.shadowsOff ? 1.0f : 0.0f};  // w: path tracer sun shadows off
+    const bool sunShadowsOff = view.shadowsOff || (view.light.sunShadow == LightShadowType::NoCast);
+    sc.cascadeSplits = {splits[1], splits[2], splits[3], settings_.shadows && !sunShadowsOff ? 1.0f : 0.0f};
+    float sunSoftnessTexels = 1.6f;
+    if (view.light.sunShadow == LightShadowType::Soft) {
+        sunSoftnessTexels = 1.6f + std::clamp(view.light.sunShadowSoftness, 0.0f, 1.0f) * 4.8f;
+    }
+    sc.shadowParams = {1.0f / mapSize, 1.2f, sunSoftnessTexels, sunShadowsOff ? 1.0f : 0.0f};  // w: path tracer sun shadows off
     sc.cascadeTexel = {texel[0], texel[1], texel[2], 0};
+    sc.sunShadowParams = {(float)(uint8_t)view.light.sunShadow, view.light.sunShadowSoftness, view.light.sunShadowDensity, 0.0f};
+    sc.sunShadowColor = {view.light.sunShadowColor.x, view.light.sunShadowColor.y, view.light.sunShadowColor.z, 0.0f};
 
     const LightParams& lp = view.light;
     sc.eyePos = cam.eye;
@@ -422,8 +429,17 @@ uint32_t Renderer::FillGpuLights(const LightParams& light, GpuLight* out) {
         g.spotCosOuter = p.spotCosOuter;
         XMStoreFloat3(&g.direction, XMVector3Normalize(XMLoadFloat3(&p.direction)));
         g.spotCosInner = std::max(p.spotCosInner, p.spotCosOuter + 1e-3f);
-        g.shadowSlice = (p.spotCosOuter > -1.0f && spot < kSpotShadowSlices) ? (float)spot : -1.0f;
-        if (p.spotCosOuter > -1.0f) ++spot;
+        g.shadowSlice = (p.spotCosOuter > -1.0f && p.shadow != LightShadowType::NoCast && spot < kSpotShadowSlices) ? (float)spot : -1.0f;
+        if (p.spotCosOuter > -1.0f && p.shadow != LightShadowType::NoCast) ++spot;
+        g.shadowType = (float)(uint8_t)p.shadow;
+        g.shadowSoftness = std::clamp(p.shadowSoftness, 0.0f, 1.0f);
+        g.shadowDensity = std::clamp(p.shadowDensity, 0.0f, 1.0f);
+        g.shadowColor = p.shadowColor;
+        g.falloff = (float)(uint8_t)p.falloff;
+        g.affectDiffuse = p.affectDiffuse ? 1.0f : 0.0f;
+        g.affectSpecular = p.affectSpecular ? 1.0f : 0.0f;
+        g._pad[0] = 0.0f;
+        g._pad[1] = 0.0f;
     }
     return (uint32_t)count;
 }

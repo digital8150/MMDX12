@@ -29,6 +29,7 @@ float CompareGather(Texture2DArray<float> map, float2 uv, float slice, float z) 
 }
 
 float VolSunVisibility(float3 wp) {
+    if (gSunShadowParams.x < 0.5) return 1.0;
     float viewZ = mul(float4(wp, 1.0), gView).z;
     int c = viewZ < gCascadeSplits.x ? 0 : (viewZ < gCascadeSplits.y ? 1 : 2);
     float4 sp = mul(float4(wp, 1.0), gShadowViewProj[c]);
@@ -41,7 +42,8 @@ float VolSunVisibility(float3 wp) {
 #include "volumetric_common.hlsli"
 
 float VolSpotVisibility(VolLight l, float3 wp) {
-    float slice = l.pad.x;
+    if (l.shadowType == 0.0) return 1.0;
+    float slice = l.shadowSlice;
     if (slice < 0.0 || slice >= gSpotShadowParams.x) return 1.0;
     float4 sp = mul(float4(wp, 1.0), gSpotViewProj[(uint)slice]);
     if (sp.w <= 0.0) return 1.0;
