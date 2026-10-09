@@ -2,13 +2,16 @@
 // a tiny CHECK macro, prints PASS/FAIL per check and a summary, exit code 0 on success.
 #include "studio/StudioProject.h"
 #include <DirectXMath.h>
+#include <json.hpp>
 #include <cstdarg>
 #include <cstdio>
 #include <cstring>
 #include <cmath>
+#include <algorithm>
 #include <filesystem>
 #include <fstream>
 #include <string>
+#include <vector>
 
 using namespace mmdx;
 using namespace mmdx::studio;
@@ -44,6 +47,208 @@ static bool QuatEq(const XMFLOAT4& a, const XMFLOAT4& b) {
 // A non-linear VMD-style interpolation table (the same non-identity pattern on every channel).
 static void SetTestInterp(uint8_t* interp, size_t block) {
     for (size_t i = 0; i < block; ++i) interp[i] = (uint8_t)(i * 7 + 3);
+}
+
+// ---- scene lights ----
+static bool SameVec3(const XMFLOAT3& a, const XMFLOAT3& b) { return a.x == b.x && a.y == b.y && a.z == b.z; }
+
+// The first member in which two sets of keyable values differ ("" when they are equal), compared one by one.
+static std::string DiffValues(const LightValues& a, const LightValues& b) {
+    if (!SameVec3(a.position, b.position)) return "position";
+    if (!SameVec3(a.aim, b.aim)) return "aim";
+    if (!SameVec3(a.direction, b.direction)) return "direction";
+    if (!SameVec3(a.color, b.color)) return "color";
+    if (a.intensity != b.intensity) return "intensity";
+    if (a.range != b.range) return "range";
+    if (a.coneOuter != b.coneOuter) return "coneOuter";
+    if (a.coneInner != b.coneInner) return "coneInner";
+    return "";
+}
+
+// The first member in which two lights differ ("" when they are equal), compared one by one (not through operator==).
+static std::string DiffLight(const SceneLight& a, const SceneLight& b) {
+    if (a.uid != b.uid) return "uid";
+    if (a.name != b.name) return "name";
+    if (a.kind != b.kind) return "kind";
+    if (a.enabled != b.enabled) return "enabled";
+    if (const std::string d = DiffValues(a.v, b.v); !d.empty()) return "v." + d;
+    if (a.keys.size() != b.keys.size()) return "keys.size";
+    for (size_t i = 0; i < a.keys.size(); ++i) {
+        const std::string at = "keys[" + std::to_string(i) + "].";
+        if (a.keys[i].frame != b.keys[i].frame) return at + "frame";
+        if (const std::string d = DiffValues(a.keys[i].v, b.keys[i].v); !d.empty()) return at + d;
+    }
+    if (a.vmdLink != b.vmdLink) return "vmdLink";
+    if (a.rimStrength != b.rimStrength) return "rimStrength";
+    if (!SameVec3(a.rimColor, b.rimColor)) return "rimColor";
+    if (a.aimMode != b.aimMode) return "aimMode";
+    if (a.targetUid != b.targetUid) return "targetUid";
+    if (a.targetPart != b.targetPart) return "targetPart";
+    if (a.swayPhase != b.swayPhase) return "swayPhase";
+    if (!SameVec3(a.skyZenith, b.skyZenith)) return "skyZenith";
+    if (!SameVec3(a.skyHorizon, b.skyHorizon)) return "skyHorizon";
+    if (!SameVec3(a.groundColor, b.groundColor)) return "groundColor";
+    if (a.shadow != b.shadow) return "shadow";
+    if (a.shadowSoftness != b.shadowSoftness) return "shadowSoftness";
+    if (a.shadowDensity != b.shadowDensity) return "shadowDensity";
+    if (!SameVec3(a.shadowColor, b.shadowColor)) return "shadowColor";
+    if (a.falloff != b.falloff) return "falloff";
+    if (a.affectDiffuse != b.affectDiffuse) return "affectDiffuse";
+    if (a.affectSpecular != b.affectSpecular) return "affectSpecular";
+    if (a.viewportVisible != b.viewportVisible) return "viewportVisible";
+    return "";
+}
+
+static std::string DiffLights(const std::vector<SceneLight>& a, const std::vector<SceneLight>& b) {
+    if (a.size() != b.size()) return "count " + std::to_string(a.size()) + " vs " + std::to_string(b.size());
+    for (size_t i = 0; i < a.size(); ++i)
+        if (const std::string d = DiffLight(a[i], b[i]); !d.empty()) return "light " + std::to_string(i) + " " + d;
+    return "";
+}
+
+// Lights of every kind with a non-default value in every member (floats that are not exact in binary, on purpose).
+static std::vector<SceneLight> MakeTestLights() {
+    std::vector<SceneLight> out;
+    {   // 1: the sun, not linked to the VMD, soft shadow, two keys
+        SceneLight l;
+        l.uid = 1;
+        l.name = "\xEB\xA9\x94\xEC\x9D\xB8 \xEC\xA1\xB0\xEB\xAA\x85";  // 메인 조명
+        l.kind = LightKind::Sun;
+        l.v.direction = {0.25f, -0.875f, 0.1f};
+        l.v.color = {0.6f, 0.55f, 0.3f};
+        l.v.intensity = 0.85f;
+        l.vmdLink = false;
+        l.rimStrength = 0.6f;
+        l.rimColor = {0.9f, 0.8f, 0.7f};
+        l.shadow = ShadowType::Soft;
+        l.shadowSoftness = 0.8f;
+        l.shadowDensity = 0.7f;
+        l.shadowColor = {0.1f, 0.2f, 0.3f};
+        l.affectDiffuse = false;
+        l.viewportVisible = false;
+        LightKey k0, k1;
+        k0.frame = 0;
+        k0.v = l.v;
+        k1.frame = 45;
+        k1.v = l.v;
+        k1.v.direction = {-0.5f, -1.0f, 1.0f / 3.0f};
+        k1.v.color = {0.1f, 0.7f, 0.9f};
+        k1.v.intensity = 1.4f;
+        l.keys = {k0, k1};
+        out.push_back(l);
+    }
+    {   // 2: a second sun, linked to the VMD, disabled, no keys
+        SceneLight l;
+        l.uid = 2;
+        l.name = "\xEB\xB3\xB4\xEC\xA1\xB0 \xEC\xA1\xB0\xEB\xAA\x85";  // 보조 조명
+        l.kind = LightKind::Sun;
+        l.enabled = false;
+        l.vmdLink = true;
+        out.push_back(l);
+    }
+    {   // 3: the ambient light, its environment colours
+        SceneLight l;
+        l.uid = 3;
+        l.name = "\xED\x99\x98\xEA\xB2\xBD\xEA\xB4\x91";  // 환경광
+        l.kind = LightKind::Ambient;
+        l.v.intensity = 0.3f;
+        l.skyZenith = {0.05f, 0.07f, 0.16f};
+        l.skyHorizon = {0.16f, 0.21f, 0.36f};
+        l.groundColor = {0.08f, 0.09f, 0.12f};
+        out.push_back(l);
+    }
+    {   // 4: a point light without keys, inverse-square falloff, no shadow
+        SceneLight l;
+        l.uid = 4;
+        l.name = "\xEC\xA0\x90\xEA\xB4\x91\xEC\x9B\x90 1";  // 점광원 1
+        l.kind = LightKind::Point;
+        l.v.position = {1.5f, 30.25f, -7.1f};
+        l.v.color = {1.0f, 0.9f, 0.8f};
+        l.v.intensity = 1.5f;
+        l.v.range = 90.0f;
+        l.falloff = FalloffType::InverseSquare;
+        l.shadow = ShadowType::NoCast;
+        l.affectSpecular = false;
+        out.push_back(l);
+    }
+    {   // 5: a spot aimed by hand, two keys
+        SceneLight l;
+        l.uid = 5;
+        l.name = "\xEC\x8A\xA4\xED\x8C\x9F 1";  // 스팟 1
+        l.kind = LightKind::Spot;
+        l.aimMode = AimMode::Manual;
+        l.v.position = {10.0f, 40.0f, -12.0f};
+        l.v.aim = {2.0f, 0.1f, 0.3f};
+        l.v.color = {0.22f, 0.77f, 0.73f};
+        l.v.intensity = 2.6f;
+        l.v.range = 120.0f;
+        l.v.coneOuter = 0.30f;
+        l.v.coneInner = 0.18f;
+        LightKey k0, k1;
+        k0.frame = 0;
+        k0.v = l.v;
+        k1.frame = 30;
+        k1.v = l.v;
+        k1.v.position = {6.0f, 38.0f, -8.0f};
+        k1.v.aim = {-2.0f, 2.0f, 1.0f};
+        k1.v.color = {0.95f, 0.35f, 0.62f};
+        k1.v.intensity = 3.2f;
+        k1.v.range = 140.0f;
+        k1.v.coneOuter = 0.24f;
+        k1.v.coneInner = 0.15f;
+        l.keys = {k0, k1};
+        out.push_back(l);
+    }
+    {   // 6: a spot that follows a character's head, linear falloff, two keys
+        SceneLight l;
+        l.uid = 6;
+        l.name = "\xEC\x8A\xA4\xED\x8C\x9F 2";  // 스팟 2
+        l.kind = LightKind::Spot;
+        l.aimMode = AimMode::Target;
+        l.targetUid = 3;
+        l.targetPart = TargetPart::Head;
+        l.v.position = {-8.0f, 40.0f, -12.0f};
+        l.falloff = FalloffType::Linear;
+        LightKey k0, k1;
+        k0.frame = 10;
+        k0.v = l.v;
+        k1.frame = 20;
+        k1.v = l.v;
+        k1.v.position = {-4.0f, 44.0f, -10.0f};
+        k1.v.color = {0.3f, 0.6f, 0.9f};
+        k1.v.coneOuter = 0.35f;
+        l.keys = {k0, k1};
+        out.push_back(l);
+    }
+    {   // 7: a swaying spot (a Japanese name), three keys
+        SceneLight l;
+        l.uid = 7;
+        l.name = "\xE3\x82\xB9\xE3\x83\x9D\xE3\x83\x83\xE3\x83\x88 3";  // スポット 3
+        l.kind = LightKind::Spot;
+        l.aimMode = AimMode::Sway;
+        l.swayPhase = 2.6f;
+        l.v.position = {-23.0f, 58.0f, -12.0f};
+        l.v.aim = {3.5f, 0.0f, 0.0f};
+        l.viewportVisible = false;
+        LightKey k;
+        for (int f : {0, 15, 90}) {
+            k.frame = f;
+            k.v = l.v;
+            k.v.intensity = 1.0f + (float)f / 7.0f;
+            l.keys.push_back(k);
+        }
+        out.push_back(l);
+    }
+    {   // 8: a disabled spot
+        SceneLight l;
+        l.uid = 8;
+        l.name = "\xEC\x8A\xA4\xED\x8C\x9F 4";  // 스팟 4
+        l.kind = LightKind::Spot;
+        l.enabled = false;
+        l.aimMode = AimMode::Target;
+        out.push_back(l);
+    }
+    return out;
 }
 
 static void TestRoundTrip() {
@@ -162,41 +367,7 @@ static void TestRoundTrip() {
     data.editor.camPitch = 0.2f;
     data.editor.camDistance = 30.0f;
     data.editor.camFovDeg = 40.0f;
-    data.editor.useLightTrack = false;
-    // the studio's lighting source + spot rig
-    data.editor.lighting.source = LightSource::Custom;
-    data.editor.lighting.presetIndex = 2;  // Concert
-    data.editor.lighting.key.enabled = true;
-    data.editor.lighting.key.direction = {0.2f, -0.9f, 0.4f};
-    data.editor.lighting.key.color = {1.0f, 0.85f, 0.7f};
-    data.editor.lighting.key.intensity = 1.2f;
-    data.editor.lighting.key.rimStrength = 0.5f;
-    {
-        SpotLight s;
-        s.name = "스팟 1";
-        s.mode = 3;  // manual aim
-        s.position = {10.0f, 40.0f, -12.0f};
-        s.aim = {2.0f, 0.0f, 0.0f};
-        s.color = {0.22f, 0.77f, 0.73f};
-        s.intensity = 2.6f;
-        s.coneOuter = 0.30f;
-        s.enabled = true;
-        s.swingPhase = 1.3f;
-        s.keys = {SpotKf{0, {10.0f, 40.0f, -12.0f}, {2.0f, 0.0f, 0.0f}, 2.6f, 0.30f, {0.22f, 0.77f, 0.73f}},
-                  SpotKf{30, {6.0f, 38.0f, -8.0f}, {-2.0f, 2.0f, 1.0f}, 3.2f, 0.24f, {0.95f, 0.35f, 0.62f}}};
-        data.editor.lighting.spots.push_back(s);
-        SpotLight s2;
-        s2.name = "스팟 2";
-        s2.mode = 1;  // follow the centre
-        s2.position = {-8.0f, 40.0f, -12.0f};
-        s2.aim = {-6.0f, 0.0f, 0.0f};
-        s2.color = {0.95f, 0.35f, 0.62f};
-        s2.intensity = 2.0f;
-        s2.coneOuter = 0.24f;
-        s2.enabled = false;  // disabled spot round-trips too
-        data.editor.lighting.spots.push_back(s2);
-    }
-    data.editor.lighting.frontFill = true;
+    data.editor.lights = MakeTestLights();  // every kind of scene light
 
     std::string err;
     Check(SaveProject(projFile, data, &err), "SaveProject round trip", "%s", err.c_str());
@@ -288,84 +459,372 @@ static void TestRoundTrip() {
     const ProjectEditor& ed = loaded.editor;
     Check(ed.frame == 120 && ed.selectedModel == 2 && ed.loop && ed.rangeStart == 10 && ed.rangeEnd == 50 &&
               ed.pxPerFrame == 3.5f && ed.camYaw == 0.5f && ed.camPitch == 0.2f && ed.camDistance == 30.0f &&
-              ed.camFovDeg == 40.0f && !ed.useLightTrack && ed.useMotionCamera && ed.useShadowTrack &&
+              ed.camFovDeg == 40.0f && ed.useMotionCamera && ed.useShadowTrack &&
               ed.showCameraPath && ed.physics && Vec3Eq(ed.camTarget, {1, 2, 3}, 0),
           "editor state kept");
-    // ---- the light rig (source, preset, key override, spots, front fill) ----
-    Check(ed.lighting.source == LightSource::Custom && ed.lighting.presetIndex == 2 && ed.lighting.frontFill,
-          "lighting source / preset / frontFill kept");
-    Check(ed.lighting.key.enabled && Vec3Eq(ed.lighting.key.direction, {0.2f, -0.9f, 0.4f}, 0) &&
-              Vec3Eq(ed.lighting.key.color, {1.0f, 0.85f, 0.7f}, 0) && ed.lighting.key.intensity == 1.2f &&
-              ed.lighting.key.rimStrength == 0.5f,
-          "key override kept");
-    Check(ed.lighting.spots.size() == 2, "spot count kept", "size=%zu", ed.lighting.spots.size());
-    if (ed.lighting.spots.size() == 2) {
-        const SpotLight& a = data.editor.lighting.spots[0];
-        const SpotLight& b = loaded.editor.lighting.spots[0];
-        Check(b.name == a.name && b.mode == 3 && b.enabled && std::fabs(b.swingPhase - 1.3f) < 1e-6,
-              "spot 0 name / mode / enabled / phase kept");
-        Check(Vec3Eq(b.position, a.position, 0) && Vec3Eq(b.aim, a.aim, 0) && Vec3Eq(b.color, a.color, 0) &&
-                  b.intensity == a.intensity && std::fabs(b.coneOuter - 0.30f) < 1e-6,
-              "spot 0 values kept");
-        Check(b.keys.size() == 2 && b.keys[0].frame == 0 && b.keys[1].frame == 30 &&
-                  Vec3Eq(b.keys[1].position, a.keys[1].position, 0) && Vec3Eq(b.keys[1].aim, a.keys[1].aim, 0) &&
-                  b.keys[1].intensity == 3.2f && std::fabs(b.keys[1].coneOuter - 0.24f) < 1e-6 &&
-                  Vec3Eq(b.keys[1].color, a.keys[1].color, 0),
-              "spot 0 keys kept");
-        // keyed sample: halfway between the keys
-        const SpotKf mid = SampleSpotKeys(b, 15);
-        Check(std::fabs(mid.intensity - 2.9f) < 1e-4 && Vec3Eq(mid.position, {8.0f, 39.0f, -10.0f}, 1e-4),
-              "spot keys interpolate linearly");
-        const SpotLight& s2 = loaded.editor.lighting.spots[1];
-        Check(s2.name == "스팟 2" && s2.mode == 1 && !s2.enabled && s2.keys.empty(),
-              "spot 1 (disabled, keyless, mode 1) kept");
+    // ---- the scene lights (version 2) ----
+    Check(ed.lights.size() == data.editor.lights.size(), "scene light count kept", "size=%zu", ed.lights.size());
+    {
+        const std::string diff = DiffLights(data.editor.lights, ed.lights);
+        Check(diff.empty(), "scene lights round-trip field by field", "differs: %s", diff.c_str());
+        Check(data.editor.lights == ed.lights, "scene lights round-trip exactly (operator==)");
     }
-    Check(data.editor.lighting == loaded.editor.lighting, "light rig round-trips exactly");
+    if (ed.lights.size() == 8) {
+        const SceneLight& sun = ed.lights[0];
+        Check(sun.kind == LightKind::Sun && !sun.vmdLink && sun.shadow == ShadowType::Soft && sun.shadowSoftness == 0.8f &&
+                  sun.shadowDensity == 0.7f && SameVec3(sun.shadowColor, {0.1f, 0.2f, 0.3f}) && !sun.affectDiffuse &&
+                  sun.affectSpecular && !sun.viewportVisible && sun.falloff == FalloffType::None,
+              "sun: link off, soft shadow, shadow colour, affect and visibility flags kept");
+        Check(ed.lights[1].kind == LightKind::Sun && ed.lights[1].vmdLink && !ed.lights[1].enabled && ed.lights[1].keys.empty(),
+              "second sun: linked, disabled, no keys");
+        Check(ed.lights[3].kind == LightKind::Point && ed.lights[3].falloff == FalloffType::InverseSquare &&
+                  ed.lights[3].shadow == ShadowType::NoCast && !ed.lights[3].affectSpecular && ed.lights[3].keys.empty(),
+              "point: inverse-square falloff, no shadow, no specular, no keys");
+        Check(ed.lights[4].aimMode == AimMode::Manual && ed.lights[5].aimMode == AimMode::Target &&
+                  ed.lights[5].targetUid == 3 && ed.lights[5].targetPart == TargetPart::Head &&
+                  ed.lights[6].aimMode == AimMode::Sway && ed.lights[6].swayPhase == 2.6f && !ed.lights[7].enabled,
+              "spots: the three aim modes, target, part, phase and the disabled one kept");
+        // keyed sample: halfway between the first spot's keys
+        const LightValues mid = SampleLightValues(ed.lights[4], 15);
+        Check(std::fabs(mid.intensity - 2.9f) < 1e-4 && Vec3Eq(mid.position, {8.0f, 39.0f, -10.0f}, 1e-4f) &&
+                  std::fabs(mid.coneOuter - 0.27f) < 1e-5,
+              "spot keys interpolate linearly");
+    }
 }
 
-// A legacy v1 project without the "lighting" object: useLightTrack true + keys -> VmdTrack,
-// useLightTrack true without a camera VMD light track -> Preset, false -> Preset.
-static void TestLegacyLightMigration() {
+// The project file of the scene lights: version 2, the "lights" array and its schema, no "lighting" / "useLightTrack".
+static void TestSceneLightFile() {
+    const std::filesystem::path projDir = kTemp / "lightsfile";
+    const std::filesystem::path projFile = projDir / "scene.mmdxproj";
+    ProjectData data;
+    data.editor.lights = MakeTestLights();
+    std::string err;
+    Check(SaveProject(projFile, data, &err), "SaveProject with scene lights", "%s", err.c_str());
+    std::string text;
+    {   // closed again before the next save replaces the file
+        std::ifstream in(projFile, std::ios::binary);
+        text.assign((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    }
+    const nlohmann::json j = nlohmann::json::parse(text, nullptr, false);
+    Check(kProjectFormatVersion == 2 && !j.is_discarded() && j.value("version", 0) == 2, "project format version is 2");
+    const nlohmann::json& e = j["editor"];
+    Check(e.contains("lights") && e["lights"].is_array() && e["lights"].size() == 8 && !e.contains("lighting") &&
+              !e.contains("useLightTrack"),
+          "the editor writes \"lights\" and neither \"lighting\" nor \"useLightTrack\"");
+    const nlohmann::json& s = e["lights"][0];
+    Check(s["uid"] == 1 && s["kind"] == "sun" && s["name"] == "\xEB\xA9\x94\xEC\x9D\xB8 \xEC\xA1\xB0\xEB\xAA\x85" && s["enabled"] == true,
+          "light object: uid, kind, name, enabled");
+    Check(s["values"].contains("position") && s["values"].contains("aim") && s["values"].contains("direction") &&
+              s["values"].contains("color") && s["values"].contains("intensity") && s["values"].contains("range") &&
+              s["values"].contains("coneOuter") && s["values"].contains("coneInner") && s["values"]["direction"].size() == 3,
+          "light object: every value is written");
+    Check(s["sun"]["vmdLink"] == false && s["sun"].contains("rimStrength") && s["sun"]["rimColor"].size() == 3,
+          "light object: the \"sun\" block");
+    Check(s["spot"]["aim"] == "manual" && s["spot"]["target"] == 0 && s["spot"]["part"] == "centre" && s["spot"].contains("swayPhase"),
+          "light object: the \"spot\" block");
+    Check(s["sky"]["zenith"].size() == 3 && s["sky"]["horizon"].size() == 3 && s["sky"]["ground"].size() == 3,
+          "light object: the \"sky\" block");
+    Check(s["shadow"]["type"] == "soft" && s["shadow"].contains("softness") && s["shadow"].contains("density") &&
+              s["shadow"]["color"].size() == 3 && s["falloff"] == "none" && s["affectDiffuse"] == false &&
+              s["affectSpecular"] == true && s["viewportVisible"] == false,
+          "light object: shadow, falloff, affect and visibility flags");
+    Check(s["keys"].size() == 2 && s["keys"][1]["frame"] == 45 && s["keys"][1]["values"].contains("coneInner"),
+          "light object: keys with a frame and every value");
+    const nlohmann::json& pt = e["lights"][3];
+    const nlohmann::json& sp = e["lights"][6];
+    Check(pt["kind"] == "point" && pt["falloff"] == "inverse_square" && pt["shadow"]["type"] == "nocast" && pt["keys"].empty() &&
+              e["lights"][2]["kind"] == "ambient" && sp["kind"] == "spot" && sp["spot"]["aim"] == "sway" &&
+              e["lights"][5]["spot"]["aim"] == "target" && e["lights"][5]["spot"]["part"] == "head" &&
+              e["lights"][5]["spot"]["target"] == 3 && e["lights"][5]["falloff"] == "linear",
+          "light objects: kind, aim, part and enum names");
+
+    // no lights: an empty array is written and read back as empty
+    ProjectData none;
+    Check(SaveProject(projFile, none, &err), "SaveProject without scene lights", "%s", err.c_str());
+    ProjectData loadedNone;
+    std::vector<std::string> warnings;
+    Check(LoadProject(projFile, loadedNone, &err, &warnings) && loadedNone.editor.lights.empty() && warnings.empty(),
+          "no lights round-trip as no lights");
+}
+
+// Reading version 2 files: defaults for missing keys, unknown kinds, unsorted / repeated key frames, bad values.
+static void TestSceneLightReading() {
+    const std::filesystem::path projDir = kTemp / "lightsread";
+    std::filesystem::create_directories(projDir);
+    const std::filesystem::path projFile = projDir / "scene.mmdxproj";
+    const auto load = [&](const std::string& editorBody, ProjectData& out, std::vector<std::string>& warnings) {
+        {
+            std::ofstream f(projFile, std::ios::binary);
+            f << "{\"format\":\"mmdx12-studio-project\",\"version\":2,\"models\":[],\"camera\":null,\"audio\":null,\"editor\":{"
+              << editorBody << "}}";
+        }
+        std::string err;
+        warnings.clear();
+        return LoadProject(projFile, out, &err, &warnings);
+    };
+    std::vector<std::string> warnings;
+
+    {   // "lights" absent: none, not the defaults
+        ProjectData d;
+        Check(load("\"frame\":3", d, warnings) && d.editor.lights.empty(), "version 2 without \"lights\": no lights");
+    }
+    {   // a minimal light: every member keeps its default; a missing uid gets one
+        ProjectData d;
+        const bool ok = load("\"lights\":[{\"kind\":\"spot\"},{\"kind\":\"ambient\",\"uid\":9,\"shadow\":{\"type\":\"soft\"}}]", d, warnings);
+        Check(ok && d.editor.lights.size() == 2 && warnings.empty(), "minimal lights load");
+        if (d.editor.lights.size() == 2) {
+            SceneLight want;
+            want.kind = LightKind::Spot;
+            want.uid = d.editor.lights[0].uid;
+            Check(d.editor.lights[0].uid != 0 && DiffLight(want, d.editor.lights[0]).empty(),
+                  "missing keys keep the SceneLight defaults (also the common properties)", "differs: %s",
+                  DiffLight(want, d.editor.lights[0]).c_str());
+            const SceneLight& a = d.editor.lights[1];
+            Check(a.uid == 9 && a.shadow == ShadowType::Soft && a.shadowSoftness == 0.5f && a.shadowDensity == 1.0f &&
+                      SameVec3(a.shadowColor, {0, 0, 0}) && a.falloff == FalloffType::None && a.affectDiffuse &&
+                      a.affectSpecular && a.viewportVisible,
+                  "a partial \"shadow\" block keeps the other defaults");
+        }
+    }
+    {   // an unknown kind is skipped with a warning
+        ProjectData d;
+        const bool ok = load("\"lights\":[{\"kind\":\"laser\",\"uid\":1},{\"kind\":\"point\",\"uid\":2},3]", d, warnings);
+        Check(ok && d.editor.lights.size() == 1 && d.editor.lights[0].uid == 2 && warnings.size() == 1 &&
+                  warnings[0].find("unknown light kind") == 0,
+              "an unknown light kind is skipped with a warning", "lights=%zu warnings=%zu", d.editor.lights.size(), warnings.size());
+    }
+    {   // keys: unsorted input comes out sorted, a repeated frame keeps the last one, a key without values holds the base values
+        ProjectData d;
+        const bool ok = load("\"lights\":[{\"kind\":\"point\",\"uid\":1,\"values\":{\"intensity\":2.5},\"keys\":["
+                             "{\"frame\":30,\"values\":{\"intensity\":3}},{\"frame\":0,\"values\":{\"intensity\":1}},"
+                             "{\"frame\":30,\"values\":{\"intensity\":5}},{\"frame\":60}]}]", d, warnings);
+        Check(ok && d.editor.lights.size() == 1, "keyed light loads");
+        if (!d.editor.lights.empty()) {
+            const std::vector<LightKey>& k = d.editor.lights[0].keys;
+            Check(k.size() == 3 && k[0].frame == 0 && k[1].frame == 30 && k[2].frame == 60 && k[0].v.intensity == 1.0f &&
+                      k[1].v.intensity == 5.0f && k[2].v.intensity == 2.5f,
+                  "keys are sorted, a repeated frame keeps the last, a key without values holds the base values");
+        }
+    }
+    {   // wrong types and unknown names keep the defaults
+        ProjectData d;
+        const bool ok = load("\"lights\":[{\"kind\":\"spot\",\"uid\":1,\"enabled\":\"yes\",\"name\":5,\"falloff\":\"cubic\","
+                             "\"values\":{\"intensity\":\"high\",\"position\":[1,2]},\"spot\":{\"aim\":\"orbit\",\"part\":\"feet\"},"
+                             "\"shadow\":{\"type\":\"sharp\",\"softness\":\"very\"},\"viewportVisible\":1}]", d, warnings);
+        SceneLight want;
+        want.kind = LightKind::Spot;
+        want.uid = 1;
+        Check(ok && d.editor.lights.size() == 1 && DiffLight(want, d.editor.lights[0]).empty(),
+              "wrong types and unknown enum names keep the defaults", "differs: %s",
+              d.editor.lights.empty() ? "(no light)" : DiffLight(want, d.editor.lights[0]).c_str());
+    }
+    {   // uids identify the lights: a repeated or zero uid gets a fresh one
+        ProjectData d;
+        const bool ok = load("\"lights\":[{\"kind\":\"point\",\"uid\":4},{\"kind\":\"point\",\"uid\":4},{\"kind\":\"point\",\"uid\":0},"
+                             "{\"kind\":\"point\",\"uid\":2}]", d, warnings);
+        bool unique = ok && d.editor.lights.size() == 4;
+        for (size_t i = 0; unique && i < d.editor.lights.size(); ++i) {
+            unique = d.editor.lights[i].uid != 0;
+            for (size_t k = 0; unique && k < i; ++k) unique = d.editor.lights[k].uid != d.editor.lights[i].uid;
+        }
+        Check(unique && d.editor.lights[0].uid == 4 && d.editor.lights[3].uid == 2, "repeated and zero uids are renumbered, the others kept");
+    }
+}
+
+// Version 1 projects: the old lighting source + key override + spot rig become scene lights.
+static void TestLegacyConversion() {
     const std::filesystem::path projDir = kTemp / "legacy";
     std::filesystem::create_directories(projDir);
     const std::filesystem::path projFile = projDir / "scene.mmdxproj";
     std::string err;
     std::vector<std::string> warnings;
+    const auto writeV1 = [&](const std::string& editor) {
+        std::ofstream f(projFile, std::ios::binary);
+        f << "{\"format\":\"mmdx12-studio-project\",\"version\":1,\"models\":[],\"camera\":null,"
+             "\"audio\":null,\"editor\":" << editor << "}";
+    };
+    const auto load = [&](const std::string& editor, ProjectData& out) {
+        writeV1(editor);
+        return LoadProject(projFile, out, &err, &warnings);
+    };
+    const auto preset = [](int index) {
+        uint32_t next = 1;
+        return PresetLights(index, XMFLOAT3{0.0f, 10.0f, 0.0f}, next);
+    };
+    const char* key = "\"key\":{\"direction\":[0.25,-0.5,0.75],\"color\":[1.0,0.5,0.25],\"intensity\":1.5,"
+                      "\"rimStrength\":0.5,\"rimColor\":[0.5,0.25,0.125]}";
 
-    // a minimal v1 project with an editor block; camera VMD referenced when it has light keys
+    {   // source "vmd": the preset's lights, the sun linked; the key override, spots and fill did not apply
+        ProjectData d;
+        const std::string body = std::string("{\"lighting\":{\"source\":\"vmd\",\"preset\":2,") + key +
+                                 ",\"spots\":[{\"name\":\"x\",\"mode\":\"manual\"}],\"frontFill\":true}}";
+        Check(load(body, d), "legacy vmd: LoadProject", "%s", err.c_str());
+        const std::vector<SceneLight> want = preset(2);
+        Check(DiffLights(want, d.editor.lights).empty() && d.editor.lights[0].vmdLink,
+              "legacy source vmd: the Concert preset's lights, the sun linked to the VMD", "differs: %s",
+              DiffLights(want, d.editor.lights).c_str());
+    }
+    {   // source "preset" without an override: the preset's lights, the sun unlinked
+        ProjectData d;
+        Check(load("{\"lighting\":{\"source\":\"preset\",\"preset\":1}}", d), "legacy preset: LoadProject", "%s", err.c_str());
+        std::vector<SceneLight> want = preset(1);
+        want[0].vmdLink = false;
+        Check(DiffLights(want, d.editor.lights).empty(), "legacy source preset: the Sunset lights, the sun unlinked",
+              "differs: %s", DiffLights(want, d.editor.lights).c_str());
+    }
+    {   // source "preset" with the key override: it replaces the sun's light and rim
+        ProjectData d;
+        const std::string body = std::string("{\"lighting\":{\"source\":\"preset\",\"preset\":3,") + key + "}}";
+        Check(load(body, d), "legacy preset + key: LoadProject", "%s", err.c_str());
+        std::vector<SceneLight> want = preset(3);
+        want[0].vmdLink = false;
+        want[0].v.direction = {0.25f, -0.5f, 0.75f};
+        want[0].v.color = {1.0f, 0.5f, 0.25f};
+        want[0].v.intensity = 1.5f;
+        want[0].rimStrength = 0.5f;
+        want[0].rimColor = {0.5f, 0.25f, 0.125f};
+        Check(DiffLights(want, d.editor.lights).empty(), "legacy source preset with a key override: the sun takes it, unlinked",
+              "differs: %s", DiffLights(want, d.editor.lights).c_str());
+    }
+    {   // source "custom": the sun and environment of the preset, the rig's spots in order, the front fill
+        ProjectData d;
+        const std::string body = std::string("{\"lighting\":{\"source\":\"custom\",\"preset\":2,") + key + ",\"frontFill\":true,\"spots\":["
+            "{\"name\":\"A\",\"mode\":\"auto\",\"position\":[10,40,-12],\"aim\":[2,0,0],\"color\":[0.25,0.5,0.75],\"intensity\":2.5,"
+            "\"cone\":0.5,\"enabled\":true,\"phase\":1.5,\"keys\":["
+            "{\"frame\":30,\"position\":[6,38,-8],\"aim\":[-2,2,1],\"color\":[0.75,0.5,0.25],\"intensity\":3.5,\"cone\":0.25},"
+            "{\"frame\":0,\"position\":[10,40,-12],\"aim\":[2,0,0],\"color\":[0.25,0.5,0.75],\"intensity\":2.5,\"cone\":0.5}]},"
+            "{\"name\":\"B\",\"mode\":\"center\",\"position\":[-8,40,-12],\"aim\":[-6,0,0],\"enabled\":false,\"phase\":0.5},"
+            "{\"name\":\"C\",\"mode\":\"head\",\"position\":[1,2,3],\"intensity\":1.25},"
+            "{\"name\":\"D\",\"mode\":\"manual\",\"position\":[4,5,6],\"aim\":[7,8,9],\"cone\":0.125},"
+            "{\"name\":\"D\",\"mode\":\"auto\"},{\"mode\":\"auto\"}]}}";
+        Check(load(body, d) && warnings.empty(), "legacy custom: LoadProject", "%s", err.c_str());
+        const std::vector<SceneLight>& l = d.editor.lights;
+        Check(l.size() == 7, "legacy custom: sun, ambient, four spots (nameless and repeated ones dropped), the fill",
+              "size=%zu", l.size());
+        if (l.size() == 7) {
+            bool uids = true;
+            for (size_t i = 0; i < l.size(); ++i) uids = uids && l[i].uid == i + 1;
+            Check(uids, "legacy custom: uids 1..N in list order");
+            const std::vector<SceneLight> p = preset(2);
+            Check(l[0].kind == LightKind::Sun && !l[0].vmdLink && SameVec3(l[0].v.direction, {0.25f, -0.5f, 0.75f}) &&
+                      SameVec3(l[0].v.color, {1.0f, 0.5f, 0.25f}) && l[0].v.intensity == 1.5f && l[0].rimStrength == 0.5f &&
+                      SameVec3(l[0].rimColor, {0.5f, 0.25f, 0.125f}),
+                  "legacy custom: the sun with the key override, unlinked");
+            Check(l[1].kind == LightKind::Ambient && SameVec3(l[1].skyZenith, p[1].skyZenith) &&
+                      SameVec3(l[1].skyHorizon, p[1].skyHorizon) && SameVec3(l[1].groundColor, p[1].groundColor) &&
+                      l[1].v.intensity == p[1].v.intensity,
+                  "legacy custom: the preset's environment is kept (its own spots and fill are not)");
+            // A: auto swing
+            const SceneLight& a = l[2];
+            Check(a.kind == LightKind::Spot && a.name == "A" && a.enabled && a.aimMode == AimMode::Sway && a.swayPhase == 1.5f &&
+                      SameVec3(a.v.position, {10, 40, -12}) && SameVec3(a.v.aim, {2, 0, 0}) && SameVec3(a.v.color, {0.25f, 0.5f, 0.75f}) &&
+                      a.v.intensity == 2.5f && a.v.coneOuter == 0.5f && a.v.coneInner == std::min(0.5f * 0.6f, 0.5f) &&
+                      a.v.range == 140.0f,
+                  "legacy spot auto: Sway about the old aim, phase, values, inner cone 0.6 * outer, range 140");
+            Check(a.keys.size() == 2 && a.keys[0].frame == 0 && a.keys[1].frame == 30 &&
+                      SameVec3(a.keys[1].v.position, {6, 38, -8}) && SameVec3(a.keys[1].v.aim, {-2, 2, 1}) &&
+                      SameVec3(a.keys[1].v.color, {0.75f, 0.5f, 0.25f}) && a.keys[1].v.intensity == 3.5f &&
+                      a.keys[1].v.coneOuter == 0.25f && a.keys[1].v.coneInner == std::min(0.25f * 0.6f, 0.25f) &&
+                      a.keys[1].v.range == 140.0f,
+                  "legacy spot keys: sorted, values and inner cone converted");
+            // B: follow the centre, disabled
+            Check(l[3].name == "B" && !l[3].enabled && l[3].aimMode == AimMode::Target && l[3].targetUid == 0 &&
+                      l[3].targetPart == TargetPart::Centre && SameVec3(l[3].v.aim, {-6, 0, 0}) && l[3].swayPhase == 0.5f,
+                  "legacy spot center: Target (the performer), centre, disabled kept");
+            // C: follow the head, old defaults for missing values
+            Check(l[4].name == "C" && l[4].aimMode == AimMode::Target && l[4].targetPart == TargetPart::Head &&
+                      SameVec3(l[4].v.position, {1, 2, 3}) && l[4].v.intensity == 1.25f && l[4].v.coneOuter == 0.24f &&
+                      SameVec3(l[4].v.color, {1.0f, 0.98f, 0.92f}) && l[4].enabled,
+                  "legacy spot head: Target, head; the old defaults (colour, cone) fill what the file lacks");
+            // D: manual
+            Check(l[5].name == "D" && l[5].aimMode == AimMode::Manual && SameVec3(l[5].v.aim, {7, 8, 9}) &&
+                      l[5].v.coneOuter == 0.125f && l[5].v.coneInner == std::min(0.125f * 0.6f, 0.125f),
+                  "legacy spot manual: Manual with the old aim");
+            bool defaults = true;
+            for (int i = 2; i < 6; ++i)
+                defaults = defaults && l[i].shadow == ShadowType::Hard && l[i].shadowSoftness == 0.5f && l[i].shadowDensity == 1.0f &&
+                           SameVec3(l[i].shadowColor, {0, 0, 0}) && l[i].falloff == FalloffType::None && l[i].affectDiffuse &&
+                           l[i].affectSpecular && l[i].viewportVisible;
+            Check(defaults, "legacy spots keep the defaults of the common properties");
+            // the front fill
+            Check(l[6].kind == LightKind::Point && l[6].name == "\xEC\xB1\x84\xEC\x9B\x80\xEA\xB4\x91" && l[6].enabled &&  // 채움광
+                      SameVec3(l[6].v.position, {0, 32, -40}) && SameVec3(l[6].v.color, {0.917f, 0.83f, 0.72f}) &&
+                      l[6].v.intensity == 0.55f && l[6].v.range == 120.0f && l[6].falloff == FalloffType::None,
+                  "legacy front fill: a point light at (0, 32, -40), warm colour, intensity 0.55, range 120");
+        }
+    }
+    {   // custom without spots and without the fill: only the preset's sun and environment remain
+        ProjectData d;
+        Check(load("{\"lighting\":{\"source\":\"custom\",\"preset\":2,\"frontFill\":false}}", d), "legacy custom empty: LoadProject",
+              "%s", err.c_str());
+        const std::vector<SceneLight> p = preset(2);
+        Check(d.editor.lights.size() == 2 && d.editor.lights[0].kind == LightKind::Sun && !d.editor.lights[0].vmdLink &&
+                  d.editor.lights[1].kind == LightKind::Ambient && d.editor.lights[0].uid == 1 && d.editor.lights[1].uid == 2 &&
+                  SameVec3(d.editor.lights[0].v.color, p[0].v.color),
+              "legacy custom without spots: the Concert preset's own spots and fill are gone");
+    }
+    {   // a broken source name keeps the old default: the VMD track; the spots did not apply
+        ProjectData d;
+        Check(load("{\"lighting\":{\"source\":\"alien\",\"spots\":[]}}", d), "legacy broken source: LoadProject", "%s", err.c_str());
+        Check(DiffLights(preset(0), d.editor.lights).empty(), "legacy broken source: the Studio preset, the sun linked");
+    }
+    {   // no lighting information at all: the old default, the VMD track over the Studio preset
+        ProjectData d;
+        Check(load("{\"frame\":3}", d), "legacy plain editor: LoadProject", "%s", err.c_str());
+        Check(DiffLights(preset(0), d.editor.lights).empty(), "legacy plain project: the Studio preset, the sun linked");
+        {
+            std::ofstream f(projFile, std::ios::binary);
+            f << "{\"format\":\"mmdx12-studio-project\",\"version\":1,\"models\":[]}";
+        }
+        ProjectData d2;
+        Check(LoadProject(projFile, d2, &err, &warnings) && DiffLights(preset(0), d2.editor.lights).empty(),
+              "legacy project without an editor object: the Studio preset, the sun linked");
+    }
+}
+
+// A legacy v1 project without the "lighting" object: useLightTrack true + camera light keys -> the sun linked to the
+// VMD; useLightTrack true without a camera VMD light track -> the preset (unlinked); false -> the preset (unlinked).
+static void TestLegacyLightMigration() {
+    const std::filesystem::path projDir = kTemp / "legacy2";
+    std::filesystem::create_directories(projDir);
+    const std::filesystem::path projFile = projDir / "scene.mmdxproj";
+    std::string err;
+    std::vector<std::string> warnings;
+    uint32_t next = 1;
+    const std::vector<SceneLight> studioPreset = PresetLights(0, XMFLOAT3{0.0f, 10.0f, 0.0f}, next);
+
+    // a minimal v1 project with an editor block; the camera VMD is referenced when it has light keys
     const auto writeV1 = [&](const char* editor) {
         std::ofstream f(projFile, std::ios::binary);
         f << "{\"format\":\"mmdx12-studio-project\",\"version\":1,\"models\":[],\"camera\":null,"
              "\"audio\":null,\"editor\":" << editor << "}";
     };
 
-    // (a) useLightTrack: true but no camera VMD (no light keys) -> Preset (the brief's migration rule)
+    // (a) useLightTrack: true but no camera VMD (no light keys) -> the preset, unlinked
     {
         writeV1("{\"frame\":0,\"useLightTrack\":true}");
         ProjectData loaded;
         Check(LoadProject(projFile, loaded, &err, &warnings), "legacy (a): LoadProject", "%s", err.c_str());
-        Check(loaded.editor.lighting.source == LightSource::Preset && !loaded.editor.useLightTrack,
-              "legacy true without light keys -> Preset");
+        Check(loaded.editor.lights.size() == studioPreset.size() && !loaded.editor.lights[0].vmdLink &&
+                  loaded.editor.lights[0].v == studioPreset[0].v,
+              "legacy true without light keys -> the preset, the sun not linked");
     }
-    // (b) useLightTrack: false -> Preset
+    // (b) useLightTrack: false -> the preset, unlinked
     {
         writeV1("{\"frame\":0,\"useLightTrack\":false}");
         ProjectData loaded;
         Check(LoadProject(projFile, loaded, &err, &warnings), "legacy (b): LoadProject", "%s", err.c_str());
-        Check(loaded.editor.lighting.source == LightSource::Preset && !loaded.editor.useLightTrack,
-              "legacy false -> Preset");
+        Check(loaded.editor.lights.size() == studioPreset.size() && !loaded.editor.lights[0].vmdLink,
+              "legacy false -> the preset, the sun not linked");
     }
-    // (b) useLightTrack: true and a camera VMD that carries a light key -> VmdTrack
+    // (b2) useLightTrack: true and a camera VMD that carries a light key -> the sun linked to the VMD
     {
-        // a camera VMD with one non-default light key (SaveVmd -> the project references it)
         ProjectData data;
         LightKf l;
         l.frame = 0;
         l.color = {0.7f, 0.8f, 0.9f};
         l.direction = {0.1f, -1.0f, 0.2f};
         data.camera.light = {l};
-        writeV1("{\"frame\":0,\"useLightTrack\":true}");
-        // append the "camera" reference to the v1 JSON by rewriting it with the camera file present
         VmdMotion cam = data.camera.ToVmd();
         cam.modelName = "\xE3\x82\xAB\xE3\x83\xA1\xE3\x83\xA9\xE3\x83\xBB\xE7\x85\xA7\xE6\x98\x8E";
         SaveVmd(projDir / "scene - camera.vmd", cam);
@@ -376,24 +835,17 @@ static void TestLegacyLightMigration() {
         }
         ProjectData loaded;
         Check(LoadProject(projFile, loaded, &err, &warnings), "legacy (b2): LoadProject", "%s", err.c_str());
-        Check(loaded.editor.lighting.source == LightSource::VmdTrack && loaded.editor.useLightTrack,
-              "legacy true with light keys -> VmdTrack");
+        Check(loaded.editor.lights.size() == studioPreset.size() && loaded.editor.lights[0].vmdLink,
+              "legacy true with light keys -> the sun linked to the VMD");
         Check(!loaded.camera.light.empty(), "legacy (b2): light track loaded");
     }
-    // (c) an editor without any light field: the default VmdTrack stays
+    // (c) an editor without any light field: the old default (the VMD track) -> linked
     {
         writeV1("{\"frame\":3}");
         ProjectData loaded;
         Check(LoadProject(projFile, loaded, &err, &warnings), "legacy (c): LoadProject", "%s", err.c_str());
-        Check(loaded.editor.lighting.source == LightSource::VmdTrack, "legacy plain project -> VmdTrack default");
-    }
-    // (d) a broken "lighting" source string keeps the default
-    {
-        writeV1("{\"frame\":0,\"lighting\":{\"source\":\"alien\",\"spots\":[]}}");
-        ProjectData loaded;
-        Check(LoadProject(projFile, loaded, &err, &warnings), "legacy (d): LoadProject", "%s", err.c_str());
-        Check(loaded.editor.lighting.source == LightSource::VmdTrack && loaded.editor.lighting.spots.empty(),
-              "broken lighting source keeps the default");
+        Check(loaded.editor.lights.size() == studioPreset.size() && loaded.editor.lights[0].vmdLink,
+              "legacy plain project -> the sun linked (the old default source)");
     }
 }
 
@@ -555,6 +1007,9 @@ int main() {
     std::filesystem::create_directories(kTemp, ec);
 
     TestRoundTrip();
+    TestSceneLightFile();
+    TestSceneLightReading();
+    TestLegacyConversion();
     TestLegacyLightMigration();
     TestDuplicateNamesAndCleanup();
     TestMissingAndBad();

@@ -4,6 +4,7 @@
 #include "core/TextUtil.h"
 #include <json.hpp>
 #include <Windows.h>
+#include <algorithm>
 #include <fstream>
 #include <map>
 #include <set>
@@ -98,6 +99,271 @@ DirectX::XMFLOAT3 ReadVec3(const nlohmann::json& j, const char* key, DirectX::XM
     for (int i = 0; i < 3; ++i)
         if (!(*it)[i].is_number()) return def;
     return {(float)(*it)[0].get<double>(), (float)(*it)[1].get<double>(), (float)(*it)[2].get<double>()};
+}
+// The member `key` when it is an object, else nullptr.
+const nlohmann::json* ObjectAt(const nlohmann::json& j, const char* key) {
+    const auto it = j.find(key);
+    return it != j.end() && it->is_object() ? &*it : nullptr;
+}
+
+// ---- scene lights (editor "lights", version 2) ----
+nlohmann::json Vec3Json(const DirectX::XMFLOAT3& v) { return nlohmann::json::array({v.x, v.y, v.z}); }
+
+nlohmann::json LightValuesJson(const LightValues& v) {
+    return {
+        {"position", Vec3Json(v.position)}, {"aim", Vec3Json(v.aim)},     {"direction", Vec3Json(v.direction)},
+        {"color", Vec3Json(v.color)},       {"intensity", v.intensity},   {"range", v.range},
+        {"coneOuter", v.coneOuter},         {"coneInner", v.coneInner},
+    };
+}
+
+nlohmann::json SceneLightJson(const SceneLight& l) {
+    nlohmann::json j;
+    j["uid"] = l.uid;
+    j["kind"] = LightKindName(l.kind);
+    j["name"] = l.name;
+    j["enabled"] = l.enabled;
+    j["values"] = LightValuesJson(l.v);
+    j["sun"] = {{"vmdLink", l.vmdLink}, {"rimStrength", l.rimStrength}, {"rimColor", Vec3Json(l.rimColor)}};
+    j["spot"] = {{"aim", AimModeName(l.aimMode)},
+                 {"target", l.targetUid},
+                 {"part", TargetPartName(l.targetPart)},
+                 {"swayPhase", l.swayPhase}};
+    j["sky"] = {{"zenith", Vec3Json(l.skyZenith)}, {"horizon", Vec3Json(l.skyHorizon)}, {"ground", Vec3Json(l.groundColor)}};
+    j["shadow"] = {{"type", ShadowTypeName(l.shadow)},
+                   {"softness", l.shadowSoftness},
+                   {"density", l.shadowDensity},
+                   {"color", Vec3Json(l.shadowColor)}};
+    j["falloff"] = FalloffTypeName(l.falloff);
+    j["affectDiffuse"] = l.affectDiffuse;
+    j["affectSpecular"] = l.affectSpecular;
+    j["viewportVisible"] = l.viewportVisible;
+    nlohmann::json keys = nlohmann::json::array();
+    for (const LightKey& k : l.keys) keys.push_back({{"frame", k.frame}, {"values", LightValuesJson(k.v)}});
+    j["keys"] = std::move(keys);
+    return j;
+}
+
+void ReadLightValues(const nlohmann::json& j, LightValues& v) {
+    v.position = ReadVec3(j, "position", v.position);
+    v.aim = ReadVec3(j, "aim", v.aim);
+    v.direction = ReadVec3(j, "direction", v.direction);
+    v.color = ReadVec3(j, "color", v.color);
+    v.intensity = (float)ReadDouble(j, "intensity", v.intensity);
+    v.range = (float)ReadDouble(j, "range", v.range);
+    v.coneOuter = (float)ReadDouble(j, "coneOuter", v.coneOuter);
+    v.coneInner = (float)ReadDouble(j, "coneInner", v.coneInner);
+}
+
+// One "lights" entry. Missing keys keep the SceneLight defaults; a key without some values holds the light's base values.
+// False (with a warning) for an unknown kind.
+bool ReadSceneLight(const nlohmann::json& jl, SceneLight& l, std::vector<std::string>* warnings) {
+    const std::string kindStr = ReadString(jl, "kind", "");
+    if (!ParseLightKind(kindStr, l.kind)) {
+        if (warnings) warnings->push_back("unknown light kind: " + kindStr);
+        return false;
+    }
+    l.uid = (uint32_t)std::max(0, ReadInt(jl, "uid", 0));
+    l.name = ReadString(jl, "name", "");
+    l.enabled = ReadBool(jl, "enabled", l.enabled);
+    if (const nlohmann::json* v = ObjectAt(jl, "values")) ReadLightValues(*v, l.v);
+    if (const nlohmann::json* s = ObjectAt(jl, "sun")) {
+        l.vmdLink = ReadBool(*s, "vmdLink", l.vmdLink);
+        l.rimStrength = (float)ReadDouble(*s, "rimStrength", l.rimStrength);
+        l.rimColor = ReadVec3(*s, "rimColor", l.rimColor);
+    }
+    if (const nlohmann::json* s = ObjectAt(jl, "spot")) {
+        ParseAimMode(ReadString(*s, "aim", ""), l.aimMode);
+        l.targetUid = (uint32_t)std::max(0, ReadInt(*s, "target", 0));
+        ParseTargetPart(ReadString(*s, "part", ""), l.targetPart);
+        l.swayPhase = (float)ReadDouble(*s, "swayPhase", l.swayPhase);
+    }
+    if (const nlohmann::json* s = ObjectAt(jl, "sky")) {
+        l.skyZenith = ReadVec3(*s, "zenith", l.skyZenith);
+        l.skyHorizon = ReadVec3(*s, "horizon", l.skyHorizon);
+        l.groundColor = ReadVec3(*s, "ground", l.groundColor);
+    }
+    if (const nlohmann::json* s = ObjectAt(jl, "shadow")) {
+        ParseShadowType(ReadString(*s, "type", ""), l.shadow);
+        l.shadowSoftness = (float)ReadDouble(*s, "softness", l.shadowSoftness);
+        l.shadowDensity = (float)ReadDouble(*s, "density", l.shadowDensity);
+        l.shadowColor = ReadVec3(*s, "color", l.shadowColor);
+    }
+    ParseFalloffType(ReadString(jl, "falloff", ""), l.falloff);
+    l.affectDiffuse = ReadBool(jl, "affectDiffuse", l.affectDiffuse);
+    l.affectSpecular = ReadBool(jl, "affectSpecular", l.affectSpecular);
+    l.viewportVisible = ReadBool(jl, "viewportVisible", l.viewportVisible);
+    const auto keysIt = jl.find("keys");
+    if (keysIt != jl.end() && keysIt->is_array()) {
+        for (const nlohmann::json& jk : *keysIt) {
+            if (!jk.is_object()) continue;
+            LightKey k;
+            k.frame = std::max(0, ReadInt(jk, "frame", 0));
+            k.v = l.v;
+            if (const nlohmann::json* v = ObjectAt(jk, "values")) ReadLightValues(*v, k.v);
+            UpsertKey(l.keys, k);  // sorted by frame; a repeated frame keeps the last key
+        }
+    }
+    return true;
+}
+
+// ---- version 1 lighting -> scene lights ----
+// Version 1 projects stored the studio lighting as a source choice (VMD track / preset / custom rig), an optional key
+// light override and a spot rig ("lighting" in the editor object; before that only "useLightTrack"). These structs
+// read those fields (with the defaults of the old rig) for ConvertLegacyLighting.
+enum class LegacySource { Vmd, Preset, Custom };
+enum class LegacyMode { Auto, Center, Head, Manual };
+
+struct LegacySpotKey {
+    int frame = 0;
+    DirectX::XMFLOAT3 position{0, 45, -15}, aim{0, 0, 0}, color{1, 1, 1};
+    float intensity = 2.6f, cone = 0.24f;
+};
+struct LegacySpot {
+    std::string name;
+    LegacyMode mode = LegacyMode::Auto;
+    DirectX::XMFLOAT3 position{0, 45, -15}, aim{0, 0, 0}, color{1.0f, 0.98f, 0.92f};
+    float intensity = 2.6f, cone = 0.24f;
+    bool enabled = true;
+    float phase = 0.0f;
+    std::vector<LegacySpotKey> keys;
+};
+struct LegacyLighting {
+    LegacySource source = LegacySource::Vmd;
+    int preset = 0;
+    bool keyEnabled = false;  // the "key" object was present
+    DirectX::XMFLOAT3 keyDirection{-0.5f, -1.0f, 0.5f}, keyColor{0.6f, 0.6f, 0.6f}, keyRimColor{1.0f, 0.97f, 0.92f};
+    float keyIntensity = 1.0f, keyRimStrength = 0.35f;
+    std::vector<LegacySpot> spots;
+    bool frontFill = false;
+};
+
+LegacyLighting ReadLegacyLighting(const nlohmann::json& li) {
+    LegacyLighting old;
+    const std::string source = ReadString(li, "source", "vmd");  // anything else keeps the old default: the VMD track
+    if (source == "preset") old.source = LegacySource::Preset;
+    else if (source == "custom") old.source = LegacySource::Custom;
+    old.preset = ReadInt(li, "preset", old.preset);
+    old.frontFill = ReadBool(li, "frontFill", old.frontFill);
+    if (const nlohmann::json* k = ObjectAt(li, "key")) {
+        old.keyEnabled = true;
+        old.keyDirection = ReadVec3(*k, "direction", old.keyDirection);
+        old.keyColor = ReadVec3(*k, "color", old.keyColor);
+        old.keyIntensity = (float)ReadDouble(*k, "intensity", old.keyIntensity);
+        old.keyRimStrength = (float)ReadDouble(*k, "rimStrength", old.keyRimStrength);
+        old.keyRimColor = ReadVec3(*k, "rimColor", old.keyRimColor);
+    }
+    const auto spotsIt = li.find("spots");
+    if (spotsIt != li.end() && spotsIt->is_array()) {
+        for (const nlohmann::json& sp : *spotsIt) {
+            if (!sp.is_object()) continue;
+            LegacySpot s;
+            s.name = ReadString(sp, "name", "");
+            const std::string mode = ReadString(sp, "mode", "auto");
+            if (mode == "center") s.mode = LegacyMode::Center;
+            else if (mode == "head") s.mode = LegacyMode::Head;
+            else if (mode == "manual") s.mode = LegacyMode::Manual;
+            s.position = ReadVec3(sp, "position", s.position);
+            s.aim = ReadVec3(sp, "aim", s.aim);
+            s.color = ReadVec3(sp, "color", s.color);
+            s.intensity = (float)ReadDouble(sp, "intensity", s.intensity);
+            s.cone = (float)ReadDouble(sp, "cone", s.cone);
+            s.enabled = ReadBool(sp, "enabled", s.enabled);
+            s.phase = (float)ReadDouble(sp, "phase", s.phase);
+            const auto keysIt = sp.find("keys");
+            if (keysIt != sp.end() && keysIt->is_array()) {
+                for (const nlohmann::json& kk : *keysIt) {
+                    if (!kk.is_object()) continue;
+                    LegacySpotKey k;
+                    k.frame = ReadInt(kk, "frame", 0);
+                    k.position = ReadVec3(kk, "position", k.position);
+                    k.aim = ReadVec3(kk, "aim", k.aim);
+                    k.color = ReadVec3(kk, "color", k.color);
+                    k.intensity = (float)ReadDouble(kk, "intensity", k.intensity);
+                    k.cone = (float)ReadDouble(kk, "cone", k.cone);
+                    s.keys.push_back(k);
+                }
+            }
+            // spots were identified by their (unique) names: a nameless or repeated one never existed
+            const bool repeated = std::any_of(old.spots.begin(), old.spots.end(),
+                                              [&](const LegacySpot& o) { return o.name == s.name; });
+            if (!s.name.empty() && !repeated) old.spots.push_back(std::move(s));
+        }
+    }
+    return old;
+}
+
+// The scene lights that reproduce a version 1 lighting setup:
+//   VMD track: the preset's lights, the sun linked to the camera VMD light track (the key override did not apply).
+//   Preset:    the preset's lights, the sun unlinked, with the key override on the sun when it was enabled.
+//   Custom:    the preset's sun and ambient light (as in Preset), the rig's spots in order (the cone's inner angle was
+//              derived: 0.6 * outer) and the front fill instead of the preset's own spots and fill.
+// Uids are 1..N in list order.
+std::vector<SceneLight> ConvertLegacyLighting(const LegacyLighting& old, LegacySource source) {
+    uint32_t counter = 1;
+    std::vector<SceneLight> lights = PresetLights(old.preset, DirectX::XMFLOAT3{0.0f, 10.0f, 0.0f}, counter);
+    SceneLight* sun = nullptr;
+    for (SceneLight& l : lights)
+        if (l.kind == LightKind::Sun) { sun = &l; break; }
+    if (sun) sun->vmdLink = source == LegacySource::Vmd;
+    if (source == LegacySource::Vmd) return lights;
+    if (sun && old.keyEnabled) {
+        sun->v.direction = old.keyDirection;
+        sun->v.color = old.keyColor;
+        sun->v.intensity = old.keyIntensity;
+        sun->rimStrength = old.keyRimStrength;
+        sun->rimColor = old.keyRimColor;
+    }
+    if (source == LegacySource::Custom) {
+        lights.erase(std::remove_if(lights.begin(), lights.end(),
+                                    [](const SceneLight& l) { return l.kind == LightKind::Spot || l.kind == LightKind::Point; }),
+                     lights.end());
+        for (const LegacySpot& s : old.spots) {
+            SceneLight l;
+            l.name = s.name;
+            l.kind = LightKind::Spot;
+            l.enabled = s.enabled;
+            l.v.position = s.position;
+            l.v.aim = s.aim;
+            l.v.color = s.color;
+            l.v.intensity = s.intensity;
+            l.v.range = 140.0f;
+            l.v.coneOuter = s.cone;
+            l.v.coneInner = std::min(s.cone * 0.6f, s.cone);
+            switch (s.mode) {
+            case LegacyMode::Auto: l.aimMode = AimMode::Sway; break;
+            case LegacyMode::Center: l.aimMode = AimMode::Target; l.targetPart = TargetPart::Centre; break;
+            case LegacyMode::Head: l.aimMode = AimMode::Target; l.targetPart = TargetPart::Head; break;
+            case LegacyMode::Manual: l.aimMode = AimMode::Manual; break;
+            }
+            l.swayPhase = s.phase;
+            for (const LegacySpotKey& k : s.keys) {
+                LightKey lk;
+                lk.frame = k.frame;
+                lk.v = l.v;
+                lk.v.position = k.position;
+                lk.v.aim = k.aim;
+                lk.v.color = k.color;
+                lk.v.intensity = k.intensity;
+                lk.v.coneOuter = k.cone;
+                lk.v.coneInner = std::min(k.cone * 0.6f, k.cone);
+                UpsertKey(l.keys, lk);
+            }
+            lights.push_back(std::move(l));
+        }
+        if (old.frontFill) {  // the warm front fill of the old rig (the concert preset's fill, at the default focus)
+            SceneLight fill;
+            fill.name = "채움광";
+            fill.kind = LightKind::Point;
+            fill.v.position = {0.0f, 32.0f, -40.0f};
+            fill.v.color = {0.917f, 0.83f, 0.72f};
+            fill.v.intensity = 0.55f;
+            fill.v.range = 120.0f;
+            lights.push_back(std::move(fill));
+        }
+    }
+    for (size_t i = 0; i < lights.size(); ++i) lights[i].uid = (uint32_t)i + 1;
+    return lights;
 }
 
 } // namespace
@@ -300,7 +566,6 @@ bool SaveProject(const std::filesystem::path& file, const ProjectData& data, std
             ed["frame"] = data.editor.frame;
             ed["selectedModel"] = data.editor.selectedModel;
             ed["useMotionCamera"] = data.editor.useMotionCamera;
-            ed["useLightTrack"] = data.editor.useLightTrack;  // also for older readers (the lighting object wins)
             ed["useShadowTrack"] = data.editor.useShadowTrack;
             ed["showCameraPath"] = data.editor.showCameraPath;
             ed["loop"] = data.editor.loop;
@@ -315,52 +580,10 @@ bool SaveProject(const std::filesystem::path& file, const ProjectData& data, std
                 {"distance", data.editor.camDistance},
                 {"fov", data.editor.camFovDeg},
             };
-            // the studio's lighting source + spot rig (LightRig); older readers ignore it
-            {
-                const LightRig& rig = data.editor.lighting;
-                nlohmann::json li;
-                li["source"] = LightSourceName(rig.source);
-                li["preset"] = rig.presetIndex;
-                if (rig.key.enabled) {
-                    li["key"] = {
-                        {"direction", {rig.key.direction.x, rig.key.direction.y, rig.key.direction.z}},
-                        {"color", {rig.key.color.x, rig.key.color.y, rig.key.color.z}},
-                        {"intensity", rig.key.intensity},
-                        {"rimStrength", rig.key.rimStrength},
-                        {"rimColor", {rig.key.rimColor.x, rig.key.rimColor.y, rig.key.rimColor.z}},
-                    };
-                }
-                if (!rig.spots.empty()) {
-                    nlohmann::json spots = nlohmann::json::array();
-                    for (const SpotLight& s : rig.spots) {
-                        nlohmann::json js;
-                        js["name"] = s.name;
-                        js["mode"] = SpotModeName(s.mode);
-                        js["position"] = {s.position.x, s.position.y, s.position.z};
-                        js["aim"] = {s.aim.x, s.aim.y, s.aim.z};
-                        js["color"] = {s.color.x, s.color.y, s.color.z};
-                        js["intensity"] = s.intensity;
-                        js["cone"] = s.coneOuter;
-                        js["enabled"] = s.enabled;
-                        js["phase"] = s.swingPhase;
-                        if (!s.keys.empty()) {
-                            nlohmann::json keys = nlohmann::json::array();
-                            for (const SpotKf& k : s.keys)
-                                keys.push_back({{"frame", k.frame},
-                                                {"position", {k.position.x, k.position.y, k.position.z}},
-                                                {"aim", {k.aim.x, k.aim.y, k.aim.z}},
-                                                {"color", {k.color.x, k.color.y, k.color.z}},
-                                                {"intensity", k.intensity},
-                                                {"cone", k.coneOuter}});
-                            js["keys"] = std::move(keys);
-                        }
-                        spots.push_back(std::move(js));
-                    }
-                    li["spots"] = std::move(spots);
-                }
-                li["frontFill"] = rig.frontFill;
-                ed["lighting"] = std::move(li);
-            }
+            // the scene lights, always written (an empty array when there are none)
+            nlohmann::json lights = nlohmann::json::array();
+            for (const SceneLight& l : data.editor.lights) lights.push_back(SceneLightJson(l));
+            ed["lights"] = std::move(lights);
             j["editor"] = std::move(ed);
         }
         if (!data.recoveryOf.empty())
@@ -529,15 +752,16 @@ bool LoadProject(const std::filesystem::path& file, ProjectData& out, std::strin
             out.audioOffset = ReadDouble(j["audio"], "offset", out.audioOffset);
         }
 
+        // The editor state. A version 1 file's lighting (a source choice + spot rig, or only "useLightTrack") is converted
+        // to scene lights, also when the file has no editor object (the old default: the VMD track, Studio preset).
+        ProjectEditor ed;  // defaults, then overwrite what the file carries
+        LegacyLighting legacy;
+        bool hadLegacyLighting = false, hadLegacyUseLightTrack = false, legacyUseLightTrack = true;
         if (j.contains("editor") && j["editor"].is_object()) {
             const nlohmann::json& e = j["editor"];
-            ProjectEditor ed;  // defaults, then overwrite what the file carries
             ed.frame = ReadInt(e, "frame", ed.frame);
             ed.selectedModel = ReadInt(e, "selectedModel", ed.selectedModel);
-            bool legacyUseLightTrack = true;
-            const bool hadLegacy = e.contains("useLightTrack") && (*e.find("useLightTrack")).is_boolean();
             ed.useMotionCamera = ReadBool(e, "useMotionCamera", ed.useMotionCamera);
-            legacyUseLightTrack = ReadBool(e, "useLightTrack", legacyUseLightTrack);
             ed.useShadowTrack = ReadBool(e, "useShadowTrack", ed.useShadowTrack);
             ed.showCameraPath = ReadBool(e, "showCameraPath", ed.showCameraPath);
             ed.loop = ReadBool(e, "loop", ed.loop);
@@ -557,69 +781,42 @@ bool LoadProject(const std::filesystem::path& file, ProjectData& out, std::strin
                 ed.camDistance = (float)ReadDouble(fc, "distance", ed.camDistance);
                 ed.camFovDeg = (float)ReadDouble(fc, "fov", ed.camFovDeg);
             }
-            // ---- lighting source: the "lighting" object, else the legacy useLightTrack bool ----
-            const auto liIt = e.find("lighting");
-            if (liIt != e.end() && liIt->is_object()) {
-                const nlohmann::json& li = *liIt;
-                ParseLightSource(ReadString(li, "source", "vmd"), ed.lighting.source);
-                ed.lighting.presetIndex = ReadInt(li, "preset", ed.lighting.presetIndex);
-                ed.lighting.frontFill = ReadBool(li, "frontFill", ed.lighting.frontFill);
-                const auto keyIt = li.find("key");
-                if (keyIt != li.end() && keyIt->is_object()) {
-                    ed.lighting.key.enabled = true;
-                    const nlohmann::json& k = *keyIt;
-                    ed.lighting.key.direction = ReadVec3(k, "direction", ed.lighting.key.direction);
-                    ed.lighting.key.color = ReadVec3(k, "color", ed.lighting.key.color);
-                    ed.lighting.key.intensity = (float)ReadDouble(k, "intensity", ed.lighting.key.intensity);
-                    ed.lighting.key.rimStrength = (float)ReadDouble(k, "rimStrength", ed.lighting.key.rimStrength);
-                    ed.lighting.key.rimColor = ReadVec3(k, "rimColor", ed.lighting.key.rimColor);
-                }
-                const auto spotsIt = li.find("spots");
-                if (spotsIt != li.end() && spotsIt->is_array()) {
-                    for (const auto& sp : *spotsIt) {
-                        if (!sp.is_object()) continue;
-                        SpotLight s;
-                        s.name = ReadString(sp, "name", "");
-                        ParseSpotMode(ReadString(sp, "mode", "auto"), s.mode);
-                        s.position = ReadVec3(sp, "position", s.position);
-                        s.aim = ReadVec3(sp, "aim", s.aim);
-                        s.color = ReadVec3(sp, "color", s.color);
-                        s.intensity = (float)ReadDouble(sp, "intensity", s.intensity);
-                        s.coneOuter = (float)ReadDouble(sp, "cone", s.coneOuter);
-                        s.coneInner = std::min(s.coneOuter * 0.6f, s.coneOuter);
-                        s.enabled = ReadBool(sp, "enabled", s.enabled);
-                        s.swingPhase = (float)ReadDouble(sp, "phase", s.swingPhase);
-                        const auto keysIt = sp.find("keys");
-                        if (keysIt != sp.end() && keysIt->is_array()) {
-                            for (const auto& kk : *keysIt) {
-                                if (!kk.is_object()) continue;
-                                SpotKf kf;
-                                kf.frame = ReadInt(kk, "frame", 0);
-                                kf.position = ReadVec3(kk, "position", kf.position);
-                                kf.aim = ReadVec3(kk, "aim", kf.aim);
-                                kf.color = ReadVec3(kk, "color", kf.color);
-                                kf.intensity = (float)ReadDouble(kk, "intensity", kf.intensity);
-                                kf.coneOuter = (float)ReadDouble(kk, "cone", kf.coneOuter);
-                                s.keys.push_back(kf);
-                            }
-                            std::sort(s.keys.begin(), s.keys.end(),
-                                      [](const SpotKf& a, const SpotKf& b) { return a.frame < b.frame; });
-                        }
-                        if (!s.name.empty() && !ed.lighting.Spot(s.name)) ed.lighting.spots.push_back(std::move(s));
+            if (version >= 2) {
+                // the scene lights: absent means none (not the defaults)
+                const auto lightsIt = e.find("lights");
+                if (lightsIt != e.end() && lightsIt->is_array()) {
+                    for (const nlohmann::json& jl : *lightsIt) {
+                        SceneLight l;
+                        if (jl.is_object() && ReadSceneLight(jl, l, warnings)) ed.lights.push_back(std::move(l));
                     }
                 }
-                ed.useLightTrack = ed.lighting.source == LightSource::VmdTrack;  // keep the legacy view in step
-            } else if (hadLegacy) {
-                // v1 project: true -> VmdTrack only when the camera VMD actually carries light keys, else Preset;
-                // false -> Preset (the user had turned the light track off)
-                ed.lighting.source = legacyUseLightTrack && !out.camera.light.empty() ? LightSource::VmdTrack
-                                                                                      : LightSource::Preset;
-                ed.useLightTrack = ed.lighting.source == LightSource::VmdTrack;
             } else {
-                ed.useLightTrack = legacyUseLightTrack;
+                hadLegacyUseLightTrack = e.contains("useLightTrack") && e.find("useLightTrack")->is_boolean();
+                legacyUseLightTrack = ReadBool(e, "useLightTrack", legacyUseLightTrack);
+                if (const nlohmann::json* li = ObjectAt(e, "lighting")) {
+                    legacy = ReadLegacyLighting(*li);
+                    hadLegacyLighting = true;
+                }
             }
-            out.editor = ed;
         }
+        if (version >= 2) {
+            // uids identify the lights: a missing, zero or repeated one gets a fresh uid
+            uint32_t nextUid = 1;
+            for (const SceneLight& l : ed.lights) nextUid = std::max(nextUid, l.uid + 1);
+            std::set<uint32_t> used;
+            for (SceneLight& l : ed.lights) {
+                if (l.uid == 0 || used.count(l.uid)) l.uid = nextUid++;
+                used.insert(l.uid);
+            }
+        } else {
+            // the old rule: the "lighting" object's source; else useLightTrack (true only with light keys in the camera
+            // VMD, else the preset); else the default, the VMD track
+            LegacySource source = LegacySource::Vmd;
+            if (hadLegacyLighting) source = legacy.source;
+            else if (hadLegacyUseLightTrack) source = legacyUseLightTrack && !out.camera.light.empty() ? LegacySource::Vmd : LegacySource::Preset;
+            ed.lights = ConvertLegacyLighting(legacy, source);
+        }
+        out.editor = ed;
 
         out.recoveryOf = ResolvePath(ReadString(j, "recoveryOf", ""), dir);
 

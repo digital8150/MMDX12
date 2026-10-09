@@ -6,7 +6,7 @@
 // target, so a crash mid-save never leaves a half-written project.
 // Independent of the App and the renderer (unit-tested by tools/studio_project_test.cpp).
 #include "render/ShaderPack.h"
-#include "studio/LightRig.h"
+#include "studio/SceneLight.h"
 #include "studio/StudioMotion.h"
 #include <DirectXMath.h>
 #include <cstdint>
@@ -16,7 +16,9 @@
 
 namespace mmdx::studio {
 
-inline constexpr int kProjectFormatVersion = 1;
+// Version 2: the studio lights are scene objects (editor "lights"). Version 1 projects carried a lighting source +
+// spot rig ("lighting", "useLightTrack"); LoadProject converts them to scene lights. Older builds reject version 2.
+inline constexpr int kProjectFormatVersion = 2;
 inline constexpr const char* kProjectFormatName = "mmdx12-studio-project";
 inline constexpr const wchar_t* kProjectExtension = L".mmdxproj";
 
@@ -60,9 +62,10 @@ struct ProjectEditor {
     int frame = 0;
     int selectedModel = -1;            // index into models, -1 = camera
     bool useMotionCamera = true, useShadowTrack = true, showCameraPath = true;
-    // legacy light setting (v1 projects); migrated by LoadProject into `lighting` (see below)
-    bool useLightTrack = true;
-    LightRig lighting;                 // the studio's lighting source + spot rig ("lighting", absent: from useLightTrack)
+    // The scene lights ("lights", see SceneLight.h). A spot's targetUid is 1 + the index into ProjectData::models here
+    // (0 = the performer): the App converts it from / to the studio's model uids. A version 2 file without "lights"
+    // has none; a version 1 file's "lighting" / "useLightTrack" are converted by LoadProject.
+    std::vector<SceneLight> lights;
     bool loop = false, physics = true;
     int rangeStart = -1, rangeEnd = -1;
     float pxPerFrame = 6.0f;

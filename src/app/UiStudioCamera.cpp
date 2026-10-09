@@ -1,6 +1,6 @@
-// Studio camera / light / self-shadow: the inspector panel of the camera target (view mode, key from view, light and
-// shadow track switches, editable key values), the camera path overlay in the viewport, and how the light and shadow
-// tracks drive the renderer. Independent of any model being loaded.
+// Studio camera VMD / self-shadow: the inspector panel of the camera target (view mode, key from view, the VMD light
+// track, the shadow track switch, editable key values), the camera path overlay in the viewport, and how the shadow
+// track drives the renderer (the light track drives the sun: BuildSceneLighting). Independent of any model being loaded.
 #include "app/App.h"
 
 #include <algorithm>
@@ -26,17 +26,6 @@ constexpr float kRenderAspect = 16.0f / 9.0f;  // every video size of the render
 constexpr float kOrthoFovDeg = 3.0f;  // "perspective off" is drawn as a long lens from far away (see StudioCamera)
 
 uint64_t RowOf(RowKind k) { return MakeRowId(k, 0, 0); }
-
-// Korean label of a spot's aim mode (the mode chips use the same order as SpotLight::mode)
-const char* SpotModeLabel(uint8_t mode) {
-    switch (mode) {
-    case 1: return Tr("중심 추적");
-    case 2: return Tr("머리 추적");
-    case 3: return Tr("수동");
-    case 0: break;
-    }
-    return Tr("자동 스윙");
-}
 
 // Last key at or before `frame` (the first before it): MMD switches perspective per key, it does not interpolate it.
 bool PerspectiveAt(const std::vector<CameraKf>& keys, float frame) {
@@ -87,17 +76,14 @@ void App::ApplyLightShadowTracks(const std::vector<LightKf>& light, const std::v
 
 void App::StudioApplyLightTracks(FrameView& view) const {
     const StudioDoc& d = *studio_;
+    // the camera VMD's light track drives the sun inside BuildSceneLighting; only the self-shadow track is applied here
     static const std::vector<LightKf> kNoLight;
     static const std::vector<ShadowKf> kNoShadow;
-    ApplyLightShadowTracks(d.lighting.source == LightSource::VmdTrack ? d.camera.light : kNoLight,
-                           d.useShadowTrack ? d.camera.shadow : kNoShadow, (float)(d.time * kMmdFps), view);
+    ApplyLightShadowTracks(kNoLight, d.useShadowTrack ? d.camera.shadow : kNoShadow, (float)(d.time * kMmdFps), view);
 }
 
 LightKf App::StudioCurrentLight() const {
-    const StudioDoc& d = *studio_;
-    const float frame = (float)(d.time * kMmdFps);
-    if (d.lighting.source == LightSource::VmdTrack && !d.camera.light.empty()) return SampleLight(d.camera.light, frame);
-    return StudioPresetLightKey(d.Frame());
+    return StudioSunLight((float)(studio_->time * kMmdFps));
 }
 
 // ---------------------------------------------------------------------------
@@ -165,33 +151,6 @@ void LightBall(ImDrawList* dl, ImVec2 center, float radius, const DirectX::XMFLO
     dl->AddCircle(center, radius, rim, 48, 1.0f);
 }
 } // namespace
-
-// One undo step per light-rig field drag / toggle: the spot list is captured when a field becomes
-// active and pushed when it is released (or when the selected spot disappears). The push also marks
-// the project dirty (projectVersion), like every undoable studio edit outside the history.
-void App::StudioBeginRigEdit() {
-    if (studioRigEdit_) return;
-    studioRigBefore_ = studio_->lighting.spots;
-    studioRigEdit_ = true;
-}
-
-void App::StudioEndRigEdit(const char* undoName) {
-    if (!studioRigEdit_) return;
-    LightRig& rig = studio_->lighting;
-    bool same = rig.spots.size() == studioRigBefore_.size();
-    if (same)
-        for (size_t i = 0; i < rig.spots.size(); ++i)
-            if (!SpotLight::KeysEqual(rig.spots[i], studioRigBefore_[i])) { same = false; break; }
-    if (!same) {
-        studio_->history.Push(std::make_unique<VecSpotCommand>(*studio_, undoName, studioRigBefore_, rig.spots));
-        ++studio_->projectVersion;  // the rig also lives outside the undo history (VecSpotCommand holds the spots)
-        // auto-key: a finished rig edit keys the edited spot's values at the playhead
-        if (studio_->autoKey && studioLightSpot_ >= 0 && studioLightSpot_ < (int)rig.spots.size())
-            StudioInsertKeys({MakeRowId(RowKind::Spot, 0, (uint32_t)studioLightSpot_)}, studio_->Frame());
-    }
-    studioRigBefore_.clear();
-    studioRigEdit_ = false;
-}
 
 void App::DrawStudioCameraPanel(float w) {
     using namespace ui;
@@ -278,14 +237,42 @@ void App::DrawStudioCameraPanel(float w) {
         DrawStudioCameraKeyFields(w, RowKind::Camera, d.Frame(), true);  // disabled without a key when auto-key is off
     }
 
-    // --- light source: VMD track / preset / custom rig, then the chosen mode's controls
+    // --- the camera VMD's light track: the sun's effective light (the ball), its numbers, the track's key count and the
+    // key button. The track drives the main light's colour and direction while the light is linked to the VMD.
     separator(compact ? 4.0f : 8.0f);
     if (compact) {
-        DrawStudioLightSourceSection(w, true);
+        // a camera key is being edited above: only the self-shadow switch stays
+        Switch("##shadowtrack", Tr("셀프 섀도 트랙"), &d.useShadowTrack);
         separator(4.0f);
         return;
     }
-    DrawStudioLightSourceSection(w, false);
+    {
+        const ImVec2 t0 = ImGui::GetCursorScreenPos();
+        Text(cdl, Font::Semibold, size::Small, t0, p.ink2, Tr("조명 트랙"));
+        std::snprintf(buf, sizeof(buf), Tr("키 %d개"), (int)d.camera.light.size());
+        const ImVec2 ks = TextSize(Font::Regular, size::Caption, buf);
+        Text(cdl, Font::Regular, size::Caption, ImVec2(t0.x + w - ks.x - Dp(4.0f), t0.y + Dp(2.0f)), p.ink3, buf);
+        ImGui::Dummy(ImVec2(w, Dp(24.0f)));
+        Tooltip(Tr("카메라 VMD의 조명 키예요. 메인 조명이 VMD와 연동돼 있으면 그 색과 방향을 따라요."));
+        const LightKf cur = StudioCurrentLight();
+        const float r = Dp(20.0f);
+        const ImVec2 c = ImGui::GetCursorScreenPos();
+        LightBall(cdl, ImVec2(c.x + r, c.y + r), r, studioVp_.view, cur, p.line);
+        const float tx = c.x + r * 2.0f + Dp(12.0f);
+        std::snprintf(buf, sizeof(buf), "%d, %d, %d", (int)std::lround(cur.color.x * 256.0f),
+                      (int)std::lround(cur.color.y * 256.0f), (int)std::lround(cur.color.z * 256.0f));
+        Text(cdl, Font::Regular, size::Caption, ImVec2(tx, c.y + Dp(2.0f)), p.ink3, Tr("색"));
+        Text(cdl, Font::Regular, size::Small, ImVec2(tx + Dp(34.0f), c.y + Dp(1.0f)), p.ink2, buf);
+        std::snprintf(buf, sizeof(buf), "%.2f, %.2f, %.2f", cur.direction.x, cur.direction.y, cur.direction.z);
+        Text(cdl, Font::Regular, size::Caption, ImVec2(tx, c.y + Dp(22.0f)), p.ink3, Tr("방향"));
+        Text(cdl, Font::Regular, size::Small, ImVec2(tx + Dp(34.0f), c.y + Dp(21.0f)), p.ink2, buf);
+        ImGui::SetCursorScreenPos(ImVec2(c.x + w - bw, c.y + r - bw * 0.5f));
+        if (IconButton("##lightkey", icon::Plus, Tr("현재 조명을 키로 등록"), false, btn))
+            StudioInsertKeys({RowOf(RowKind::Light)}, d.Frame());
+        ImGui::SetCursorScreenPos(c);
+        ImGui::Dummy(ImVec2(w, r * 2.0f + Dp(4.0f)));
+        ImGui::Dummy(ImVec2(w, Dp(2.0f)));
+    }
 
     // --- self-shadow track
     separator(8.0f);
@@ -310,292 +297,6 @@ void App::DrawStudioCameraPanel(float w) {
     }
     separator(10.0f);
     ImGui::Dummy(ImVec2(w, Dp(2.0f)));
-}
-
-// The lighting source section of the camera panel: a 3-chip source selector, then the mode's controls.
-//   VmdTrack: the light track's preview ball + key button (today's behaviour).
-//   Preset:   preset chips + the key override sliders (off = the preset decides).
-//   Custom:   the spot rig list (select / add / delete / enable), the selected spot's mode chips,
-//             position / aim / colour / intensity / cone, keying, and the warm front fill.
-// compact: a camera key is being edited above - only the source switch row, no spot fields.
-void App::DrawStudioLightSourceSection(float w, bool compact) {
-    using namespace ui;
-    StudioDoc& d = *studio_;
-    const Palette& p = P();
-    ImDrawList* cdl = ImGui::GetWindowDrawList();
-    LightRig& rig = d.lighting;
-    char buf[160];
-    const float btn = 34.0f, bw = Dp(btn);
-
-    // --- source: 3 chips (VMD 트랙 / 프리셋 / 직접 구성)
-    {
-        const char* sources[] = {Tr("VMD 트랙"), Tr("프리셋"), Tr("직접 구성")};
-        const char* sourceIcons[] = {icon::VideoCamera, icon::Sun, icon::Sliders};
-        int src = (int)rig.source;
-        if (Segmented("##lightsource", sources, 3, &src, w / Dpi(), 30.0f, sourceIcons)) {
-            rig.source = (LightSource)src;
-            d.useLightTrack = rig.source == LightSource::VmdTrack;
-            ++d.projectVersion;
-            studioLightSpot_ = -1;  // switching the source resets the spot selection
-        }
-        Tooltip(Tr("스튜디오 조명의 출처를 정해요. VMD 트랙: 카메라 VMD의 조명 키, 프리셋: 프리셋 + 수동 조정, 직접 구성: 스팟 리그."));
-    }
-
-    if (compact) {
-        // a camera key is being edited: keep the self-shadow switch next to the source selector
-        Switch("##shadowtrack", Tr("셀프 섀도 트랙"), &d.useShadowTrack);
-        return;
-    }
-
-    if (rig.source == LightSource::VmdTrack) {
-        // today's behaviour: the light track's preview ball + values + key button
-        const LightKf cur = StudioCurrentLight();
-        const float r = Dp(20.0f);
-        const ImVec2 c = ImGui::GetCursorScreenPos();
-        LightBall(cdl, ImVec2(c.x + r, c.y + r), r, studioVp_.view, cur, p.line);
-        const float tx = c.x + r * 2.0f + Dp(12.0f);
-        std::snprintf(buf, sizeof(buf), "%d, %d, %d", (int)std::lround(cur.color.x * 256.0f),
-                      (int)std::lround(cur.color.y * 256.0f), (int)std::lround(cur.color.z * 256.0f));
-        Text(cdl, Font::Regular, size::Caption, ImVec2(tx, c.y + Dp(2.0f)), p.ink3, Tr("색"));
-        Text(cdl, Font::Regular, size::Small, ImVec2(tx + Dp(34.0f), c.y + Dp(1.0f)), p.ink2, buf);
-        std::snprintf(buf, sizeof(buf), "%.2f, %.2f, %.2f", cur.direction.x, cur.direction.y, cur.direction.z);
-        Text(cdl, Font::Regular, size::Caption, ImVec2(tx, c.y + Dp(22.0f)), p.ink3, Tr("방향"));
-        Text(cdl, Font::Regular, size::Small, ImVec2(tx + Dp(34.0f), c.y + Dp(21.0f)), p.ink2, buf);
-        ImGui::SetCursorScreenPos(ImVec2(c.x + w - bw, c.y + r - bw * 0.5f));
-        if (IconButton("##lightkey", icon::Plus, Tr("현재 조명을 키로 등록"), false, btn))
-            StudioInsertKeys({RowOf(RowKind::Light)}, d.Frame());
-        ImGui::SetCursorScreenPos(c);
-        ImGui::Dummy(ImVec2(w, r * 2.0f + Dp(4.0f)));
-        ImGui::Dummy(ImVec2(w, Dp(2.0f)));
-        return;
-    }
-
-    // --- Preset / Custom: which preset is the base (the studio owns its own choice, saved in the project)
-    {
-        const float chipW = (w / Dpi() - 3.0f * 6.0f) / 4.0f;
-        const char* lightIcons[] = {icon::Sun, icon::CircleHalf, icon::Sparkle, icon::Moon};
-        ImGui::Dummy(ImVec2(w, Dp(4.0f)));
-        for (int i = 0; i < kLightingPresetCount; ++i) {
-            if (i) ImGui::SameLine(0, Dp(6.0f));
-            ImGui::PushID(i);
-            if (Chip("##preset", LightingPresetName((LightingPreset)i), lightIcons[i], rig.presetIndex == i, chipW)) {
-                rig.presetIndex = i;
-                ++d.projectVersion;
-            }
-            ImGui::PopID();
-        }
-        Tooltip(Tr("이 프로젝트의 조명 프리셋이에요. (라이브러리 화면의 조명은 플레이 화면에만 쓰여요.)"));
-    }
-
-    // --- the key override: a switch, then the sliders when it is on
-    {
-        ImGui::Dummy(ImVec2(w, Dp(6.0f)));
-        const bool keyWas = rig.key.enabled;
-        Switch("##keyoverride", Tr("키 라이트 수동 조정"), &rig.key.enabled, Tr("프리셋의 키 라이트를 덮어써요."));
-        if (rig.key.enabled != keyWas) ++d.projectVersion;  // the switch is a project edit (once)
-        if (rig.key.enabled) {
-            ImGui::Dummy(ImVec2(w, Dp(4.0f)));
-            float dir[3] = {rig.key.direction.x, rig.key.direction.y, rig.key.direction.z};
-            float col[3] = {rig.key.color.x, rig.key.color.y, rig.key.color.z};
-            float rim[3] = {rig.key.rimColor.x, rig.key.rimColor.y, rig.key.rimColor.z};
-            const auto row3 = [&](const char* id, const char* label, float* v, float sp, float lo, float hi, const char* fmt) {
-                const ImVec2 c = ImGui::GetCursorScreenPos();
-                Text(cdl, Font::Regular, size::Small, ImVec2(c.x, c.y + Dp(5.0f)), p.ink3, label);
-                ImGui::SetCursorScreenPos(ImVec2(c.x + Dp(64.0f), c.y));
-                ImGui::SetNextItemWidth(w - Dp(64.0f));
-                PushFont(Font::Regular, size::Small);
-                const bool changed = ImGui::DragFloat3(id, v, sp, lo, hi, fmt);
-                PopFont();
-                ImGui::Dummy(ImVec2(w, Dp(4.0f)));
-                return changed;
-            };
-            if (row3("##ko_dir", Tr("방향"), dir, 0.01f, -1.0f, 1.0f, "%.2f")) { rig.key.direction = {dir[0], dir[1], dir[2]}; ++d.projectVersion; }
-            if (row3("##ko_col", Tr("색"), col, 0.005f, 0.0f, 1.0f, "%.3f")) { rig.key.color = {col[0], col[1], col[2]}; ++d.projectVersion; }
-            // colour pickers: the key colour and the rim colour
-            {
-                const ImVec2 c = ImGui::GetCursorScreenPos();
-                Text(cdl, Font::Regular, size::Small, ImVec2(c.x, c.y + Dp(3.0f)), p.ink3, Tr("색 선택"));
-                ImGui::SetCursorScreenPos(ImVec2(c.x + Dp(64.0f), c.y));
-                if (ImGui::ColorEdit3("##ko_pick", col, ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_NoLabel)) {
-                    rig.key.color = {col[0], col[1], col[2]};
-                    ++d.projectVersion;
-                }
-                ImGui::SameLine(0, Dp(10.0f));
-                Text(cdl, Font::Regular, size::Small, ImVec2(ImGui::GetCursorScreenPos().x, c.y + Dp(3.0f)), p.ink3, Tr("림 색"));
-                ImGui::SameLine(0, Dp(40.0f));
-                if (ImGui::ColorEdit3("##ko_rimpick", rim, ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_NoLabel)) {
-                    rig.key.rimColor = {rim[0], rim[1], rim[2]};
-                    ++d.projectVersion;
-                }
-                ImGui::Dummy(ImVec2(w, Dp(2.0f)));
-            }
-            float inten = rig.key.intensity, rimS = rig.key.rimStrength;
-            if (SliderRow("##ko_int", Tr("강도"), &inten, 0.0f, 3.0f, "%.2f")) { rig.key.intensity = inten; ++d.projectVersion; }
-            if (SliderRow("##ko_rim", Tr("림 강도"), &rimS, 0.0f, 2.0f, "%.2f")) { rig.key.rimStrength = rimS; ++d.projectVersion; }
-        }
-    }
-
-    if (rig.source != LightSource::Custom) return;
-
-    // --- Custom: the spot rig
-    ImGui::Dummy(ImVec2(w, Dp(4.0f)));
-    {
-        // header: count + add/delete buttons
-        const ImVec2 c = ImGui::GetCursorScreenPos();
-        std::snprintf(buf, sizeof(buf), Tr("스팟 %d개"), (int)rig.spots.size());
-        Text(cdl, Font::Semibold, size::Small, c, p.ink2, buf);
-        ImGui::SetCursorScreenPos(ImVec2(c.x + w - 2.0f * bw - Dp(6.0f), c.y - Dp(4.0f)));
-        ImGui::BeginDisabled(rig.spots.empty());
-        if (IconButton("##spotdel", icon::Trash, Tr("선택한 스팟 삭제"), false, btn)) {
-            if (studioLightSpot_ >= 0 && studioLightSpot_ < (int)rig.spots.size()) {
-                std::vector<SpotLight> before = rig.spots;
-                rig.spots.erase(rig.spots.begin() + studioLightSpot_);
-                studioLightSpot_ = -1;
-                d.history.Push(std::make_unique<VecSpotCommand>(d, Tr("스팟 삭제"), std::move(before), rig.spots));
-                ++d.projectVersion;
-            }
-        }
-        ImGui::EndDisabled();
-        ImGui::SameLine(0, Dp(6.0f));
-        ImGui::BeginDisabled((int)rig.spots.size() >= (int)kMaxRigSpots);
-        if (IconButton("##spotadd", icon::Plus, Tr("스팟 추가"), false, btn)) {
-            std::vector<SpotLight> before = rig.spots;
-            if (rig.AddSpot()) {
-                SpotLight& s = rig.spots.back();
-                const float side = (rig.spots.size() % 2 == 0) ? -1.0f : 1.0f;
-                s.position = {side * (8.0f + 6.0f * (float)(rig.spots.size() / 2)), 40.0f, -12.0f};
-                s.aim = {side * 6.0f, 0.0f, 0.0f};
-                const DirectX::XMFLOAT3 colors[3] = {{0.22f, 0.77f, 0.73f}, {0.95f, 0.35f, 0.62f}, {1.0f, 0.95f, 0.88f}};
-                s.color = colors[(rig.spots.size() - 1) % 3];
-                studioLightSpot_ = (int)rig.spots.size() - 1;
-                d.history.Push(std::make_unique<VecSpotCommand>(d, Tr("스팟 추가"), std::move(before), rig.spots));
-                ++d.projectVersion;
-            }
-        }
-        ImGui::EndDisabled();
-        ImGui::SetCursorScreenPos(c);
-        ImGui::Dummy(ImVec2(w, Dp(20.0f)));
-    }
-
-    // the spot list (rows: enable toggle + name + select)
-    if (!rig.spots.empty()) {
-        for (int i = 0; i < (int)rig.spots.size(); ++i) {
-            SpotLight& s = rig.spots[(size_t)i];
-            ImGui::PushID(i);
-            const ImVec2 a = ImGui::GetCursorScreenPos();
-            const bool sel = studioLightSpot_ == i;
-            const float rowH = Dp(26.0f);
-            ImGui::InvisibleButton("##spotrow", ImVec2(w, rowH));
-            const bool hovered = ImGui::IsItemHovered();
-            if (ImGui::IsItemClicked(0)) studioLightSpot_ = i;
-            const ImVec2 ra(a.x, a.y + Dp(1.0f)), rb(a.x + w, a.y + rowH - Dp(1.0f));
-            if (sel) cdl->AddRectFilled(ra, rb, p.accentSoft, Dp(6.0f));
-            else if (hovered) cdl->AddRectFilled(ra, rb, WithAlpha(p.ink, 0.05f), Dp(6.0f));
-            const ImU32 fg = sel ? p.accentInk : p.ink2;
-            // enabled dot
-            const ImVec2 dot(a.x + Dp(12.0f), a.y + rowH * 0.5f);
-            cdl->AddCircleFilled(dot, Dp(4.0f), s.enabled ? p.accent : WithAlpha(p.ink3, 0.5f), 12);
-            Text(cdl, Font::Regular, size::Small, ImVec2(a.x + Dp(24.0f), a.y + Dp(4.0f)), fg, s.name.c_str());
-            Text(cdl, Font::Regular, size::Caption, ImVec2(a.x + w - Dp(76.0f), a.y + Dp(6.0f)), p.ink3,
-                 SpotModeLabel(s.mode));
-            // enable toggle at the right end (one-shot undoable edit)
-            ImGui::SetCursorScreenPos(ImVec2(a.x + w - Dp(30.0f), a.y + Dp(1.0f)));
-            if (IconButton("##spotenable", s.enabled ? icon::Eye : icon::EyeSlash,
-                           s.enabled ? Tr("스팟 끄기") : Tr("스팟 켜기"), false, 24.0f)) {
-                std::vector<SpotLight> before = rig.spots;
-                s.enabled = !s.enabled;
-                d.history.Push(std::make_unique<VecSpotCommand>(d, s.enabled ? Tr("스팟 켜기") : Tr("스팟 끄기"),
-                                                               std::move(before), rig.spots));
-                ++d.projectVersion;
-            }
-            ImGui::SetCursorScreenPos(ImVec2(a.x, a.y + rowH));
-            ImGui::PopID();
-        }
-    }
-
-    // --- the selected spot's fields
-    SpotLight* spot = studioLightSpot_ >= 0 && studioLightSpot_ < (int)rig.spots.size()
-                          ? &rig.spots[(size_t)studioLightSpot_] : nullptr;
-    if (!spot) return;
-    ImGui::Dummy(ImVec2(w, Dp(6.0f)));
-    {
-        ImGui::Dummy(ImVec2(w, Dp(2.0f)));
-        // mode chips
-        const char* modes[] = {Tr("자동 스윙"), Tr("중심 추적"), Tr("머리 추적"), Tr("수동")};
-        int mode = std::clamp((int)spot->mode, 0, 3);
-        if (Segmented("##spotmode", modes, 4, &mode, w / Dpi(), 30.0f)) {
-            std::vector<SpotLight> before = rig.spots;
-            spot->mode = (uint8_t)mode;
-            d.history.Push(std::make_unique<VecSpotCommand>(d, Tr("스팟 편집"), std::move(before), rig.spots));
-            ++d.projectVersion;
-        }
-        ImGui::Dummy(ImVec2(w, Dp(4.0f)));
-        float pos[3] = {spot->position.x, spot->position.y, spot->position.z};
-        float aim[3] = {spot->aim.x, spot->aim.y, spot->aim.z};
-        float col[3] = {spot->color.x, spot->color.y, spot->color.z};
-        float inten = spot->intensity, cone = DirectX::XMConvertToDegrees(spot->coneOuter);
-        const auto row3 = [&](const char* id, const char* label, float* v, float sp, float lo, float hi, const char* fmt) {
-            const ImVec2 c = ImGui::GetCursorScreenPos();
-            Text(cdl, Font::Regular, size::Small, ImVec2(c.x, c.y + Dp(5.0f)), p.ink3, label);
-            ImGui::SetCursorScreenPos(ImVec2(c.x + Dp(64.0f), c.y));
-            ImGui::SetNextItemWidth(w - Dp(64.0f));
-            PushFont(Font::Regular, size::Small);
-            const bool changed = ImGui::DragFloat3(id, v, sp, lo, hi, fmt);
-            PopFont();
-            if (ImGui::IsItemActivated()) StudioBeginRigEdit();
-            ImGui::Dummy(ImVec2(w, Dp(4.0f)));
-            return changed;
-        };
-        if (row3("##spotpos", Tr("위치"), pos, 0.1f, 0.0f, 0.0f, "%.1f")) spot->position = {pos[0], pos[1], pos[2]};
-        if (row3("##spotaim", Tr("조준점"), aim, 0.1f, 0.0f, 0.0f, "%.1f")) spot->aim = {aim[0], aim[1], aim[2]};
-        if (row3("##spotcol", Tr("색"), col, 0.005f, 0.0f, 1.0f, "%.3f")) spot->color = {col[0], col[1], col[2]};
-        {
-            const ImVec2 c = ImGui::GetCursorScreenPos();
-            Text(cdl, Font::Regular, size::Small, ImVec2(c.x, c.y + Dp(3.0f)), p.ink3, Tr("색 선택"));
-            ImGui::SetCursorScreenPos(ImVec2(c.x + Dp(64.0f), c.y));
-            if (ImGui::ColorEdit3("##spotpick", col, ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_NoLabel)) {
-                StudioBeginRigEdit();
-                spot->color = {col[0], col[1], col[2]};
-            }
-            ImGui::Dummy(ImVec2(w, Dp(2.0f)));
-            if (SliderRow("##spotint", Tr("강도"), &inten, 0.0f, 8.0f, "%.2f")) {
-                StudioBeginRigEdit();
-                spot->intensity = inten;
-            }
-            if (ImGui::IsItemActivated()) StudioBeginRigEdit();
-            if (ImGui::IsItemDeactivated()) StudioEndRigEdit(Tr("스팟 편집"));
-            if (SliderRow("##spotcone", Tr("원뿔 각도"), &cone, 2.0f, 80.0f, "%.0f")) {
-                StudioBeginRigEdit();
-                spot->coneOuter = DirectX::XMConvertToRadians(cone);
-                spot->coneInner = spot->coneOuter * 0.6f;
-            }
-            if (ImGui::IsItemActivated()) StudioBeginRigEdit();
-            if (ImGui::IsItemDeactivated()) StudioEndRigEdit(Tr("스팟 편집"));
-            ImGui::Dummy(ImVec2(w, Dp(4.0f)));
-        }
-        // key the spot's values at the playhead (auto-key follows d.autoKey)
-        const ImVec2 c = ImGui::GetCursorScreenPos();
-        const bool keyed = spot && FindKey(spot->keys, d.Frame()) != nullptr;
-        ImGui::SetCursorScreenPos(ImVec2(c.x + Dp(64.0f), c.y));
-        const float kw = (w - Dp(64.0f)) / Dpi();
-        ImGui::PushID("##spotkey");  // two widgets share the "##spotkey" id in different id scopes
-        if (Button("##spotkeyrow", Tr("현재 스팟 값을 키로 등록"), icon::Plus,
-                   keyed ? ButtonKind::Primary : ButtonKind::Secondary, ImVec2(kw, 30.0f)))
-            StudioInsertKeys({MakeRowId(RowKind::Spot, 0, (uint32_t)studioLightSpot_)}, d.Frame());
-        ImGui::PopID();
-        ImGui::SetCursorScreenPos(c);
-        std::snprintf(buf, sizeof(buf), Tr("키 %d개"), (int)spot->keys.size());
-        Text(cdl, Font::Regular, size::Caption, ImVec2(c.x, c.y + Dp(8.0f)), p.ink3, buf);
-        ImGui::Dummy(ImVec2(w, Dp(28.0f)));
-    }
-    // warm front fill
-    {
-        const bool was = rig.frontFill;
-        Switch("##frontfill", Tr("웜 프론트 필"), &rig.frontFill, Tr("얼굴이 어두워지지 않게 앞에서 따뜻한 빛을 더해요."));
-        if (rig.frontFill != was) ++d.projectVersion;
-    }
-    // an open rig drag that ended outside any widget (the spot disappeared, focus left the panel)
-    if (studioRigEdit_ && !ImGui::IsAnyItemActive()) StudioEndRigEdit(Tr("스팟 편집"));
 }
 
 bool App::DrawStudioCameraKeyFields(float w, RowKind kind, int frame, bool live) {

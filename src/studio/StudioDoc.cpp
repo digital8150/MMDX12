@@ -64,10 +64,11 @@ TrackState CaptureTrack(StudioDoc& doc, int model, RowKind kind, const std::stri
         else s.cameras = doc.camera.camera;
         return s;
     }
-    if (kind == RowKind::Spot) {
-        const SpotLight* spot = doc.lighting.Spot(name);
-        s.existed = spot != nullptr;
-        if (spot) s.spots = spot->keys;
+    if (kind == RowKind::SceneLight) {
+        s.uid = LightUidOfTrack(name);
+        const SceneLight* light = doc.FindLight(s.uid);
+        s.existed = light != nullptr;
+        if (light) s.lightKeys = light->keys;
         return s;
     }
     MotionData& m = doc.models[model]->motion;
@@ -91,10 +92,11 @@ void RestoreTrack(StudioDoc& doc, const TrackState& s) {
         doc.TouchModel(-1);
         return;
     }
-    if (s.kind == RowKind::Spot) {
-        SpotLight* spot = doc.lighting.Spot(s.name);
-        if (spot) spot->keys = s.spots;  // an emptied track keeps the spot (its values drive it again)
-        doc.rowsKey = ~0ull;
+    if (s.kind == RowKind::SceneLight) {
+        if (SceneLight* light = doc.FindLight(s.uid)) {
+            light->keys = s.lightKeys;  // an emptied track keeps the light (its base values drive it again)
+            doc.rowsKey = ~0ull;
+        }
         return;
     }
     if (s.model >= 0 && s.model < (int)doc.models.size()) {
@@ -108,7 +110,7 @@ void RestoreTrack(StudioDoc& doc, const TrackState& s) {
             else m.morphs[s.name] = s.morphs;
         }
     }
-    doc.TouchModel(s.model);  // spot rows returned above
+    doc.TouchModel(s.model);  // scene light rows returned above
 }
 
 } // namespace mmdx::studio

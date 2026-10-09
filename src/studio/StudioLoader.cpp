@@ -180,6 +180,8 @@ bool LoadStudioSong(const SongAsset& song, MotionData& dance, MotionData& camera
                 MotionData d = MotionData::FromVmd(cam);
                 camera.camera = std::move(d.camera);
                 camera.light = std::move(d.light);
+                // a light track that only repeats MMD's defaults says nothing (and would override the lighting)
+                if (IsDefaultLightTrack(camera.light)) camera.light.clear();
                 camera.shadow = std::move(d.shadow);
                 camera.modelName = d.modelName;
             } else {
@@ -264,6 +266,13 @@ bool LoadStudioProjectPackage(const std::filesystem::path& file, bool recovery, 
             out.editor.selectedModel = remap[out.editor.selectedModel];
         } else {
             out.editor.selectedModel = -1;
+        }
+
+        // spot targets: 1 + the project's model index -> 1 + the package's (a model that failed to load: the performer)
+        for (SceneLight& l : out.editor.lights) {
+            if (l.targetUid == 0) continue;
+            const size_t pi = l.targetUid - 1;
+            l.targetUid = pi < remap.size() && remap[pi] >= 0 ? (uint32_t)remap[pi] + 1 : 0;
         }
 
         LOG_INFO("studio: project %s: %d models, %d warnings", PathToUtf8(file).c_str(), (int)out.models.size(), (int)out.warnings.size());

@@ -130,16 +130,12 @@ void App::PumpUiScript() {
                     sel += " " + std::to_string(k.second);
                 }
                 LOG_INFO("STUDIOSTATE frame=%d model=%d boneKeys=%zu morphKeys=%zu cameraKeys=%zu "
-                         "lightKeys=%zu shadowKeys=%zu motionCam=%d lightTrack=%d shadowTrack=%d "
-                         "lightSource=%d lightingPreset=%d spots=%zu spotsKeys=%zu frontFill=%d keyOverride=%d "
+                         "lightKeys=%zu shadowKeys=%zu motionCam=%d shadowTrack=%d sceneLights=%zu "
                          "selected=%zu selection=[%s ] "
                          "rows=%zu range=%d..%d loop=%d playing=%d physics=%d undo='%s' redo='%s' undoCount=%zu undoMB=%.1f "
                          "scroll=%.1f zoom=%.2f hoveredWindow=%s activeId=%08x",
                          d.Frame(), d.selectedModel, bones, morphs, d.camera.camera.size(), d.camera.light.size(),
-                         d.camera.shadow.size(), (int)d.useMotionCamera, (int)d.useLightTrack, (int)d.useShadowTrack,
-                         (int)d.lighting.source, d.lighting.presetIndex, d.lighting.spots.size(),
-                         [&] { size_t n = 0; for (const auto& s : d.lighting.spots) n += s.keys.size(); return n; }(),
-                         (int)d.lighting.frontFill, (int)d.lighting.key.enabled,
+                         d.camera.shadow.size(), (int)d.useMotionCamera, (int)d.useShadowTrack, d.lights.size(),
                          d.selection.size(), sel.c_str(),
                          d.selectedRows.size(), d.view.rangeStart, d.view.rangeEnd, (int)d.loop, (int)d.playing,
                          (int)d.physics, d.history.UndoName().c_str(), d.history.RedoName().c_str(), d.history.Count(),
@@ -295,48 +291,6 @@ void App::PumpUiScript() {
             }
         } else if (s.cmd == "log") {
             LOG_INFO("UISCRIPT %s", s.args.empty() ? "" : s.args[0].c_str());
-        } else if (s.cmd == "studiolight") {  // studiolight <vmd|preset|custom> [presetIndex] [spots 0..4] [key 0|1]
-            if (studio_ && !s.args.empty()) {
-                studio::LightRig& rig = studio_->lighting;
-                if (s.args[0] == "vmd") rig.source = studio::LightSource::VmdTrack;
-                else if (s.args[0] == "preset") rig.source = studio::LightSource::Preset;
-                else if (s.args[0] == "custom") rig.source = studio::LightSource::Custom;
-                if (s.args.size() > 1) rig.presetIndex = std::clamp(std::atoi(s.args[1].c_str()), 0, 3);
-                if (s.args.size() > 2) {  // set the custom spot count (adds/removes)
-                    const int want = std::clamp(std::atoi(s.args[2].c_str()), 0, (int)studio::kMaxRigSpots);
-                    while ((int)rig.spots.size() < want) {
-                        if (!rig.AddSpot()) break;
-                        // a visible demo layout: coloured spots above the stage
-                        studio::SpotLight& nspot = rig.spots.back();
-                        const float side = (rig.spots.size() % 2 == 0) ? -1.0f : 1.0f;
-                        nspot.position = {side * (8.0f + 6.0f * (float)(rig.spots.size() / 2)), 40.0f, -12.0f};
-                        nspot.aim = {side * 6.0f, 0.0f, 0.0f};
-                        nspot.color = {(rig.spots.size() % 3 == 0) ? 0.22f : (rig.spots.size() % 3 == 1) ? 0.95f : 1.0f,
-                                       (rig.spots.size() % 3 == 0) ? 0.77f : (rig.spots.size() % 3 == 1) ? 0.35f : 0.95f,
-                                       (rig.spots.size() % 3 == 0) ? 0.73f : (rig.spots.size() % 3 == 1) ? 0.62f : 0.88f};
-                    }
-                    while ((int)rig.spots.size() > want) rig.spots.pop_back();
-                    rig.frontFill = want > 0;
-                }
-                if (s.args.size() > 3) {
-                    rig.key.enabled = std::atoi(s.args[3].c_str()) != 0;
-                    if (rig.key.enabled) {  // a visible demo override: warm key light
-                        rig.key.color = {1.0f, 0.85f, 0.7f};
-                        rig.key.intensity = 1.2f;
-                    }
-                }
-                studio_->useLightTrack = rig.source == studio::LightSource::VmdTrack;
-                ++studio_->projectVersion;
-            }
-        } else if (s.cmd == "studiokeyspot") {  // studiokeyspot <index> [frame]: key that spot's values (Undoable)
-            if (studio_) {
-                const int idx = std::atoi(s.args.empty() ? "-1" : s.args[0].c_str());
-                const int frame = s.args.size() > 1 ? std::atoi(s.args[1].c_str()) : studio_->Frame();
-                if (idx >= 0 && idx < (int)studio_->lighting.spots.size())
-                    StudioInsertKeys({studio::MakeRowId(studio::RowKind::Spot, 0, (uint32_t)idx)}, frame);
-                else
-                    LOG_WARN("ui script: spot %d not found", idx);
-            }
         } else if (s.cmd == "updatecheck") {  // synchronous update-feed check, logs UPDATECHECK
             UpdateCheckCommand();
         } else if (s.cmd == "updateinstall") {  // stage the feed's update; the app exits when staged

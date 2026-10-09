@@ -166,9 +166,13 @@ ProjectData App::StudioProjectData() const {
     e.frame = d.Frame();
     e.selectedModel = d.selectedModel;
     e.useMotionCamera = d.useMotionCamera;
-    e.useLightTrack = d.lighting.source == studio::LightSource::VmdTrack;
     e.useShadowTrack = d.useShadowTrack;
-    e.lighting = d.lighting;
+    e.lights = d.lights;
+    for (SceneLight& l : e.lights) {  // model uids do not survive a reload: spot targets are saved as 1 + the model's index
+        if (l.targetUid == 0) continue;
+        const int i = d.IndexOfUid(l.targetUid);
+        l.targetUid = i >= 0 ? (uint32_t)i + 1 : 0;
+    }
     e.showCameraPath = d.showCameraPath;
     e.loop = d.loop;
     e.physics = d.physics;

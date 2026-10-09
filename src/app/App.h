@@ -293,7 +293,9 @@ private:
     void StudioCamera(CameraParams& cam) const;      // the view the viewport shows (motion or free camera)
     void StudioEnter(std::unique_ptr<studio::StudioDoc> doc);  // common tail of every way into the studio
     void StudioUpdateModel(studio::StudioModel& m, uint64_t slot, float frame, float physicsDt, bool resetPhysics);
-    studio::LightKf StudioPresetLightKey(int frame) const;  // the lighting preset's key light as a light key (empty track)
+    // The sun's light as the viewport shows it at `frame` (fractional): the camera VMD's light track while the sun is
+    // linked to it, else the sun's own keyed values; black with the default direction without a sun.
+    studio::LightKf StudioSunLight(float frame) const;
     // --- camera / light / self-shadow (UiStudioCamera.cpp): inspector panel, key fields, camera path, render tracks
     bool StudioCameraPerspective(float frame) const;  // the camera key's perspective switch in effect at `frame`
     void StudioOrthoCamera(CameraPose& pose, CameraParams& camera) const;  // "perspective off" view (approximation)
@@ -302,10 +304,7 @@ private:
     // track leaves the view as it is (UiStudioCamera.cpp). Studio tracks, and in play mode the camera VMD's tracks.
     static void ApplyLightShadowTracks(const std::vector<studio::LightKf>& light,
                                        const std::vector<studio::ShadowKf>& shadow, float frame, FrameView& view);  // light / self-shadow tracks -> the frame's light and shadows
-    studio::LightKf StudioCurrentLight() const;      // the key light in effect now (track or preset)
-    void DrawStudioLightSourceSection(float w, bool compact);  // the source chips + preset / rig controls
-    void StudioBeginRigEdit();                      // light-rig fields: one undo step per drag (spot list snapshot)
-    void StudioEndRigEdit(const char* undoName);     // pushes the spot-list edit when the values changed
+    studio::LightKf StudioCurrentLight() const;      // the sun's light in effect at the playhead (StudioSunLight)
     void StudioKeyCameraFromView();                  // camera key at the current frame from the view being shown
     // The part of the viewport the 3D image fills: the whole rect, or its 16:9 fit when the motion camera is the view.
     void StudioRenderRect(float x0, float y0, float x1, float y1, float out[4]) const;
@@ -710,9 +709,6 @@ private:
     bool studioKeyChanged_ = false;                  // ... and its value changed (else no undo step)
     bool studioKeyLive_ = false;                     // ... through the playhead fields (independent of the key selection)
     std::vector<studio::TrackState> studioKeyBefore_;
-    int studioLightSpot_ = -1;                       // the light rig's selected spot (camera panel, Custom mode)
-    bool studioRigEdit_ = false;                     // a light-rig field is being dragged (one undo step per edit)
-    std::vector<studio::SpotLight> studioRigBefore_;
     std::vector<studio::CameraPathPoint> studioCamPath_;  // motion camera samples (per frame, strided when long)
     std::vector<DirectX::XMFLOAT3> studioCamKeys_;   // eye at each camera key
     uint64_t studioCamPathVersion_ = 0;
