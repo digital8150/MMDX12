@@ -908,3 +908,45 @@ objects (sun, point, spot, ambient) with keyframes; presets become objects; view
 ### Next
 - Decide D-a (point shadows in the real-time raster), D-b (area light) and D-c (sun shadow vs camera VMD self-shadow track); see the handoff.
 - Phase 4: renderer support for shadow type, softness, density, falloff and affect; point shadows per D-a; the sky glow when the sun is off.
+
+## 2026-10-09 (14) — studio scene lights phase 4a / 4b, quad-view DoF fix
+
+Request: carry the light properties into the renderer without changing any existing look (renderer, shader packs); point-light shadows in the
+real-time raster as well; DoF made the orthographic quad views blurry.
+
+### Done
+- Phase 4a (`6a6dd25`): shadow type / softness / density / colour, falloff (None = today's curve) and diffuse / specular switches in raster, RT,
+  path tracer, offline GI and the volumetrics; sun shadow type / softness / density / colour (the camera VMD self-shadow track still decides on / off
+  and distance); the sky glow follows the sun colour (none with no sun). `GpuLight` is 96 bytes.
+- Quad-view DoF (`fa8f863`): `dof.hlsl` gets the camera rect (`gP2`) like the composite pass; the orthographic views stay sharp, the autofocus looks at
+  the camera quadrant. Single view unchanged.
+- Phase 4b (`ea2dc2b`): point-light shadows. Raster: 6-face depth array per light (first 4 shadow-casting point lights, characters only, 1024 per face,
+  allocated lazily, DSV heap 16 -> 64). RT: character-masked ray queries (cone-jittered when Soft). Opt-in `PunctualLight::castPointShadow`, set only by
+  `BuildSceneLighting`, so play mode / lobby / benchmark lights are unchanged. The inspector note now states the 4-light limit.
+
+### Fixed in review (the workers' reports said PASS)
+- 4a: `gSunShadowParams` indices were off by one in offline_gi / rtreflect / volumetrics (default GI lost the sun shadow); GI Hard used a zero-width cone
+  (changed the default look; now keeps the sun disc); `SkyColor` divided by 0.6 (changed sunset / night glow); the worker had set the play-mode concert
+  fill to NoCast.
+- 4b: the worker's `studiorender` script command saved `renderPath` into mmdx12.ini (every later run silently ran RT) and had no effect anyway: the studio
+  viewport is always raster (`UiStudio.cpp` ~1503). Removed. Its "RT verified" captures were raster.
+
+### Verified (my own baseline-vs-new runs, not the workers' reports)
+- Baseline = git worktree `E:\repos\MMDX12_base` (`build_base`, built from the commit before the phase). Same command, `--autoplay --paused --seek 20`, a second
+  baseline run for the noise floor. Play raster, nimble_toon, RT play: noise level; offline GI (default and concert): bit-identical; studio concert raster:
+  small change (the fill light now casts a shadow); PT play: noise floor.
+- 4a features: offline GI sun NoCast / Soft / density 0.4 + red shadow differ as expected; raster sun NoCast removes the floor shadow.
+- 4b features: raster Hard / NoCast / Soft / density / red; RT checked through `--project --offline-video --offline-renderer rt` (ffmpeg frame extract):
+  Hard casts, NoCast does not. DoF quad view before / after: ortho views sharp after.
+- `studio_project_test` 133, `studio_light_test` 92, `studio_edit_test` 15, `studio_gizmo_test` 19, `studio_pose_test` 38, `shader_choice_test`; no `[E]` lines.
+
+### Not verified / open
+- The cap of 4 shadowed point lights is a budget I picked, not a decision: a studio does not need it. RT does not need maps at all (its cap is only the
+  slice index reused as a flag); raster should allocate by count. Lift it next session.
+- Concert fill light: Hard (PT / GI keep its shadow, raster now shows a faint one) or NoCast (raster look unchanged, PT / GI lose it)? Undecided.
+  Projects saved before 4a store the fill as NoCast; the renderer now honours that.
+- A 5th point light being unshadowed, and point-light property changes in the offline PT video, were not compared.
+- Falloff / diffuse / specular switches were not looked at by me (the worker's diff numbers only).
+
+### Next
+- Phase 4c: area light (data model, save format, UI, rendering); lift the point-shadow cap; decide the fill light; see the handoff.

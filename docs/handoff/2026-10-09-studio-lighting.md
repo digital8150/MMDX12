@@ -2,6 +2,26 @@
 
 새 세션은 이 문서부터 읽고 시작하세요. 상태, 결정, 남은 일을 한곳에 모았습니다.
 
+## 2026-10-09 후반 갱신 (4a, 4b 완료) — 새 세션은 여기부터 읽으세요
+
+- **상태**: 4a `6a6dd25`(속성 렌더링), DoF 4분할 수정 `fa8f863`, 4b `ea2dc2b`(점광원 그림자: 래스터 + RT) 완료 및 커밋. 남은 것은 4c(면광원)와 아래 열린 항목.
+- **결정 완료**: D-a 래스터 점광원 그림자 넣는다(완료). D-b 면광원 추가한다(4c, 남음). D-c 추천안(셀프 섀도 트랙은 켜짐/거리, 종류·부드러움·농도·색은 태양 인스펙터)으로 구현됨.
+- **열린 항목**
+  1. **점광원 그림자 상한 4개 제거**: 상한은 제가 임의로 둔 비용 예산이고 스튜디오에는 맞지 않아요(사용자 지적). RT는 맵이 필요 없으니 상한 불필요(지금은 슬라이스 인덱스를 플래그로 재사용해서 생긴 부산물). 래스터는 그림자 켠 점광원 수만큼 슬라이스를 늘려 할당하고(`kPointShadowLights`, `FillGpuLights`, `PointShadowCount`, `EnsurePointShadowMap`, DSV 힙 64), 해상도와 한도는 품질 설정으로 둔다. 오프라인 렌더는 한도 없이.
+  2. **콘서트 채움광**: Hard(PT/GI 룩 유지, 래스터에 옅은 그림자가 새로 생김, 현재) 대 NoCast(래스터 룩 유지, PT/GI에서 그림자 사라짐). 사용자 결정 필요. 4a 이전에 저장된 프로젝트의 채움광은 NoCast로 저장돼 있고 이제 렌더러가 그 값을 따른다.
+  3. **4c 면광원**: 모델(`SceneLight.h`), 저장 포맷(버전 2 확장), UI(`UiStudioLight.cpp`), 렌더링(PT/GI는 실제 면 샘플링, 실시간은 큰 반경의 소프트 그림자 근사).
+  4. 미확인: 점광원 5개일 때 5번째가 그림자 없이 비추는지, 오프라인 PT 비디오에서 점광원 속성 변화 비교, 감쇠/디퓨즈/스페큘러를 제가 눈으로 확인하지 않음.
+- **검증 방식 (사용자 지시, 중요)**: 판정은 워커 보고가 아니라 **제가 직접 돌린 기준 대비 비교**로 한다. 4a에서 워커의 PASS 뒤에 파라미터 인덱스 버그, GI Hard 룩 변경, SkyColor 변경이 숨어 있었고, 4b에서는 `studiorender`가 설정을 오염시켰다. 기존 렌더 룩과 셰이더 팩 룩을 오염시키면 안 된다(메모리 `feedback-no-look-contamination`).
+  - 기준 빌드: `git worktree` `E:\repos\MMDX12_base` (현재 `fa8f863`). 새 비교 전 `git -C E:\repos\MMDX12_base checkout --detach <기준 커밋>` 후 `build_base`를 다시 빌드한다. 설정(`mmdx12.ini`)이 두 빌드 사이에 다르면 비교가 무너지니 diff로 확인한다(`renderPath` 오염 사례).
+  - 재생 고정: `--autoplay --paused --seek 20` (`--autoplay` 단독은 실시간 시계라 비결정적). 같은 빌드를 두 번 돌려 노이즈 바닥을 먼저 잰다. 오프라인 GI는 결정적이라 비트 동일 비교가 된다.
+  - 스튜디오 뷰포트는 항상 래스터(`UiStudio.cpp` ~1503)이고 `--render`는 무시된다. RT/PT는 `--project p.mmdxproj --offline-video out.mp4 --offline-range 20 20.1 --offline-renderer rt|pt --offline-size 960 540` 후 ffmpeg(`-vf "select=eq(n\,1)" -frames:v 1`)로 프레임을 뽑아 비교한다. ffmpeg는 WinGet(Gyan.FFmpeg)에 있다.
+  - 플레이 모드의 `--lighting`은 효과가 없다. 점광원과 스폿은 스튜디오 `studiolightpreset 2` 또는 `studiolightadd`로 만든다.
+  - 비교용 캡처: `build_dev\captures_cmp`(4a), `captures_dof`, `captures_p4b`(4b). 이미지 비교는 PIL만 있다(numpy 없음).
+- **빌드 환경**: 이 셸에서 `build.cmd`가 `vswhere`와 `ninja`를 못 찾는다. PowerShell에서 PATH 앞에 `C:\Program Files (x86)\Microsoft Visual Studio\Installer`와 `C:\Users\admin\AppData\Roaming\Python\Python314\Scripts`를 붙인다. (CLAUDE.md는 miniconda3\Scripts라고 적혀 있어 실제와 다르다.)
+- **테스트** (`build_dev\bin\`): `studio_project_test` 133, `studio_light_test` 92, `studio_edit_test` 15, `studio_gizmo_test` 19, `studio_pose_test` 38, `shader_choice_test`. 모두 통과.
+- **워커 실행 기록**: 4a `20261009-132917`(세션 f06b9c5c-6b5a-4bd8-8e5e-8efd3e467d0a), 4b `20261009-141207`(세션 c69062af-a3be-4454-aae4-f884c5b2c0c7). 명세: `docs/handoff/specs/04a-renderer-light-properties.md`, `04b-point-light-shadows.md`.
+- 아래 "한눈에"와 "4단계 계획"은 3단계 종료 시점의 기록이라 위 갱신이 우선합니다.
+
 ## 한눈에
 
 - **상태**: 1단계, 2단계, 3단계 완료 및 커밋. 4단계(렌더러 반영)는 아직 시작 전이에요.
