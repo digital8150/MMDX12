@@ -6,10 +6,13 @@
 #include <sstream>
 
 #include "anim/ModelInstance.h"
+#include "app/Lighting.h"
 #include "core/Log.h"
 #include "core/TextUtil.h"
 #include "imgui.h"
 #include "imgui_internal.h"
+#include "studio/SceneLight.h"
+#include "studio/StudioDoc.h"
 
 namespace mmdx {
 
@@ -193,6 +196,28 @@ void App::PumpUiScript() {
                              mm.attach.rotationDeg.y, mm.attach.rotationDeg.z, mm.attach.scale, pos.x, pos.y, pos.z,
                              PathToUtf8(mm.path.filename()).c_str());
                 }
+                const LightAnchors anchors = StudioBuildLightAnchors();
+                const int lightFrame = d.Frame();
+                for (size_t i = 0; i < d.lights.size(); ++i) {
+                    const studio::SceneLight& l = d.lights[i];
+                    const studio::LightValues cur = studio::SampleLightValues(l, lightFrame);
+                    DirectX::XMFLOAT3 aim = cur.aim;
+                    if (l.kind == studio::LightKind::Spot) {
+                        aim = ResolveSpotAim(l, cur, d.time, anchors);
+                    }
+                    LOG_INFO("STUDIOLIGHT %zu uid=%u kind=%s name='%s' enabled=%d pos=(%.3f,%.3f,%.3f) "
+                             "aim=(%.3f,%.3f,%.3f) dir=(%.3f,%.3f,%.3f) col=(%.3f,%.3f,%.3f) "
+                             "intensity=%.3f range=%.1f coneOuter=%.4f (%.1f deg) coneInner=%.4f (%.1f deg) keys=%zu visible=%d",
+                             i, l.uid, studio::LightKindName(l.kind), l.name.c_str(), (int)l.enabled,
+                             cur.position.x, cur.position.y, cur.position.z,
+                             aim.x, aim.y, aim.z,
+                             cur.direction.x, cur.direction.y, cur.direction.z,
+                             cur.color.x, cur.color.y, cur.color.z,
+                             cur.intensity, cur.range,
+                             cur.coneOuter, DirectX::XMConvertToDegrees(cur.coneOuter),
+                             cur.coneInner, DirectX::XMConvertToDegrees(cur.coneInner),
+                             l.keys.size(), (int)l.viewportVisible);
+                }
             }
         } else if (s.cmd == "studiobone") {  // studiobone <name>: click the bone's joint in the viewport
             const studio::StudioModel* m = studio_ ? studio_->Selected() : nullptr;
@@ -218,6 +243,138 @@ void App::PumpUiScript() {
             } else {
                 const int steps = std::max(1, s.args.size() > 3 ? std::atoi(s.args[3].c_str()) : 8);
                 LOG_INFO("UISCRIPT gizmo %s at %.0f,%.0f", s.args[0].c_str(), pt.x, pt.y);
+                uiScriptMouse_[0] = pt.x;
+                uiScriptMouse_[1] = pt.y;
+                io.AddMousePosEvent(pt.x, pt.y);
+                schedule(now + 1, "down", {"l"});
+                for (int k = 1; k <= steps; ++k) {
+                    const float f = (float)k / steps;
+                    schedule(now + 1 + k, "move", {std::to_string(pt.x + num(1) * f), std::to_string(pt.y + num(2) * f)});
+                }
+                schedule(now + steps + 2, "up", {"l"});
+            }
+        } else if (s.cmd == "studiolightpreset") {  // studiolightpreset <0-3>
+            if (studio_ && !s.args.empty()) {
+                const int p = std::clamp(std::atoi(s.args[0].c_str()), 0, 3);
+                StudioApplyLightPreset(p);
+            }
+        } else if (s.cmd == "studiolightadd") {  // studiolightadd <sun|point|spot|ambient>
+            if (studio_ && !s.args.empty()) {
+                studio::LightKind kind = studio::LightKind::Point;
+                if (studio::ParseLightKind(ToLowerAscii(s.args[0]), kind)) {
+                    StudioAddLight(kind);
+                } else {
+                    LOG_WARN("ui script: unknown light kind '%s'", s.args[0].c_str());
+                }
+            }
+        } else if (s.cmd == "studiolightdel") {  // studiolightdel <index>
+            if (studio_ && !s.args.empty()) {
+                const int idx = std::atoi(s.args[0].c_str());
+                if (idx >= 0 && idx < (int)studio_->lights.size()) {
+                    StudioDeleteLight(studio_->lights[(size_t)idx].uid);
+                }
+            }
+        } else if (s.cmd == "studiolightsel") {  // studiolightsel <index>
+            if (studio_ && !s.args.empty()) {
+                const int idx = std::atoi(s.args[0].c_str());
+                if (idx >= 0 && idx < (int)studio_->lights.size()) {
+                    StudioSelectLight(studio_->lights[(size_t)idx].uid);
+                } else if (idx < 0) {
+                    StudioSelectLight(0);
+                }
+            }
+        } else if (s.cmd == "studiolightkey") {  // studiolightkey <index> [frame]
+            if (studio_ && !s.args.empty()) {
+                const int idx = std::atoi(s.args[0].c_str());
+                if (idx >= 0 && idx < (int)studio_->lights.size()) {
+                    const int frame = s.args.size() > 1 ? std::atoi(s.args[1].c_str()) : studio_->Frame();
+                    StudioInsertKeys({studio::MakeRowId(studio::RowKind::SceneLight, 0, studio_->lights[(size_t)idx].uid)}, frame);
+                }
+            }
+        } else if (s.cmd == "studiolightset") {  // studiolightset <index> <field> <args...>
+            if (studio_ && s.args.size() >= 3) {
+                const int idx = std::atoi(s.args[0].c_str());
+                if (idx >= 0 && idx < (int)studio_->lights.size()) {
+                    studio::SceneLight* light = &studio_->lights[(size_t)idx];
+                    const std::string f = ToLowerAscii(s.args[1]);
+                    const int frame = studio_->Frame();
+
+                    const bool isKeyable = (f == "pos" || f == "position" || f == "aim" || f == "dir" ||
+                                            f == "direction" || f == "col" || f == "color" || f == "intensity" ||
+                                            f == "range" || f == "coneouter" || f == "coneinner");
+
+                    if (isKeyable) {
+                        studio::LightKey* k = studio::FindKey(light->keys, frame);
+                        const bool willKey = (k != nullptr) || studio_->autoKey;
+                        StudioBeginLightEdit(light->uid, willKey);
+                        studio::LightValues& target = willKey ? (k ? k->v : [&]() -> studio::LightValues& {
+                            studio::LightValues val = studio::SampleLightValues(*light, frame);
+                            studio::UpsertKey(light->keys, studio::LightKey{frame, val});
+                            return studio::FindKey(light->keys, frame)->v;
+                        }()) : light->v;
+
+                        if (f == "pos" || f == "position") target.position = {num(2), num(3), num(4)};
+                        else if (f == "aim") target.aim = {num(2), num(3), num(4)};
+                        else if (f == "dir" || f == "direction") target.direction = {num(2), num(3), num(4)};
+                        else if (f == "col" || f == "color") target.color = {num(2), num(3), num(4)};
+                        else if (f == "intensity") target.intensity = num(2);
+                        else if (f == "range") target.range = num(2);
+                        else if (f == "coneouter") {
+                            float v = num(2);
+                            if (v > 1.6f) v = DirectX::XMConvertToRadians(v);
+                            target.coneOuter = v;
+                            if (target.coneInner > target.coneOuter) target.coneInner = target.coneOuter;
+                        } else if (f == "coneinner") {
+                            float v = num(2);
+                            if (v > 1.6f) v = DirectX::XMConvertToRadians(v);
+                            target.coneInner = v;
+                            if (target.coneInner > target.coneOuter) target.coneOuter = target.coneInner;
+                        }
+
+                        studioLightChanged_ = true;
+                        studio_->rowsKey = ~0ull;
+                        ++studio_->projectVersion;
+                        StudioEndLightEdit(light->uid);
+                    } else {
+                        StudioBeginLightEdit(light->uid, false);
+                        if (f == "name") light->name = s.args[2];
+                        else if (f == "enabled") light->enabled = (s.args[2] == "1" || s.args[2] == "true" || s.args[2] == "on");
+                        else if (f == "vmdlink") light->vmdLink = (s.args[2] == "1" || s.args[2] == "true" || s.args[2] == "on");
+                        else if (f == "rimstrength") light->rimStrength = num(2);
+                        else if (f == "rimcolor") light->rimColor = {num(2), num(3), num(4)};
+                        else if (f == "aimmode") studio::ParseAimMode(s.args[2], light->aimMode);
+                        else if (f == "target") {
+                            const int ti = std::atoi(s.args[2].c_str());
+                            light->targetUid = (ti >= 0 && ti < (int)studio_->models.size()) ? studio_->models[(size_t)ti]->uid : 0;
+                        }
+                        else if (f == "targetpart") studio::ParseTargetPart(s.args[2], light->targetPart);
+                        else if (f == "swayphase") light->swayPhase = num(2);
+                        else if (f == "skyzenith") light->skyZenith = {num(2), num(3), num(4)};
+                        else if (f == "skyhorizon") light->skyHorizon = {num(2), num(3), num(4)};
+                        else if (f == "groundcolor") light->groundColor = {num(2), num(3), num(4)};
+                        else if (f == "shadow") studio::ParseShadowType(s.args[2], light->shadow);
+                        else if (f == "shadowsoftness") light->shadowSoftness = num(2);
+                        else if (f == "shadowdensity") light->shadowDensity = num(2);
+                        else if (f == "shadowcolor") light->shadowColor = {num(2), num(3), num(4)};
+                        else if (f == "falloff") studio::ParseFalloffType(s.args[2], light->falloff);
+                        else if (f == "diffuse") light->affectDiffuse = (s.args[2] == "1" || s.args[2] == "true" || s.args[2] == "on");
+                        else if (f == "specular") light->affectSpecular = (s.args[2] == "1" || s.args[2] == "true" || s.args[2] == "on");
+                        else if (f == "visible" || f == "viewportvisible") light->viewportVisible = (s.args[2] == "1" || s.args[2] == "true" || s.args[2] == "on");
+
+                        studioLightChanged_ = true;
+                        studio_->rowsKey = ~0ull;
+                        ++studio_->projectVersion;
+                        StudioEndLightEdit(light->uid);
+                    }
+                }
+            }
+        } else if (s.cmd == "studiolightgizmo") {  // studiolightgizmo <part> <dx> <dy> [steps]
+            ImVec2 pt;
+            if (!studio_ || s.args.empty() || !StudioScriptLightGizmoPoint(s.args[0], pt)) {
+                LOG_WARN("ui script: light gizmo part '%s' not shown", s.args.empty() ? "" : s.args[0].c_str());
+            } else {
+                const int steps = std::max(1, s.args.size() > 3 ? std::atoi(s.args[3].c_str()) : 8);
+                LOG_INFO("UISCRIPT lightgizmo %s at %.0f,%.0f", s.args[0].c_str(), pt.x, pt.y);
                 uiScriptMouse_[0] = pt.x;
                 uiScriptMouse_[1] = pt.y;
                 io.AddMousePosEvent(pt.x, pt.y);

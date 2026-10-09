@@ -185,4 +185,37 @@ void DrawCameraPath(ImDrawList* dl, const ViewProj& vp, const CameraPathPoint* p
 // Index of the key (in `keys`) whose projected position is nearest to `mouse` within `radius` px, -1 if none.
 int PickCameraKey(const ViewProj& vp, const DirectX::XMFLOAT3* keys, int keyCount, ImVec2 mouse, float radius);
 
+// ---- mouse ray and plane solvers (cone angle, range) --------------------------------------------
+
+struct MouseRay {
+    DirectX::XMFLOAT3 origin{};
+    DirectX::XMFLOAT3 dir{0, 0, 1};  // unit direction
+};
+
+// Builds a world-space mouse ray from screen coordinate `mouse` (perspective or orthographic).
+// Returns false if projection parameters are degenerate.
+bool BuildMouseRay(const ViewProj& vp, ImVec2 mouse, MouseRay& outRay);
+
+// Intersects `ray` with a plane defined by `planePoint` and unit `planeNormal`.
+// `outHit` is the world intersection point; `outT` is the ray parameter (hit = origin + dir * t).
+// Returns false if the ray is nearly parallel (|dot| < 1e-6f) or behind the camera (t <= 0 in perspective).
+bool IntersectRayPlane(const MouseRay& ray, const DirectX::XMFLOAT3& planePoint,
+                       const DirectX::XMFLOAT3& planeNormal, DirectX::XMFLOAT3& outHit, float* outT = nullptr);
+
+// Given spot light position and aim point, intersects the mouse ray with the cross-section plane
+// at the aim distance (normal = spot axis, point = aim) and derives the outer cone half-angle in radians.
+// Clamped to [1 deg, 89 deg] in radians. Returns false if aim == pos or ray parallel/behind.
+bool SolveConeAngle(const ViewProj& vp, const DirectX::XMFLOAT3& pos, const DirectX::XMFLOAT3& aim,
+                    ImVec2 mouse, float& outOuterAngle);
+
+// Intersects the mouse ray with a plane passing through `pos` facing the viewing camera (normal = eye - pos,
+// or camera forward for ortho) and derives the distance from `pos` to the hit point (clamped to >= 0.1f).
+bool SolveRangeDistance(const ViewProj& vp, const DirectX::XMFLOAT3& pos, ImVec2 mouse, float& outDistance);
+
+// Derives range along a spot axis by intersecting the mouse ray with a plane containing the axis and facing
+// the camera (or facing the camera if axis is degenerate) and projecting (hit - pos) onto `axis` (clamped to >= 0.1f).
+bool SolveSpotRange(const ViewProj& vp, const DirectX::XMFLOAT3& pos, const DirectX::XMFLOAT3& axis,
+                    ImVec2 mouse, float& outRange);
+
 } // namespace mmdx::studio
+

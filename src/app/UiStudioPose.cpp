@@ -9,6 +9,7 @@
 
 #include "anim/ModelInstance.h"
 #include "app/Icons.h"
+#include "app/Lighting.h"
 #include "app/UiKit.h"
 #include "core/I18n.h"
 #include "core/Log.h"
@@ -410,7 +411,9 @@ void App::StudioViewportPose(float x0, float y0, float x1, float y1, bool hovere
             studioPlaceDragging_ = false;
             studioViewDrag_ = 0;
         }
+        // a light drag (studioViewDrag_ 8) belongs to StudioViewportLightHandles: no model is selected while a light is
         return;
+
     }
     const GizmoStyle gs = MakeGizmoStyle();
     const BoneOverlayStyle os = MakeOverlayStyle();
@@ -653,6 +656,446 @@ void App::StudioViewportCameraHandles(bool hovered) {
               studioViewDrag_ == 7 ? studioCamDrag_.part : GizmoPart::None);
 }
 
+void App::StudioViewportLightHandles(bool hovered) {
+    using namespace DirectX;
+    using namespace ui;
+    if (!studio_) return;
+    StudioDoc& d = *studio_;
+    ImGuiIO& io = ImGui::GetIO();
+    const ImVec2 mouse = io.MousePos;
+    const GizmoStyle gs = MakeGizmoStyle();
+    const Palette& p = P();
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+
+    if (d.playing) {
+        if (studioViewDrag_ == 8) {
+            StudioEndLightEdit(studioLightEditingUid_);
+            studioViewDrag_ = 0;
+        }
+        studioLightGizmoShown_ = false;
+        return;
+    }
+
+    const int frame = d.Frame();
+    const LightAnchors anchors = StudioBuildLightAnchors();
+    const XMFLOAT3 focus = anchors.focus;
+
+    // Draw icons for all lights with viewportVisible
+    uint32_t iconHoveredUid = 0;
+    for (const SceneLight& l : d.lights) {
+        if (!l.viewportVisible) continue;
+        const LightValues cur = SampleLightValues(l, frame);
+        XMFLOAT3 anchor = cur.position;
+        if (l.kind == LightKind::Sun) {
+            anchor = focus;
+        } else if (l.kind == LightKind::Ambient) {
+            continue;
+        }
+
+        ImVec2 screenPos;
+        if (!studioVp_.Project(anchor, screenPos)) continue;
+
+        const bool isSelected = (d.selectedModel < 0 && d.selectedLightUid == l.uid);
+        const float dIcon = std::hypot(mouse.x - screenPos.x, mouse.y - screenPos.y);
+        const bool iconHot = hovered && (dIcon <= Dp(12.0f)) && (studioViewDrag_ == 0 || studioViewDrag_ == 1);
+        if (iconHot && !iconHoveredUid) iconHoveredUid = l.uid;
+
+        const ImU32 bgCol = isSelected ? p.accentSoft : WithAlpha(p.surface, 0.90f);
+        const ImU32 borderCol = (isSelected || iconHot) ? p.accentInk : p.line;
+        const ImU32 glyphCol = (isSelected || iconHot) ? p.accentInk : p.ink2;
+        const float iconR = Dp(10.0f);
+        dl->AddCircleFilled(screenPos, iconR, bgCol);
+        dl->AddCircle(screenPos, iconR, borderCol, 0, 1.5f);
+        const char* glyph = icon::Lightbulb;
+        if (l.kind == LightKind::Sun) glyph = icon::Sun;
+        else if (l.kind == LightKind::Spot) glyph = icon::Aperture;
+        ui::Icon(dl, glyph, 12.0f, screenPos, glyphCol);
+    }
+
+    if (iconHoveredUid != 0 && studioViewDrag_ == 0) {
+        ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+        if (const SceneLight* hl = d.FindLight(iconHoveredUid)) ui::Tooltip(hl->name.c_str());
+    }
+
+    // Clicking a light icon selects that light
+    if (studioViewDrag_ == 1 && hovered && !io.KeyAlt && ImGui::IsMouseClicked(ImGuiMouseButton_Left) && iconHoveredUid != 0) {
+        StudioSelectLight(iconHoveredUid);
+        studioViewDrag_ = 4;
+        return;
+    }
+
+    SceneLight* light = (d.selectedModel < 0 && d.selectedLightUid != 0) ? d.FindLight(d.selectedLightUid) : nullptr;
+    if (!light || !light->viewportVisible || light->kind == LightKind::Ambient) {
+        studioLightGizmoShown_ = false;
+        if (studioViewDrag_ == 8) {
+            StudioEndLightEdit(studioLightEditingUid_);
+            studioViewDrag_ = 0;
+        }
+        return;
+    }
+
+    studioLightGizmoShown_ = true;
+    LightValues cur = SampleLightValues(*light, frame);
+
+    // Setup gizmo frames and handles for the selected light
+    if (light->kind == LightKind::Point) {
+        studioLightPosFrame_ = GizmoFrame{};
+        studioLightPosFrame_.center = cur.position;
+
+        // Camera-facing range circle
+        const float R = std::max(0.1f, cur.range);
+        const XMFLOAT3 camRight{studioVp_.view._11, studioVp_.view._21, studioVp_.view._31};
+        const XMFLOAT3 camUp{studioVp_.view._12, studioVp_.view._22, studioVp_.view._32};
+        const XMFLOAT3 rangeHandleWorld = {cur.position.x + camRight.x * R, cur.position.y + camRight.y * R, cur.position.z + camRight.z * R};
+        studioVp_.Project(rangeHandleWorld, studioLightRangeHandlePos_);
+
+        // Draw range circle
+        constexpr int kSamples = 36;
+        for (int k = 0; k < kSamples; ++k) {
+            const float a0 = 2.0f * 3.14159265f * (float)k / kSamples;
+            const float a1 = 2.0f * 3.14159265f * (float)(k + 1) / kSamples;
+            const XMFLOAT3 p0{cur.position.x + (camRight.x * std::cos(a0) + camUp.x * std::sin(a0)) * R,
+                              cur.position.y + (camRight.y * std::cos(a0) + camUp.y * std::sin(a0)) * R,
+                              cur.position.z + (camRight.z * std::cos(a0) + camUp.z * std::sin(a0)) * R};
+            const XMFLOAT3 p1{cur.position.x + (camRight.x * std::cos(a1) + camUp.x * std::sin(a1)) * R,
+                              cur.position.y + (camRight.y * std::cos(a1) + camUp.y * std::sin(a1)) * R,
+                              cur.position.z + (camRight.z * std::cos(a1) + camUp.z * std::sin(a1)) * R};
+            ImVec2 sa, sb;
+            if (ProjectSegment(studioVp_, p0, p1, sa, sb)) {
+                dl->AddLine(sa, sb, IM_COL32(20, 20, 20, 160), 3.0f);
+                dl->AddLine(sa, sb, IM_COL32(255, 215, 60, 180), 1.5f);
+            }
+        }
+
+        // Hit testing
+        if (studioViewDrag_ != 8) {
+            const float dRange = std::hypot(mouse.x - studioLightRangeHandlePos_.x, mouse.y - studioLightRangeHandlePos_.y);
+            studioLightRangeHot_ = hovered && (dRange <= Dp(8.0f));
+            studioLightHotGizmo_ = (hovered && !studioLightRangeHot_) ? GizmoHitTest(studioVp_, studioLightPosFrame_, GizmoMode::Translate, gs, mouse) : GizmoPart::None;
+        }
+
+        // Draw range handle dot
+        const bool rangeActive = (studioViewDrag_ == 8 && studioLightDragPart_ == LightDragPart::RangeHandle);
+        dl->AddCircleFilled(studioLightRangeHandlePos_, Dp(6.0f), IM_COL32(20, 20, 20, 220));
+        dl->AddCircleFilled(studioLightRangeHandlePos_, Dp(4.5f), (studioLightRangeHot_ || rangeActive) ? gs.hotColor : IM_COL32(255, 215, 60, 255));
+
+        // Draw position gizmo
+        DrawGizmo(dl, studioVp_, studioLightPosFrame_, GizmoMode::Translate, gs,
+                  studioViewDrag_ == 8 ? GizmoPart::None : studioLightHotGizmo_,
+                  (studioViewDrag_ == 8 && studioLightDragPart_ == LightDragPart::PosGizmo) ? studioLightGizmoDrag_.part : GizmoPart::None);
+
+        // Press start
+        if (studioViewDrag_ == 1 && hovered && !io.KeyAlt && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+            if (studioLightRangeHot_) {
+                studioLightDragPart_ = LightDragPart::RangeHandle;
+                studioLightValuesBase_ = cur;
+                const bool willKey = (FindKey(light->keys, frame) != nullptr) || d.autoKey;
+                StudioBeginLightEdit(light->uid, willKey);
+                studioViewDrag_ = 8;
+            } else if (studioLightHotGizmo_ != GizmoPart::None) {
+                studioLightGizmoDrag_ = BeginGizmoDrag(studioVp_, studioLightPosFrame_, GizmoMode::Translate, gs, studioLightHotGizmo_, mouse);
+                if (studioLightGizmoDrag_.part != GizmoPart::None) {
+                    studioLightDragPart_ = LightDragPart::PosGizmo;
+                    studioLightValuesBase_ = cur;
+                    const bool willKey = (FindKey(light->keys, frame) != nullptr) || d.autoKey;
+                    StudioBeginLightEdit(light->uid, willKey);
+                    studioViewDrag_ = 8;
+                }
+            }
+        }
+    } else if (light->kind == LightKind::Spot) {
+        studioLightResolvedAim_ = ResolveSpotAim(*light, cur, d.time, anchors);
+        const XMFLOAT3 P = cur.position;
+        const XMFLOAT3 A = studioLightResolvedAim_;
+
+        XMVECTOR axisV = XMVectorSubtract(XMLoadFloat3(&A), XMLoadFloat3(&P));
+        float aimDist = XMVectorGetX(XMVector3Length(axisV));
+        if (aimDist < 1e-4f) {
+            axisV = XMVectorSet(0, -1, 0, 0);
+            aimDist = 10.0f;
+        } else {
+            axisV = XMVectorScale(axisV, 1.0f / aimDist);
+        }
+        XMFLOAT3 axis;
+        XMStoreFloat3(&axis, axisV);
+
+        studioLightPosFrame_ = GizmoFrame{};
+        studioLightPosFrame_.center = P;
+        studioLightAimFrame_ = GizmoFrame{};
+        studioLightAimFrame_.center = A;
+
+        // Orthonormal basis for cone rim
+        XMVECTOR upV = std::fabs(axis.y) < 0.9f ? XMVectorSet(0, 1, 0, 0) : XMVectorSet(1, 0, 0, 0);
+        XMVECTOR uV = XMVector3Normalize(XMVector3Cross(axisV, upV));
+        XMVECTOR vV = XMVector3Normalize(XMVector3Cross(axisV, uV));
+        const float rimR = aimDist * std::tan(cur.coneOuter);
+
+        // Cone handle on rim
+        XMFLOAT3 coneHandleWorld;
+        XMStoreFloat3(&coneHandleWorld, XMVectorAdd(XMLoadFloat3(&A), XMVectorScale(uV, rimR)));
+        studioVp_.Project(coneHandleWorld, studioLightConeHandlePos_);
+
+        // Range handle along spot axis
+        XMFLOAT3 rangeHandleWorld;
+        XMStoreFloat3(&rangeHandleWorld, XMVectorAdd(XMLoadFloat3(&P), XMVectorScale(axisV, cur.range)));
+        studioVp_.Project(rangeHandleWorld, studioLightRangeHandlePos_);
+
+        // Visualisation: spot cone outline
+        constexpr int kRimSamples = 32;
+        for (int k = 0; k < kRimSamples; ++k) {
+            const float a0 = 2.0f * 3.14159265f * (float)k / kRimSamples;
+            const float a1 = 2.0f * 3.14159265f * (float)(k + 1) / kRimSamples;
+            XMFLOAT3 p0, p1;
+            XMStoreFloat3(&p0, XMVectorAdd(XMLoadFloat3(&A), XMVectorAdd(XMVectorScale(uV, rimR * std::cos(a0)), XMVectorScale(vV, rimR * std::sin(a0)))));
+            XMStoreFloat3(&p1, XMVectorAdd(XMLoadFloat3(&A), XMVectorAdd(XMVectorScale(uV, rimR * std::cos(a1)), XMVectorScale(vV, rimR * std::sin(a1)))));
+            ImVec2 sa, sb;
+            if (ProjectSegment(studioVp_, p0, p1, sa, sb)) {
+                dl->AddLine(sa, sb, IM_COL32(20, 20, 20, 160), 3.0f);
+                dl->AddLine(sa, sb, IM_COL32(255, 215, 60, 200), 1.5f);
+            }
+        }
+        // 4 cone generators from position to rim
+        for (int k = 0; k < 4; ++k) {
+            const float a = k * 3.14159265f * 0.5f;
+            XMFLOAT3 rimPt;
+            XMStoreFloat3(&rimPt, XMVectorAdd(XMLoadFloat3(&A), XMVectorAdd(XMVectorScale(uV, rimR * std::cos(a)), XMVectorScale(vV, rimR * std::sin(a)))));
+            ImVec2 sa, sb;
+            if (ProjectSegment(studioVp_, P, rimPt, sa, sb)) {
+                dl->AddLine(sa, sb, IM_COL32(20, 20, 20, 160), 3.0f);
+                dl->AddLine(sa, sb, IM_COL32(255, 215, 60, 160), 1.5f);
+            }
+        }
+
+        // Line along spot axis to range
+        {
+            ImVec2 sa, sb;
+            if (ProjectSegment(studioVp_, P, rangeHandleWorld, sa, sb)) {
+                dl->AddLine(sa, sb, IM_COL32(20, 20, 20, 140), 2.5f);
+                dl->AddLine(sa, sb, IM_COL32(255, 255, 255, 140), 1.0f);
+            }
+        }
+
+        // If Manual aim mode: line from P to A
+        if (light->aimMode == AimMode::Manual) {
+            ImVec2 sa, sb;
+            if (ProjectSegment(studioVp_, P, A, sa, sb)) {
+                dl->AddLine(sa, sb, IM_COL32(20, 20, 20, 180), 3.0f);
+                dl->AddLine(sa, sb, IM_COL32(100, 200, 255, 220), 1.5f);
+            }
+        }
+
+        // Hit testing
+        GizmoPart hotAim = GizmoPart::None;
+        if (studioViewDrag_ != 8) {
+            const float dCone = std::hypot(mouse.x - studioLightConeHandlePos_.x, mouse.y - studioLightConeHandlePos_.y);
+            const float dRange = std::hypot(mouse.x - studioLightRangeHandlePos_.x, mouse.y - studioLightRangeHandlePos_.y);
+            studioLightConeHot_ = hovered && (dCone <= Dp(8.0f));
+            studioLightRangeHot_ = hovered && !studioLightConeHot_ && (dRange <= Dp(8.0f));
+            hotAim = (hovered && !studioLightConeHot_ && !studioLightRangeHot_ && light->aimMode == AimMode::Manual)
+                         ? GizmoHitTest(studioVp_, studioLightAimFrame_, GizmoMode::Translate, gs, mouse)
+                         : GizmoPart::None;
+            studioLightHotGizmo_ = (hovered && !studioLightConeHot_ && !studioLightRangeHot_ && hotAim == GizmoPart::None)
+                                       ? GizmoHitTest(studioVp_, studioLightPosFrame_, GizmoMode::Translate, gs, mouse)
+                                       : GizmoPart::None;
+        }
+
+        // Draw handles
+        const bool coneActive = (studioViewDrag_ == 8 && studioLightDragPart_ == LightDragPart::ConeHandle);
+        dl->AddCircleFilled(studioLightConeHandlePos_, Dp(6.0f), IM_COL32(20, 20, 20, 220));
+        dl->AddCircleFilled(studioLightConeHandlePos_, Dp(4.5f), (studioLightConeHot_ || coneActive) ? gs.hotColor : IM_COL32(255, 215, 60, 255));
+
+        const bool rangeActive = (studioViewDrag_ == 8 && studioLightDragPart_ == LightDragPart::RangeHandle);
+        dl->AddCircleFilled(studioLightRangeHandlePos_, Dp(6.0f), IM_COL32(20, 20, 20, 220));
+        dl->AddCircleFilled(studioLightRangeHandlePos_, Dp(4.5f), (studioLightRangeHot_ || rangeActive) ? gs.hotColor : IM_COL32(255, 255, 255, 255));
+
+        // Draw position gizmo
+        DrawGizmo(dl, studioVp_, studioLightPosFrame_, GizmoMode::Translate, gs,
+                  studioViewDrag_ == 8 ? GizmoPart::None : studioLightHotGizmo_,
+                  (studioViewDrag_ == 8 && studioLightDragPart_ == LightDragPart::PosGizmo) ? studioLightGizmoDrag_.part : GizmoPart::None);
+
+        // Draw aim gizmo if Manual
+        if (light->aimMode == AimMode::Manual) {
+            DrawGizmo(dl, studioVp_, studioLightAimFrame_, GizmoMode::Translate, gs,
+                      studioViewDrag_ == 8 ? GizmoPart::None : hotAim,
+                      (studioViewDrag_ == 8 && studioLightDragPart_ == LightDragPart::AimGizmo) ? studioLightGizmoDrag_.part : GizmoPart::None);
+        }
+
+        // Press start
+        if (studioViewDrag_ == 1 && hovered && !io.KeyAlt && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+            if (studioLightConeHot_) {
+                studioLightDragPart_ = LightDragPart::ConeHandle;
+                studioLightValuesBase_ = cur;
+                const bool willKey = (FindKey(light->keys, frame) != nullptr) || d.autoKey;
+                StudioBeginLightEdit(light->uid, willKey);
+                studioViewDrag_ = 8;
+            } else if (studioLightRangeHot_) {
+                studioLightDragPart_ = LightDragPart::RangeHandle;
+                studioLightValuesBase_ = cur;
+                const bool willKey = (FindKey(light->keys, frame) != nullptr) || d.autoKey;
+                StudioBeginLightEdit(light->uid, willKey);
+                studioViewDrag_ = 8;
+            } else if (hotAim != GizmoPart::None) {
+                studioLightGizmoDrag_ = BeginGizmoDrag(studioVp_, studioLightAimFrame_, GizmoMode::Translate, gs, hotAim, mouse);
+                if (studioLightGizmoDrag_.part != GizmoPart::None) {
+                    studioLightDragPart_ = LightDragPart::AimGizmo;
+                    studioLightValuesBase_ = cur;
+                    const bool willKey = (FindKey(light->keys, frame) != nullptr) || d.autoKey;
+                    StudioBeginLightEdit(light->uid, willKey);
+                    studioViewDrag_ = 8;
+                }
+            } else if (studioLightHotGizmo_ != GizmoPart::None) {
+                studioLightGizmoDrag_ = BeginGizmoDrag(studioVp_, studioLightPosFrame_, GizmoMode::Translate, gs, studioLightHotGizmo_, mouse);
+                if (studioLightGizmoDrag_.part != GizmoPart::None) {
+                    studioLightDragPart_ = LightDragPart::PosGizmo;
+                    studioLightValuesBase_ = cur;
+                    const bool willKey = (FindKey(light->keys, frame) != nullptr) || d.autoKey;
+                    StudioBeginLightEdit(light->uid, willKey);
+                    studioViewDrag_ = 8;
+                }
+            }
+        }
+    } else if (light->kind == LightKind::Sun) {
+        studioLightSunFrame_ = GizmoFrame{};
+        studioLightSunFrame_.center = focus;
+        const bool readOnly = (light->vmdLink && !d.camera.light.empty());
+
+        // Direction arrow
+        XMVECTOR dirV = XMLoadFloat3(&cur.direction);
+        if (XMVectorGetX(XMVector3LengthSq(dirV)) < 1e-4f) dirV = XMVectorSet(0, -1, 0, 0);
+        else dirV = XMVector3Normalize(dirV);
+        XMFLOAT3 arrowTip;
+        XMStoreFloat3(&arrowTip, XMVectorAdd(XMLoadFloat3(&focus), XMVectorScale(dirV, 35.0f)));
+
+        ImVec2 sa, sb;
+        if (ProjectSegment(studioVp_, focus, arrowTip, sa, sb)) {
+            dl->AddLine(sa, sb, IM_COL32(20, 20, 20, 200), 4.5f);
+            dl->AddLine(sa, sb, IM_COL32(255, 215, 60, 255), 2.5f);
+            const ImVec2 sd(sb.x - sa.x, sb.y - sa.y);
+            const float len = std::hypot(sd.x, sd.y);
+            if (len > 4.0f) {
+                const ImVec2 u(sd.x / len, sd.y / len);
+                const ImVec2 n(-u.y, u.x);
+                const ImVec2 tip(sb.x + u.x * 10.0f, sb.y + u.y * 10.0f);
+                const ImVec2 left(sb.x - u.x * 6.0f + n.x * 6.0f, sb.y - u.y * 6.0f + n.y * 6.0f);
+                const ImVec2 right(sb.x - u.x * 6.0f - n.x * 6.0f, sb.y - u.y * 6.0f - n.y * 6.0f);
+                dl->AddTriangleFilled(tip, left, right, IM_COL32(255, 215, 60, 255));
+                dl->AddTriangle(tip, left, right, IM_COL32(20, 20, 20, 200), 1.5f);
+            }
+        }
+
+        // Rotate gizmo
+        if (studioViewDrag_ != 8) {
+            studioLightHotGizmo_ = (!readOnly && hovered) ? GizmoHitTest(studioVp_, studioLightSunFrame_, GizmoMode::Rotate, gs, mouse) : GizmoPart::None;
+        }
+
+        GizmoStyle sunGs = gs;
+        if (readOnly) {
+            sunGs.axisColor[0] = WithAlpha(sunGs.axisColor[0], 0.35f);
+            sunGs.axisColor[1] = WithAlpha(sunGs.axisColor[1], 0.35f);
+            sunGs.axisColor[2] = WithAlpha(sunGs.axisColor[2], 0.35f);
+        }
+        DrawGizmo(dl, studioVp_, studioLightSunFrame_, GizmoMode::Rotate, sunGs,
+                  studioViewDrag_ == 8 ? GizmoPart::None : studioLightHotGizmo_,
+                  (studioViewDrag_ == 8 && studioLightDragPart_ == LightDragPart::SunRotate) ? studioLightGizmoDrag_.part : GizmoPart::None);
+
+        if (!readOnly && studioViewDrag_ == 1 && hovered && !io.KeyAlt && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+            if (studioLightHotGizmo_ != GizmoPart::None) {
+                studioLightGizmoDrag_ = BeginGizmoDrag(studioVp_, studioLightSunFrame_, GizmoMode::Rotate, gs, studioLightHotGizmo_, mouse);
+                if (studioLightGizmoDrag_.part != GizmoPart::None) {
+                    studioLightDragPart_ = LightDragPart::SunRotate;
+                    studioLightValuesBase_ = cur;
+                    const bool willKey = (FindKey(light->keys, frame) != nullptr) || d.autoKey;
+                    StudioBeginLightEdit(light->uid, willKey);
+                    studioViewDrag_ = 8;
+                }
+            }
+        }
+    }
+
+    // Active Drag (studioViewDrag_ == 8)
+    if (studioViewDrag_ == 8) {
+        if (ImGui::IsKeyPressed(ImGuiKey_Escape, false)) {
+            // Cancel drag
+            if (studioLightIsKeyEdit_) {
+                for (const TrackState& s : studioLightKeyBefore_) RestoreTrack(d, s);
+            } else {
+                d.lights = studioLightBaseBefore_;
+            }
+            studioLightKeyBefore_.clear();
+            studioLightBaseBefore_.clear();
+            studioLightEdit_ = false;
+            studioLightChanged_ = false;
+            studioLightEditingUid_ = 0;
+            studioViewDrag_ = 4;
+            return;
+        }
+
+        LightValues val = studioLightValuesBase_;
+        if (studioLightDragPart_ == LightDragPart::PosGizmo) {
+            const XMFLOAT3 w = GizmoDragTranslation(studioLightGizmoDrag_, mouse);
+            val.position.x += w.x;
+            val.position.y += w.y;
+            val.position.z += w.z;
+        } else if (studioLightDragPart_ == LightDragPart::AimGizmo) {
+            const XMFLOAT3 w = GizmoDragTranslation(studioLightGizmoDrag_, mouse);
+            val.aim.x += w.x;
+            val.aim.y += w.y;
+            val.aim.z += w.z;
+        } else if (studioLightDragPart_ == LightDragPart::SunRotate) {
+            XMFLOAT3 axis;
+            const float angle = GizmoDragAngle(studioLightGizmoDrag_, mouse, &axis);
+            if (angle != 0.0f) {
+                const XMVECTOR dirV = XMLoadFloat3(&studioLightValuesBase_.direction);
+                const XMVECTOR axisV = XMVector3Normalize(XMLoadFloat3(&axis));
+                const XMVECTOR q = XMQuaternionRotationAxis(axisV, angle);
+                const XMVECTOR newDir = XMVector3Normalize(XMVector3Rotate(dirV, q));
+                XMStoreFloat3(&val.direction, newDir);
+            }
+        } else if (studioLightDragPart_ == LightDragPart::ConeHandle) {
+            float newAngle = 0.0f;
+            if (SolveConeAngle(studioVp_, val.position, studioLightResolvedAim_, mouse, newAngle)) {
+                val.coneOuter = newAngle;
+                if (val.coneInner > val.coneOuter) val.coneInner = val.coneOuter;
+            }
+        } else if (studioLightDragPart_ == LightDragPart::RangeHandle) {
+            if (light->kind == LightKind::Point) {
+                float newRange = 0.0f;
+                if (SolveRangeDistance(studioVp_, val.position, mouse, newRange)) {
+                    val.range = newRange;
+                }
+            } else if (light->kind == LightKind::Spot) {
+                float newRange = 0.0f;
+                XMVECTOR axisV = XMVectorSubtract(XMLoadFloat3(&studioLightResolvedAim_), XMLoadFloat3(&val.position));
+                if (XMVectorGetX(XMVector3LengthSq(axisV)) > 1e-4f) {
+                    axisV = XMVector3Normalize(axisV);
+                    XMFLOAT3 axis;
+                    XMStoreFloat3(&axis, axisV);
+                    if (SolveSpotRange(studioVp_, val.position, axis, mouse, newRange)) {
+                        val.range = newRange;
+                    }
+                }
+            }
+        }
+
+        // Apply updated values
+        if (studioLightIsKeyEdit_) {
+            LightKey* curKey = FindKey(light->keys, frame);
+            if (curKey) curKey->v = val;
+            else UpsertKey(light->keys, LightKey{frame, val});
+        } else {
+            light->v = val;
+        }
+        studioLightChanged_ = true;
+        d.rowsKey = ~0ull;
+
+        if (!ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
+            StudioEndLightEdit(light->uid);
+            studioViewDrag_ = 0;
+        }
+    }
+}
+
+
 // Bones and the gizmo of the current selection in a view that has no interaction this frame (quad view).
 void App::StudioDrawPoseOverlay(const ViewProj& vp, float x0, float y0, float x1, float y1) {
     StudioDoc& d = *studio_;
@@ -691,6 +1134,102 @@ bool App::StudioScriptGizmoPoint(int part, ImVec2& out) const {
     if ((int)GizmoHitTest(studioVp_, studioGizmoFrame_, studioGizmoMode_, gs, in) == part) out = in;
     return true;
 }
+
+bool App::StudioScriptLightGizmoPoint(const std::string& part, ImVec2& out) const {
+    if (!studio_) return false;
+    const StudioDoc& d = *studio_;
+    const SceneLight* light = d.FindLight(d.selectedLightUid);
+    if (!light || !light->viewportVisible) return false;
+
+    const GizmoStyle gs = MakeGizmoStyle();
+    const std::string p = ToLowerAscii(part);
+
+    if (p == "cone" || p == "coneouter") {
+        if (light->kind != LightKind::Spot) return false;
+        out = studioLightConeHandlePos_;
+        return true;
+    }
+    if (p == "range") {
+        if (light->kind != LightKind::Point && light->kind != LightKind::Spot) return false;
+        out = studioLightRangeHandlePos_;
+        return true;
+    }
+
+    // Aim gizmo parts: "aim", "aim_x", "aim_y", "aim_z", "aim_yz", "aim_zx", "aim_xy"
+    if (p.rfind("aim", 0) == 0) {
+        if (light->kind != LightKind::Spot || light->aimMode != AimMode::Manual) return false;
+        std::string sub = p.size() > 4 ? p.substr(4) : (p == "aim" ? "x" : p.substr(3));
+        if (sub.empty() || sub == "_") sub = "x";
+        static const char* const kParts[] = {"", "x", "y", "z", "yz", "zx", "xy"};
+        int partIdx = 1;
+        for (int i = 1; i <= 6; ++i) if (sub == kParts[i]) partIdx = i;
+
+        ImVec2 c;
+        if (!studioVp_.Project(studioLightAimFrame_.center, c)) return false;
+        float best = -1.0f;
+        const float r = gs.ringRadius + gs.arrowLength;
+        for (float y = -r; y <= r; y += 2.0f) {
+            for (float x = -r; x <= r; x += 2.0f) {
+                const ImVec2 q(c.x + x, c.y + y);
+                if ((int)GizmoHitTest(studioVp_, studioLightAimFrame_, GizmoMode::Translate, gs, q) != partIdx) continue;
+                const float dist = x * x + y * y;
+                if (dist > best) { best = dist; out = q; }
+            }
+        }
+        if (best >= 0.0f) {
+            const ImVec2 in(c.x + (out.x - c.x) * 0.92f, c.y + (out.y - c.y) * 0.92f);
+            if ((int)GizmoHitTest(studioVp_, studioLightAimFrame_, GizmoMode::Translate, gs, in) == partIdx) out = in;
+            return true;
+        }
+        return false;
+    }
+
+    // Sun rotate rings: "rx", "ry", "rz"
+    if (p == "rx" || p == "ry" || p == "rz") {
+        if (light->kind != LightKind::Sun) return false;
+        int ringIdx = (p == "rx") ? 7 : (p == "ry") ? 8 : 9;
+        ImVec2 c;
+        if (!studioVp_.Project(studioLightSunFrame_.center, c)) return false;
+        float best = -1.0f;
+        const float r = gs.ringRadius + 20.0f;
+        for (float y = -r; y <= r; y += 2.0f) {
+            for (float x = -r; x <= r; x += 2.0f) {
+                const ImVec2 q(c.x + x, c.y + y);
+                if ((int)GizmoHitTest(studioVp_, studioLightSunFrame_, GizmoMode::Rotate, gs, q) != ringIdx) continue;
+                const float dist = x * x + y * y;
+                if (dist > best) { best = dist; out = q; }
+            }
+        }
+        if (best >= 0.0f) return true;
+        return false;
+    }
+
+    // Position gizmo parts: "x", "y", "z", "yz", "zx", "xy"
+    static const char* const kParts[] = {"", "x", "y", "z", "yz", "zx", "xy"};
+    int partIdx = 0;
+    for (int i = 1; i <= 6; ++i) if (p == kParts[i]) partIdx = i;
+    if (partIdx > 0) {
+        ImVec2 c;
+        if (!studioVp_.Project(studioLightPosFrame_.center, c)) return false;
+        float best = -1.0f;
+        const float r = gs.ringRadius + gs.arrowLength;
+        for (float y = -r; y <= r; y += 2.0f) {
+            for (float x = -r; x <= r; x += 2.0f) {
+                const ImVec2 q(c.x + x, c.y + y);
+                if ((int)GizmoHitTest(studioVp_, studioLightPosFrame_, GizmoMode::Translate, gs, q) != partIdx) continue;
+                const float dist = x * x + y * y;
+                if (dist > best) { best = dist; out = q; }
+            }
+        }
+        if (best >= 0.0f) {
+            const ImVec2 in(c.x + (out.x - c.x) * 0.92f, c.y + (out.y - c.y) * 0.92f);
+            if ((int)GizmoHitTest(studioVp_, studioLightPosFrame_, GizmoMode::Translate, gs, in) == partIdx) out = in;
+            return true;
+        }
+    }
+    return false;
+}
+
 
 // ---------------------------------------------------------------------------
 // Inspector tabs

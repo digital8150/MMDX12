@@ -511,6 +511,38 @@ void App::StudioCamera(CameraParams& camera) const {
     }
 }
 
+LightAnchors App::StudioBuildLightAnchors() const {
+    LightAnchors anchors;
+    if (!studio_) return anchors;
+    const StudioDoc& d = *studio_;
+    const auto anchorsOf = [](const StudioModel& m, DirectX::XMFLOAT3& focus, DirectX::XMFLOAT3& head) {
+        if (!m.pmx || !m.inst) return;
+        const int center = m.pmx->FindBone(kCenterBone);
+        if (center >= 0) focus = m.inst->BoneWorldPosition(center);
+        const int hb = m.pmx->FindBone(kHeadBone);
+        head = focus;
+        if (hb >= 0) head = m.inst->BoneWorldPosition(hb);
+        else head.y += 8.0f;
+    };
+    const StudioModel* performer = nullptr;
+    for (const auto& m : d.models) {
+        if (m->visible && m->kind == ModelKind::Character) {
+            performer = m.get();
+            break;
+        }
+    }
+    if (performer) anchorsOf(*performer, anchors.focus, anchors.head);
+    for (const auto& m : d.models) {
+        if (m->kind != ModelKind::Character) continue;
+        LightAnchors::Character c;
+        c.uid = m->uid;
+        c.centre = {0, 10, 0};
+        anchorsOf(*m, c.centre, c.head);
+        anchors.characters.push_back(c);
+    }
+    return anchors;
+}
+
 void App::BuildStudioFrameView(FrameView& view) {
     StudioDoc& d = *studio_;
     StudioCamera(view.camera);
@@ -528,27 +560,10 @@ void App::BuildStudioFrameView(FrameView& view) {
     }
     view.studioFloor = !anyStage;
 
-    // where the spots that aim at a character look: its centre bone and head (the performer: the first visible character)
-    const auto anchorsOf = [](const StudioModel& m, DirectX::XMFLOAT3& focus, DirectX::XMFLOAT3& head) {
-        const int center = m.pmx->FindBone(kCenterBone);
-        if (center >= 0) focus = m.inst->BoneWorldPosition(center);
-        const int hb = m.pmx->FindBone(kHeadBone);
-        head = focus;
-        if (hb >= 0) head = m.inst->BoneWorldPosition(hb);
-        else head.y += 8.0f;
-    };
-    LightAnchors anchors;
-    if (performer) anchorsOf(*performer, anchors.focus, anchors.head);
-    for (const auto& m : d.models) {
-        if (m->kind != ModelKind::Character) continue;
-        LightAnchors::Character c;
-        c.uid = m->uid;
-        c.centre = {0, 10, 0};
-        anchorsOf(*m, c.centre, c.head);
-        anchors.characters.push_back(c);
-    }
+    LightAnchors anchors = StudioBuildLightAnchors();
     BuildSceneLighting(d.lights, d.camera.light, d.time, anchors, view.light);
     StudioApplyLightTracks(view);
+
     if (performer) {
         DirectX::XMFLOAT3 target = anchors.head;
         const float z = DirectX::XMVectorGetZ(DirectX::XMVector3TransformCoord(
@@ -2337,6 +2352,7 @@ void App::DrawStudioViewport(float x0, float y0, float x1, float y1) {
         if (studioViewDrag_ == 1 && hovered && !io.KeyAlt && ImGui::IsMouseClicked(ImGuiMouseButton_Left) && StudioPickCameraKey(io.MousePos))
             studioViewDrag_ = 4;
     }
+    StudioViewportLightHandles(hovered || active);
     {
         // the camera path / frustum in the perspective view, the frame guides when there is one view
         const ViewProj saved = studioVp_;
@@ -2345,12 +2361,15 @@ void App::DrawStudioViewport(float x0, float y0, float x1, float y1) {
         studioVp_ = saved;
     }
     if (!quad) DrawStudioFrameMask(x0, y0, x1, y1);
-    if (active &&(std::fabs(io.MousePos.x - studioPressPos_.x) > Dp(3.0f) || std::fabs(io.MousePos.y - studioPressPos_.y) > Dp(3.0f)))
+    if (active && (std::fabs(io.MousePos.x - studioPressPos_.x) > Dp(3.0f) || std::fabs(io.MousePos.y - studioPressPos_.y) > Dp(3.0f)))
         studioPressMoved_ = true;
     if (deactivated) {
         // a click (no drag) on empty space clears the bone selection
         if (studioViewDrag_ == 1 && !studioPressMoved_ && io.MouseReleased[0] && StudioPoseModel() && !d.selectedBones.empty())
             StudioSelectBone(-1, false);
+        if (studioViewDrag_ == 8) {
+            StudioEndLightEdit(studioLightEditingUid_);
+        }
         studioViewDrag_ = 0;
     }
 

@@ -41,4 +41,9 @@ struct LightAnchors {
 void BuildSceneLighting(const std::vector<studio::SceneLight>& lights, const std::vector<studio::LightKf>& cameraLight,
                         double songSeconds, const LightAnchors& anchors, LightParams& out);
 
+// Resolves the aim target of a spot light (manual aim, character target, sway) in world space.
+DirectX::XMFLOAT3 ResolveSpotAim(const studio::SceneLight& light, const studio::LightValues& v,
+                                 double songSeconds, const LightAnchors& anchors);
+
 } // namespace mmdx
+

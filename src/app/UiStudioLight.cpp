@@ -115,6 +115,32 @@ void App::StudioAddLight(LightKind kind) {
     d.rowsKey = ~0ull;
 }
 
+void App::StudioDeleteLight(uint32_t uid) {
+    if (!studio_) return;
+    StudioDoc& d = *studio_;
+    std::vector<SceneLight> before = d.lights;
+    std::vector<SceneLight> after = before;
+    std::erase_if(after, [uid](const SceneLight& l) { return l.uid == uid; });
+    d.history.Push(std::make_unique<LightsCommand>(d, Tr("조명 삭제"), before, after));
+    if (d.selectedLightUid == uid) d.selectedLightUid = 0;
+    ++d.projectVersion;
+    d.rowsKey = ~0ull;
+}
+
+void App::StudioApplyLightPreset(int presetIndex) {
+    if (!studio_) return;
+    StudioDoc& d = *studio_;
+    const int idx = std::clamp(presetIndex, 0, 3);
+    const DirectX::XMFLOAT3 focus = StudioPerformerFocus(d);
+    std::vector<SceneLight> before = d.lights;
+    std::vector<SceneLight> after = PresetLights(idx, focus, d.nextLightUid);
+    d.history.Push(std::make_unique<LightsCommand>(d, Tr("프리셋 적용"), before, after));
+    d.selectedLightUid = 0;
+    ++d.projectVersion;
+    d.rowsKey = ~0ull;
+}
+
+
 // ---------------------------------------------------------------------------
 // Outliner
 // ---------------------------------------------------------------------------
@@ -299,13 +325,7 @@ void App::DrawStudioLightPresetConfirm() {
         ImGui::SameLine(0, Dp(12.0f));
         if (Button("##presetok", Tr("적용"), nullptr, ButtonKind::Primary, ImVec2(180.0f, 40.0f)) ||
             ImGui::IsKeyPressed(ImGuiKey_Enter, false) || ImGui::IsKeyPressed(ImGuiKey_KeypadEnter, false)) {
-            const DirectX::XMFLOAT3 focus = StudioPerformerFocus(d);
-            std::vector<SceneLight> before = d.lights;
-            std::vector<SceneLight> after = PresetLights(studioLightPresetPending_, focus, d.nextLightUid);
-            d.history.Push(std::make_unique<LightsCommand>(d, Tr("프리셋 적용"), before, after));
-            d.selectedLightUid = 0;
-            ++d.projectVersion;
-            d.rowsKey = ~0ull;
+            StudioApplyLightPreset(studioLightPresetPending_);
             close = true;
         }
         if (close) {
@@ -488,15 +508,10 @@ void App::DrawStudioLightInspector(float w) {
 
     // Delete button (undoable)
     if (Button("##deletelight", Tr("조명 삭제"), icon::Trash, ButtonKind::Danger, ImVec2(w / Dpi(), btnH))) {
-        std::vector<SceneLight> before = d.lights;
-        std::vector<SceneLight> after = before;
-        std::erase_if(after, [uid = light->uid](const SceneLight& l) { return l.uid == uid; });
-        d.history.Push(std::make_unique<LightsCommand>(d, Tr("조명 삭제"), before, after));
-        d.selectedLightUid = 0;
-        ++d.projectVersion;
-        d.rowsKey = ~0ull;
+        StudioDeleteLight(light->uid);
         return;
     }
+
 
     separator(6.0f);
 

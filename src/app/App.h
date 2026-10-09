@@ -3,6 +3,7 @@
 #include "anim/ModelInstance.h"
 #include "anim/Motion.h"
 #include "app/Benchmark.h"
+#include "app/Lighting.h"
 #include "app/RenderBench.h"
 #include "app/LeaderboardClient.h"
 #include "app/SceneLoader.h"
@@ -346,11 +347,17 @@ private:
     // --- scene light editing (UiStudioLight.cpp)
     void StudioSelectLight(uint32_t uid);
     void StudioAddLight(studio::LightKind kind);
+    void StudioDeleteLight(uint32_t uid);
+    void StudioApplyLightPreset(int presetIndex);
+    void StudioViewportLightHandles(bool hovered);
+    bool StudioScriptLightGizmoPoint(const std::string& part, ImVec2& out) const;
+    LightAnchors StudioBuildLightAnchors() const;
     void DrawStudioLightOutliner();
     void DrawStudioLightInspector(float w);
     void DrawStudioLightPresetConfirm();
     void StudioBeginLightEdit(uint32_t uid, bool keyEdit);
     void StudioEndLightEdit(uint32_t uid);
+
     void StudioUpdateCameraPath();                   // samples the motion camera (cached per cameraVersion)
     void DrawStudioCameraPath(float x0, float y0, float x1, float y1);
     bool StudioPickCameraKey(ImVec2 mouse);          // click on a key dot of the path: select it and seek
@@ -729,6 +736,22 @@ private:
     uint32_t studioLightEditingUid_ = 0;
     std::vector<studio::TrackState> studioLightKeyBefore_;
     std::vector<studio::SceneLight> studioLightBaseBefore_;
+
+    enum class LightDragPart { None = 0, PosGizmo, AimGizmo, SunRotate, ConeHandle, RangeHandle };
+    LightDragPart studioLightDragPart_ = LightDragPart::None;
+    studio::GizmoFrame studioLightPosFrame_;
+    studio::GizmoFrame studioLightAimFrame_;
+    studio::GizmoFrame studioLightSunFrame_;
+    studio::GizmoPart studioLightHotGizmo_ = studio::GizmoPart::None;
+    studio::GizmoDrag studioLightGizmoDrag_;
+    studio::LightValues studioLightValuesBase_{};
+    DirectX::XMFLOAT3 studioLightResolvedAim_{};
+    ImVec2 studioLightConeHandlePos_{};
+    ImVec2 studioLightRangeHandlePos_{};
+    bool studioLightConeHot_ = false;
+    bool studioLightRangeHot_ = false;
+    bool studioLightGizmoShown_ = false;
+
 
     // benchmark
     int benchCategory_ = 0;       // index into kBenchCategories

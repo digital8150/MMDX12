@@ -436,6 +436,90 @@ int main() {
         ImGui::DestroyContext();
     }
 
+    // ---- 14. BuildMouseRay (perspective and ortho) ----
+    {
+        const ViewProj vpPersp = MakeViewProj(TestView({0, 10, -50}, {0, 10, 0}), {0, 10, -50}, kFovY,
+                                              0.5f, 3000.0f, 100.0f, 50.0f, 800.0f, 600.0f);
+        ImVec2 targetScreen;
+        vpPersp.Project({0, 10, 0}, targetScreen);
+        MouseRay rPersp;
+        bool okP = BuildMouseRay(vpPersp, targetScreen, rPersp);
+        // The ray from {0, 10, -50} towards target {0, 10, 0} should have direction {0, 0, 1}
+        bool dirOkP = okP && std::fabs(rPersp.dir.x) < 1e-4f && std::fabs(rPersp.dir.y) < 1e-4f &&
+                      std::fabs(rPersp.dir.z - 1.0f) < 1e-4f;
+
+        // Ortho view
+        DirectX::XMFLOAT4X4 oView;
+        DirectX::XMFLOAT3 oEye;
+        OrthoViewMatrix(1, {0, 10, 0}, &oView, &oEye);
+        const ViewProj vpOrtho = MakeOrthoViewProj(oView, oEye, 30.0f, 0.5f, 3000.0f, 0.0f, 0.0f, 800.0f, 600.0f);
+        ImVec2 oScreen;
+        vpOrtho.Project({0, 10, 0}, oScreen);
+        MouseRay rOrtho;
+        bool okO = BuildMouseRay(vpOrtho, oScreen, rOrtho);
+        ImVec2 reproj;
+        bool reprojOk = okO && vpOrtho.Project(Store(XMVectorAdd(Load(rOrtho.origin), XMVectorScale(Load(rOrtho.dir), 50.0f))), reproj);
+        bool matchO = reprojOk && std::fabs(reproj.x - oScreen.x) < 0.1f && std::fabs(reproj.y - oScreen.y) < 0.1f;
+
+        Check(dirOkP && matchO, "BuildMouseRay (perspective & ortho)");
+    }
+
+    // ---- 15. IntersectRayPlane ----
+    {
+        MouseRay ray{{0, 10, -50}, {0, 0, 1}};
+        XMFLOAT3 hit;
+        float t = 0.0f;
+        bool ok = IntersectRayPlane(ray, {0, 10, 0}, {0, 0, -1}, hit, &t);
+        bool valOk = ok && std::fabs(hit.x) < 1e-4f && std::fabs(hit.y - 10.0f) < 1e-4f &&
+                     std::fabs(hit.z) < 1e-4f && std::fabs(t - 50.0f) < 1e-4f;
+        // Parallel ray
+        bool parallelFails = !IntersectRayPlane(ray, {0, 10, 0}, {1, 0, 0}, hit);
+        // Plane behind ray
+        bool behindFails = !IntersectRayPlane(ray, {0, 10, -60}, {0, 0, -1}, hit);
+        Check(valOk && parallelFails && behindFails, "IntersectRayPlane");
+    }
+
+    // ---- 16. SolveConeAngle ----
+    {
+        const ViewProj vp = MakeViewProj(TestView({0, 30, -60}, {0, 15, 0}), {0, 30, -60}, kFovY,
+                                         0.5f, 3000.0f, 0.0f, 0.0f, 800.0f, 600.0f);
+        const XMFLOAT3 pos{0, 40, 0};
+        const XMFLOAT3 aim{0, 0, 0};
+        const float aimDist = 40.0f;
+        const float expectedAngle = 0.35f; // ~20 deg
+        const float radius = aimDist * std::tan(expectedAngle);
+        const XMFLOAT3 rimPoint{radius, 0, 0};
+        ImVec2 rimScreen;
+        vp.Project(rimPoint, rimScreen);
+        float derivedAngle = 0.0f;
+        bool ok = SolveConeAngle(vp, pos, aim, rimScreen, derivedAngle);
+        Check(ok && std::fabs(derivedAngle - expectedAngle) < 0.02f, "SolveConeAngle",
+              "got %.4f want %.4f", derivedAngle, expectedAngle);
+    }
+
+    // ---- 17. SolveRangeDistance & SolveSpotRange ----
+    {
+        const ViewProj vp = MakeViewProj(TestView({0, 10, -50}, {0, 10, 0}), {0, 10, -50}, kFovY,
+                                         0.5f, 3000.0f, 0.0f, 0.0f, 800.0f, 600.0f);
+        const XMFLOAT3 pos{0, 10, 0};
+        const float expectedRange = 25.0f;
+        const XMFLOAT3 rangePoint{25.0f, 10.0f, 0.0f};
+        ImVec2 rangeScreen;
+        vp.Project(rangePoint, rangeScreen);
+
+        float derivedDist = 0.0f;
+        bool ok1 = SolveRangeDistance(vp, pos, rangeScreen, derivedDist);
+        bool match1 = ok1 && std::fabs(derivedDist - expectedRange) < 0.5f;
+
+        float derivedSpot = 0.0f;
+        bool ok2 = SolveSpotRange(vp, pos, {1, 0, 0}, rangeScreen, derivedSpot);
+        bool match2 = ok2 && std::fabs(derivedSpot - expectedRange) < 0.5f;
+
+        Check(match1 && match2, "SolveRangeDistance & SolveSpotRange",
+              "point range %.2f, spot range %.2f, want %.2f", derivedDist, derivedSpot, expectedRange);
+    }
+
     std::printf("studio_gizmo_test: %d passed, %d failed\n", g_passed, g_failed);
     return g_failed > 0 ? 1 : 0;
 }
+

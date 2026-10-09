@@ -740,4 +740,152 @@ int PickCameraKey(const ViewProj& vp, const DirectX::XMFLOAT3* keys, int keyCoun
     return best;
 }
 
+// ---- mouse ray and plane solvers (cone angle, range) --------------------------------------------
+
+bool BuildMouseRay(const ViewProj& vp, ImVec2 mouse, MouseRay& outRay) {
+    if (vp.w <= 0.0f || vp.h <= 0.0f) return false;
+    const float ndcX = (mouse.x - vp.x0) / vp.w * 2.0f - 1.0f;
+    const float ndcY = 1.0f - (mouse.y - vp.y0) / vp.h * 2.0f;
+
+    const XMMATRIX v = XMLoadFloat4x4(&vp.view);
+    XMVECTOR det;
+    const XMMATRIX invV = XMMatrixInverse(&det, v);
+    if (XMVectorGetX(XMVectorIsNaN(det)) != 0 || XMVectorGetX(XMVectorEqual(det, XMVectorZero())) != 0) return false;
+
+    if (!vp.ortho) {
+        const float tanHalfFovY = std::tan(vp.fovY * 0.5f);
+        const float tanHalfFovX = tanHalfFovY * (vp.w / vp.h);
+        const XMVECTOR viewDir = XMVector3Normalize(XMVectorSet(ndcX * tanHalfFovX, ndcY * tanHalfFovY, 1.0f, 0.0f));
+        const XMVECTOR worldDir = XMVector3Normalize(XMVector3TransformNormal(viewDir, invV));
+        outRay.origin = vp.eye;
+        XMStoreFloat3(&outRay.dir, worldDir);
+        return true;
+    } else {
+        const float halfH = vp.orthoHeight * 0.5f;
+        const float halfW = halfH * (vp.w / vp.h);
+        const XMVECTOR viewDir = XMVectorSet(0.0f, 0.0f, 1.0f, 0.0f);
+        const XMVECTOR worldDir = XMVector3Normalize(XMVector3TransformNormal(viewDir, invV));
+        const XMVECTOR viewOrigin = XMVectorSet(ndcX * halfW, ndcY * halfH, 0.0f, 1.0f);
+        const XMVECTOR worldOrigin = XMVector3TransformCoord(viewOrigin, invV);
+        XMStoreFloat3(&outRay.origin, worldOrigin);
+        XMStoreFloat3(&outRay.dir, worldDir);
+        return true;
+    }
+}
+
+bool IntersectRayPlane(const MouseRay& ray, const DirectX::XMFLOAT3& planePoint,
+                       const DirectX::XMFLOAT3& planeNormal, DirectX::XMFLOAT3& outHit, float* outT) {
+    const XMVECTOR N = XMVector3Normalize(XMLoadFloat3(&planeNormal));
+    const XMVECTOR P0 = XMLoadFloat3(&planePoint);
+    const XMVECTOR R0 = XMLoadFloat3(&ray.origin);
+    const XMVECTOR D = XMLoadFloat3(&ray.dir);
+
+    const float denom = XMVectorGetX(XMVector3Dot(D, N));
+    if (std::fabs(denom) < 1e-6f) return false;
+
+    const float numer = XMVectorGetX(XMVector3Dot(XMVectorSubtract(P0, R0), N));
+    const float t = numer / denom;
+    if (t < 0.0f) return false;
+    if (outT) *outT = t;
+
+    const XMVECTOR hit = XMVectorAdd(R0, XMVectorScale(D, t));
+    XMStoreFloat3(&outHit, hit);
+    return true;
+}
+
+bool SolveConeAngle(const ViewProj& vp, const DirectX::XMFLOAT3& pos, const DirectX::XMFLOAT3& aim,
+                    ImVec2 mouse, float& outOuterAngle) {
+    const XMVECTOR posV = XMLoadFloat3(&pos);
+    const XMVECTOR aimV = XMLoadFloat3(&aim);
+    XMVECTOR axisV = XMVectorSubtract(aimV, posV);
+    const float aimDist = XMVectorGetX(XMVector3Length(axisV));
+    if (aimDist < 1e-4f) return false;
+    axisV = XMVectorScale(axisV, 1.0f / aimDist);
+
+    MouseRay ray;
+    if (!BuildMouseRay(vp, mouse, ray)) return false;
+
+    DirectX::XMFLOAT3 norm;
+    XMStoreFloat3(&norm, axisV);
+    DirectX::XMFLOAT3 hit;
+    if (!IntersectRayPlane(ray, aim, norm, hit)) return false;
+
+    const XMVECTOR hitV = XMLoadFloat3(&hit);
+    const XMVECTOR offsetV = XMVectorSubtract(hitV, aimV);
+    const float r = XMVectorGetX(XMVector3Length(offsetV));
+
+    const float angle = std::atan2(r, aimDist);
+    const float minRad = 1.0f * kPi / 180.0f;
+    const float maxRad = 89.0f * kPi / 180.0f;
+    outOuterAngle = std::clamp(angle, minRad, maxRad);
+    return true;
+}
+
+bool SolveRangeDistance(const ViewProj& vp, const DirectX::XMFLOAT3& pos, ImVec2 mouse, float& outDistance) {
+    const XMVECTOR posV = XMLoadFloat3(&pos);
+    XMVECTOR normV;
+    if (vp.ortho) {
+        const XMMATRIX v = XMLoadFloat4x4(&vp.view);
+        const XMMATRIX invV = XMMatrixInverse(nullptr, v);
+        normV = XMVector3Normalize(XMVector3TransformNormal(XMVectorSet(0, 0, 1, 0), invV));
+    } else {
+        normV = XMVectorSubtract(XMLoadFloat3(&vp.eye), posV);
+        if (XMVectorGetX(XMVector3LengthSq(normV)) < 1e-6f) return false;
+        normV = XMVector3Normalize(normV);
+    }
+
+    MouseRay ray;
+    if (!BuildMouseRay(vp, mouse, ray)) return false;
+
+    DirectX::XMFLOAT3 norm;
+    XMStoreFloat3(&norm, normV);
+    DirectX::XMFLOAT3 hit;
+    if (!IntersectRayPlane(ray, pos, norm, hit)) return false;
+
+    const float dist = XMVectorGetX(XMVector3Length(XMVectorSubtract(XMLoadFloat3(&hit), posV)));
+    outDistance = std::max(0.1f, dist);
+    return true;
+}
+
+bool SolveSpotRange(const ViewProj& vp, const DirectX::XMFLOAT3& pos, const DirectX::XMFLOAT3& axis,
+                    ImVec2 mouse, float& outRange) {
+    XMVECTOR axisV = XMLoadFloat3(&axis);
+    if (XMVectorGetX(XMVector3LengthSq(axisV)) < 1e-6f) return false;
+    axisV = XMVector3Normalize(axisV);
+    const XMVECTOR posV = XMLoadFloat3(&pos);
+
+    XMVECTOR camDir;
+    if (vp.ortho) {
+        const XMMATRIX v = XMLoadFloat4x4(&vp.view);
+        const XMMATRIX invV = XMMatrixInverse(nullptr, v);
+        camDir = XMVector3Normalize(XMVector3TransformNormal(XMVectorSet(0, 0, 1, 0), invV));
+    } else {
+        camDir = XMVectorSubtract(XMLoadFloat3(&vp.eye), posV);
+        if (XMVectorGetX(XMVector3LengthSq(camDir)) > 1e-6f) camDir = XMVector3Normalize(camDir);
+        else camDir = axisV;
+    }
+
+    const XMVECTOR side = XMVector3Cross(camDir, axisV);
+    XMVECTOR planeNorm;
+    if (XMVectorGetX(XMVector3LengthSq(side)) > 1e-4f) {
+        planeNorm = XMVector3Normalize(XMVector3Cross(axisV, side));
+    } else {
+        planeNorm = camDir;
+    }
+
+    MouseRay ray;
+    if (!BuildMouseRay(vp, mouse, ray)) return false;
+
+    DirectX::XMFLOAT3 norm;
+    XMStoreFloat3(&norm, planeNorm);
+    DirectX::XMFLOAT3 hit;
+    if (!IntersectRayPlane(ray, pos, norm, hit)) return false;
+
+    const XMVECTOR vHit = XMVectorSubtract(XMLoadFloat3(&hit), posV);
+    const float range = XMVectorGetX(XMVector3Dot(vHit, axisV));
+    outRange = std::max(0.1f, range);
+    return true;
+}
+
 } // namespace mmdx::studio
+

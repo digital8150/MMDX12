@@ -179,22 +179,7 @@ void BuildSceneLighting(const std::vector<studio::SceneLight>& lights, const std
         p.color = v.color;
         p.intensity = v.intensity;
         if (l.kind == LightKind::Spot) {
-            DirectX::XMFLOAT3 target = v.aim;
-            if (l.aimMode == AimMode::Target) {
-                // the character (0 or an unknown uid: the performer)
-                const bool head = l.targetPart == studio::TargetPart::Head;
-                target = head ? anchors.head : anchors.focus;
-                if (l.targetUid != 0)
-                    for (const LightAnchors::Character& c : anchors.characters)
-                        if (c.uid == l.targetUid) {
-                            target = head ? c.head : c.centre;
-                            break;
-                        }
-            } else if (l.aimMode == AimMode::Sway) {
-                float dx, dz;
-                SwayOffset(t, l.swayPhase, dx, dz);
-                target = {v.aim.x + dx, v.aim.y, v.aim.z + dz};
-            }
+            DirectX::XMFLOAT3 target = ResolveSpotAim(l, v, t, anchors);
             p.direction = {target.x - v.position.x, target.y - v.position.y, target.z - v.position.z};
             if (p.direction.x * p.direction.x + p.direction.y * p.direction.y + p.direction.z * p.direction.z < 1e-6f)
                 p.direction = {0.0f, -1.0f, 0.0f};
@@ -205,4 +190,27 @@ void BuildSceneLighting(const std::vector<studio::SceneLight>& lights, const std
     }
 }
 
+DirectX::XMFLOAT3 ResolveSpotAim(const studio::SceneLight& l, const studio::LightValues& v,
+                                 double songSeconds, const LightAnchors& anchors) {
+    using studio::AimMode;
+    DirectX::XMFLOAT3 target = v.aim;
+    if (l.aimMode == AimMode::Target) {
+        // the character (0 or an unknown uid: the performer)
+        const bool head = l.targetPart == studio::TargetPart::Head;
+        target = head ? anchors.head : anchors.focus;
+        if (l.targetUid != 0)
+            for (const LightAnchors::Character& c : anchors.characters)
+                if (c.uid == l.targetUid) {
+                    target = head ? c.head : c.centre;
+                    break;
+                }
+    } else if (l.aimMode == AimMode::Sway) {
+        float dx, dz;
+        SwayOffset(songSeconds, l.swayPhase, dx, dz);
+        target = {v.aim.x + dx, v.aim.y, v.aim.z + dz};
+    }
+    return target;
+}
+
 } // namespace mmdx
+
