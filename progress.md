@@ -869,3 +869,42 @@ preview capture, cropped to 16:9).
   or (b) fix the G-buffer write (GI output may change).
 - App release with GI effect support: version bump, website docs, pack `minAppVersion` where needed.
 - Decide whether thumbnails should skip the effect stack.
+
+## 2026-10-09 (13) — studio scene lights redesign: phases 1–3 + session handoff
+
+Request: the studio lighting was a source switch (VMD track / preset / custom rig) inside the camera panel. Redesigned as scene light
+objects (sun, point, spot, ambient) with keyframes; presets become objects; viewport gizmos; C4D / 3ds Max / Blender light properties
+(shadow type, softness, density, shadow colour, falloff, diffuse / specular, viewport visibility). Handoff: `docs/handoff/2026-10-09-studio-lighting.md`.
+
+### Done
+- Phase 1 (`7b85d89`): SceneLight model, project format version 2 with version 1 conversion, `BuildSceneLighting` (play-mode `BuildLighting`
+  unchanged), rig UI removed from the camera panel. A camera VMD light track with only MMD default keys is dropped on entry to the studio, as
+  play mode already does.
+- Phase 2 (`33d91da`): outliner light group, selection (`selectedLightUid`, `selectedModel` stays -1), per-kind inspector including the
+  shadow / falloff / affect / visibility fields, keyed-edit rule, preset confirmation popup, undoable add / delete / enable / rename.
+- Phase 3 (`a058d44`): viewport handles (point position and range, sun rotate rings and direction arrow, spot position, aim in manual mode,
+  cone, range), `ResolveSpotAim` shared with the renderer, `studiolight*` script commands, `STUDIOLIGHT` log lines.
+- The shadow and property fields are stored, saved and editable, but the renderer does not use them yet (phase 4).
+
+### Fixed in review
+- Light drags ended on the frame after the press: `StudioViewportPose` returned early when no model is selected (always the case for a
+  light) and reset the drag. Scripted cone drag went 13.8 to 0.1 degrees; after the fix, 13.8 to 6.9 degrees.
+
+### Verified
+- `build_dev` builds with 0 errors. `studio_project_test` 133, `studio_light_test` 84, `studio_edit_test` 15, `studio_gizmo_test` 19,
+  `studio_pose_test` 38; all pass.
+- Captures in `build_dev/captures_phase3`: concert preset with spot handles and cone outline; cone drag before and after the fix; sun rotate
+  rings and arrow. No `[E]` lines.
+
+### Not verified / notes
+- Position, aim and range drags were not captured separately; they share the fixed path.
+- The renderer is untouched. Point lights cast shadows only in the path tracer and offline GI; the real-time raster path has none.
+- Sun shadows still come from the camera VMD self-shadow track and the render settings; the sun's shadow type is not connected.
+- The sky glow (`SkyColor`, `common.hlsli` 96-97) still follows `gLightDir` when the sun is off.
+- The phase 3 worker made 5 app launches against a limit of 4. The phase 2 worker force-stopped a running `MMDX12.exe` during its build;
+  the phase 3 brief forbids stopping processes.
+- The Sonnet phase 1 subagent hit its weekly limit (resets Oct 11, 8am Asia/Seoul); phase 1 was finished by hand.
+
+### Next
+- Decide D-a (point shadows in the real-time raster), D-b (area light) and D-c (sun shadow vs camera VMD self-shadow track); see the handoff.
+- Phase 4: renderer support for shadow type, softness, density, falloff and affect; point shadows per D-a; the sky glow when the sun is off.
