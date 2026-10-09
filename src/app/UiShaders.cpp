@@ -392,7 +392,9 @@ void App::DrawShaderPackDetail(float x0, float y0, float x1, float y1) {
     }
     Gap(14.0f);
     Para(pk->name.Get(lang), p.ink, size::Heading, Font::Bold);
-    Para("v" + pk->version + "  ·  " + pk->id + "  ·  " + SourceLabel(pk->source), p.ink3, size::Caption);
+    Para("v" + pk->version + "  ·  " + pk->id + "  ·  " + SourceLabel(pk->source) +
+             (pk->stateFloats > 0 ? "  ·  " + std::to_string(pk->stateFloats) + " floats" : ""),
+         p.ink3, size::Caption);
 
     // problems first: authors need them, users need to know why it is not selectable
     if (!pk->Selectable() || pk->status == PackStatus::CompileError) {

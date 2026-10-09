@@ -54,3 +54,76 @@ shader manager) and never crashes. Saving `effect.hlsl` while the app runs reloa
 - Check a pack with `pack_check <folder> --compile`. Template: `shaders/pack_template_effect`.
 - Examples (online gallery only, not bundled): chromatic_aberration, film_grain, crt_scanlines, auto_luminous (sources in the website repo `shader-packs/`).
 - CLI: `--effect <id>[,<id>...]` replaces the stack for one run, `--effect none` clears it.
+
+## API v4: persistent state
+
+API v4 introduces optional persistent per-entry state (up to 16 floats) for temporal work like eye adaptation, exposure or focus smoothing, and cumulative effects.
+
+### Manifest
+
+In `pack.json`, declare `"apiVersion": 4`, `"type": "effect"`, and add the `"state"` block:
+
+```json
+{
+  "apiVersion": 4,
+  "type": "effect",
+  "stage": "post",
+  "state": {
+    "floats": 4
+  }
+}
+```
+
+- `"floats"` must be an integer between 1 and 16.
+- A pack that declares `"state"` must have `"apiVersion": 4` and `"type": "effect"`. Older versions of the app reject or ignore unknown fields, preventing stateful packs from silently running stateless.
+- Stateless effects and surface packs can continue using `"apiVersion": 3`.
+
+### HLSL Contract
+
+State packs implement `PackEffectState` in addition to `PackEffect`:
+
+```hlsl
+void PackEffectState(PackStateInput i, out float newState[16]) {
+    for (int k = 0; k < 16; ++k) newState[k] = 0;
+    float centerLuma = Luminance(gEffectSource.SampleLevel(gLinear, float2(0.5, 0.5), 0).rgb);
+    newState[0] = i.reset ? centerLuma : lerp(i.prevState[0], centerLuma, 1.0 - exp(-PackParam(0) * i.dt));
+    newState[1] = i.reset ? 0 : (i.prevState[1] + 1);
+}
+
+float3 PackEffect(PackEffectInput i) {
+    float smoothLuma = PackState(0);
+    return i.color.rgb * smoothLuma;
+}
+```
+
+- `PackStateInput`:
+  - `float prevState[16]`: previous state values (all zeros when `reset` is true).
+  - `bool reset`: true if state was reset this frame.
+  - `float dt`: delta time in seconds.
+  - `float time`: current time in seconds.
+  - `float frameIndex`: current frame number.
+  - `float2 outputSize`: dimensions of the render target.
+- `PackState(i)` reads float `i` (0 <= i < stateFloats) of the state updated for this frame. For non-state packs (`PACK_STATE=0`), `PackState(i)` evaluates to `0.0`.
+- `PackEffectInput` gains `float dt` appended as its last member.
+- State is stored in a 4x1 RGBA32F ping-pong texture (`gEffectState`, `t0, space7`).
+
+### Reset, dt, and advance rules
+
+- **Reset**: `reset` is true when:
+  - The stack entry is created, reordered, or its pack reloads.
+  - The entry did not run in the previous executed frame of the pass instance.
+  - Camera cut / teleport (`FrameView::cameraCut`).
+  - Output size changed / window resized.
+  - Explicitly requested by offline job or caller (`effectStateReset`).
+  When `reset` is true, `prevState` is guaranteed to be all zeros.
+- **dt**:
+  - Interactive playback: `frameTimeMs * 0.001`, clamped to [1/240, 0.1] seconds.
+  - Deterministic runs (`--frames`, `--ui-script`, MCP / headless): fixed `1/60` seconds.
+  - Offline video: fixed `1/fps` seconds.
+- **Advance**:
+  - Interactive viewport advances once per presented frame.
+  - Path-traced video: state advances only on the last of the `iterCount` passes per frame (`effectStateAdvance` false beforehand).
+  - Offline GI:
+    - Videos: 1 state pass per output image with `dt = 1/fps`, resetting on first frame or jump cut. State slots persist across frames of the video.
+    - Stills: runs the state pass 64 times on the same image with `dt = 1/60` (reset only on step 0) to converge temporal state before running `PackEffect` once.
+

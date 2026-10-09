@@ -150,9 +150,11 @@ bool PrintManifest(const ShaderPack& pack, const std::string& error) {
         }
     }
     // type: "surface" (default) or "effect" (+ its injection stage)
-    if (pack.type == mmdx::PackType::Effect)
+    if (pack.type == mmdx::PackType::Effect) {
         printf("  type: effect (stage: %s)\n", pack.stage == mmdx::PackEffectStage::PreBloom ? "pre-bloom" : "post");
-    else {
+        if (pack.stateFloats > 0)
+            printf("  state: %u floats\n", pack.stateFloats);
+    } else {
         printf("  type: surface\n");
         printf("  pt_surface: %s\n", pack.hasPtSurface ? "yes" : "no");
     }
@@ -429,11 +431,15 @@ int wmain(int argc, wchar_t** argv) {
             if (pack.textures[i].clamp) clampMask |= 1u << i;
             if (pack.textures[i].srgb) srgbMask |= 1u << i;
         }
-        const std::vector<std::pair<std::string, std::string>> defines = {
+        std::vector<std::pair<std::string, std::string>> defines = {
             {"MMDX_PACK", incDefine},
             {"PACK_TEX_COUNT", std::to_string(texCount)},
             {"PACK_TEX_CLAMP_MASK", std::to_string(clampMask) + "u"},
             {"PACK_TEX_SRGB_MASK", std::to_string(srgbMask) + "u"}};
+        if (effect && pack.stateFloats > 0) {
+            defines.push_back({"PACK_STATE", "1"});
+            defines.push_back({"PACK_STATE_FLOATS", std::to_string(pack.stateFloats)});
+        }
         printf("compile: %s of %s (ps_6_0, MMDX_PACK = %s, %u textures)\n",
                effect ? "PSEffect" : "PSPack", mmdx::PathToUtf8(mmdHlsl.filename()).c_str(), incDefine.c_str(), texCount);
         std::string errors;
@@ -444,6 +450,20 @@ int wmain(int argc, wchar_t** argv) {
             ok = false;
         } else {
             printf("compile ok (%zu bytes)\n", blob->GetBufferSize());
+        }
+
+        if (effect && pack.stateFloats > 0) {
+            printf("compile: PSEffectState of %s (ps_6_0, MMDX_PACK = %s, %u textures)\n",
+                   mmdx::PathToUtf8(mmdHlsl.filename()).c_str(), incDefine.c_str(), texCount);
+            std::string stateErrors;
+            const mmdx::ComPtr stateBlob = mmdx::CompileShaderDxc(mmdHlsl, "PSEffectState", "ps_6_0", defines, &stateErrors);
+            if (!stateErrors.empty()) printf("%s\n", stateErrors.c_str());
+            if (!stateBlob) {
+                printf("[problem] PSEffectState compile failed\n");
+                ok = false;
+            } else {
+                printf("compile ok (%zu bytes)\n", stateBlob->GetBufferSize());
+            }
         }
 
         if (pack.hasPtSurface) {

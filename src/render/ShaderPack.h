@@ -20,7 +20,7 @@ namespace mmdx {
 
 // The PackShade / PackEffect contract version (pack_api.hlsli / effect_api.hlsli PACK_API_VERSION). A pack declares
 // the version it was written for; packs with a higher version are listed as incompatible and never compiled.
-inline constexpr int kPackApiVersion = 3;
+inline constexpr int kPackApiVersion = 4;
 inline constexpr uint32_t kPackMaxParams = 16;
 inline constexpr uint32_t kPackMaxTextures = 16;   // pack.json "textures" entries (one SRV each)
 inline constexpr uint32_t kPackMaxTextureSize = 4096;   // per-texture width / height cap
@@ -144,6 +144,7 @@ struct ShaderPack {
     // "type": "surface" (default; material shading) or "effect" (PackEffect; pack.json "stage" = pre-bloom / post)
     PackType type = PackType::Surface;
     PackEffectStage stage = PackEffectStage::Post;   // effect packs only
+    uint32_t stateFloats = 0;                        // effect packs only: "state": { "floats": N } (1..16)
     // shading
     struct Rule {
         PackClass cls = PackClass::Body;

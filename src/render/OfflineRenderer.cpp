@@ -748,7 +748,7 @@ void OfflineRenderer::Impl::Finish(PassContext& pc) {
     if (preFx) {
         const float lc[8] = {0.0f, 0.0f, 0.0f, 0.0f, (float)w, (float)h, 0.0f, (float)edgeLayers};
         DispatchPost(pc, litCompose, &litA, &denoiseA, nullptr, lc, Groups(w), Groups(h));
-        effectPre.RunOffline(pc, job.effects, litA, litB, fxDepth, fxVel, fxNormal);
+        effectPre.RunOffline(pc, job.effects, litA, litB, fxDepth, fxVel, fxNormal, &job);
     }
 
     const bool convolve = job.bloomConvolution && fftRows && gridA;
@@ -770,7 +770,7 @@ void OfflineRenderer::Impl::Finish(PassContext& pc) {
     const float fin[8] = {1.0f, job.bloom ? 1.0f : 0.0f, convolve ? kConvolutionBloomIntensity : 0.08f, 1.0f,
                           (float)w, (float)h, 0.12f, (float)edgeLayers};
     DispatchPost(pc, finalize, &ldr, lit ? &litA : &denoiseA, &bloomA, fin, Groups(w), Groups(h), lit ? 1.0f : 0.0f);
-    if (postFx) effectPost.RunOffline(pc, job.effects, ldr, ldrB, fxDepth, fxVel, fxNormal);
+    if (postFx) effectPost.RunOffline(pc, job.effects, ldr, ldrB, fxDepth, fxVel, fxNormal, &job);
 }
 
 OfflineRenderer::OfflineRenderer() = default;

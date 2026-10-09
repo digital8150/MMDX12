@@ -17,3 +17,15 @@ float3 PackEffect(PackEffectInput i) {
     const float vignette = 1.0 - PackParam(0) * dot(d, d) * 1.6;
     return i.color.rgb * vignette;
 }
+
+// Persistent state (API v4):
+// In pack.json, set "apiVersion": 4 and declare "state": { "floats": N } (1 <= N <= 16).
+// Implement PackEffectState to update state each frame; in PackEffect, read state with PackState(0..N-1):
+//
+// void PackEffectState(PackStateInput i, out float newState[16]) {
+//     for (int k = 0; k < 16; ++k) newState[k] = 0;
+//     // example: track center pixel luminance with temporal smoothing
+//     float centerLuma = Luminance(gEffectSource.SampleLevel(gLinear, float2(0.5, 0.5), 0).rgb);
+//     newState[0] = i.reset ? centerLuma : lerp(i.prevState[0], centerLuma, 1.0 - exp(-4.0 * i.dt));
+// }
+

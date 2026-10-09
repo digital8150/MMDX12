@@ -357,6 +357,7 @@ bool ParseShaderPackManifest(const std::string& json, const std::filesystem::pat
     out.hasPtSurface = false;
     out.type = PackType::Surface;
     out.stage = PackEffectStage::Post;
+    out.stateFloats = 0;
     out.status = PackStatus::Ready;
     out.statusMessage.clear();
 
@@ -564,6 +565,31 @@ bool ParseShaderPackManifest(const std::string& json, const std::filesystem::pat
                 }
                 out.textures.push_back(std::move(t));
             }
+    }
+
+    // state: optional "state": { "floats": N } (1..16), effect packs only, apiVersion must be 4
+    if (auto it = j.find("state"); it != j.end()) {
+        if (!it->is_object()) {
+            problems.push_back("state must be an object with \"floats\": N");
+        } else {
+            auto fit = it->find("floats");
+            if (fit == it->end() || !fit->is_number_integer()) {
+                problems.push_back("state.floats must be an integer between 1 and 16");
+            } else {
+                int64_t n = fit->get<int64_t>();
+                if (n < 1 || n > 16) {
+                    problems.push_back("state.floats must be between 1 and 16 (" + std::to_string(n) + ")");
+                } else {
+                    out.stateFloats = static_cast<uint32_t>(n);
+                }
+            }
+        }
+        if (out.apiVersion != 4) {
+            problems.push_back("packs with 'state' must declare \"apiVersion\": 4");
+        }
+        if (out.type != PackType::Effect) {
+            problems.push_back("state is only supported for effect packs");
+        }
     }
 
     // optional preview

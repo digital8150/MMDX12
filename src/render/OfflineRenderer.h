@@ -76,6 +76,9 @@ struct OfflineJobDesc {
     float dofAperture = 1.0f;        // 0.2 .. 3 (1 = the original lens)
     // The shader packs' effect stack (RenderSettings::packEffects of the real-time frame); empty = no effects.
     std::vector<EffectStackEntry> effects;
+    float effectDt = 0.0f;           // >0: dt in seconds (1/fps for video)
+    bool still = false;              // true for still renders (state pass runs 64 times)
+    bool effectReset = false;        // reset effect state (first frame, cut)
 };
 
 struct OfflineProgress {

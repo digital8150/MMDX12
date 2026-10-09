@@ -13,7 +13,7 @@
 #define EFFECT_API_HLSLI
 
 // Must equal kPackApiVersion (render/ShaderPack.h). One manifest version for surface and effect packs.
-#define PACK_API_VERSION 3
+#define PACK_API_VERSION 4
 
 // gP0.xy (fullscreen.hlsli's PassCB, b1) = the output size in pixels; time / frame come from SceneConstants.
 #define gEffectOutputSize float2(gP0.x, gP0.y)
@@ -23,6 +23,26 @@
 // The pack's 16 parameters (b2, 16 root constants), pack.json order; the user's slider value or the
 // manifest default.
 #define PackParam(i) gPackEffectParams[i >> 2][i & 3]
+
+#ifndef PACK_STATE
+#define PACK_STATE 0
+#endif
+
+#if PACK_STATE
+Texture2D<float4> gEffectState : register(t0, space7);
+#define PackState(i) (gEffectState.Load(int3((i) >> 2, 0, 0))[(i) & 3])
+#else
+#define PackState(i) (0.0)
+#endif
+
+struct PackStateInput {
+    float prevState[16];
+    bool reset;
+    float dt;
+    float time;
+    float frameIndex;
+    float2 outputSize;
+};
 
 struct PackEffectInput {
     float2 uv;            // texel centre of this pixel, 0..1 (0, 0 = top left)
@@ -36,6 +56,7 @@ struct PackEffectInput {
     float3 normal;        // view-space normal (the normal target, oct-encoded: OctDecode); decodes to a stray
                           // direction on background pixels
     float2 motion;        // motion vector, uv(current) - uv(prev); (0, 0) when the frame has no motion
+    float dt;             // seconds since the previous rendered frame
 };
 
 // The frame so far (ping-ponged through the pass; reading a neighbouring pixel of it is the way lens

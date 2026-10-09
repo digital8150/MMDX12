@@ -33,6 +33,7 @@
 namespace mmdx {
 
 struct ShaderPack;
+struct OfflineJobDesc;
 class EffectPipeline;   // PassEffect.cpp: one effect pack's pipeline (root signature + PSO)
 
 // Spot shadow maps are rendered (and sampled by the scene / volumetric shaders) when shadows are on
@@ -305,7 +306,7 @@ public:
     // Offline GI: this instance's share of `stack` over the image `io`, ping-ponging through `scratch` (the same format), with
     // the image's effect inputs (depth R32_FLOAT, velocity, oct normal). The result is copied back into `io`; false: nothing ran.
     bool RunOffline(PassContext& pc, const std::vector<EffectStackEntry>& stack, Texture& io, Texture& scratch,
-                    Texture& depth, Texture& velocity, Texture& normal);
+                    Texture& depth, Texture& velocity, Texture& normal, const OfflineJobDesc* job = nullptr);
 
 private:
     // Per-entry GPU state, keyed by pack id: its PSO plus one texture set per resolved folder (pack.json
@@ -324,10 +325,19 @@ private:
     bool EnsurePackTextures(Dx12Context& ctx, const ShaderPack& pack, EffectPipelines& p,
                             const std::filesystem::path& folder);
     void ReleasePackPsos(Dx12Context& ctx);   // waits for the GPU, frees the pack texture SRVs and PSOs
+    void ReleaseStateSlots(Dx12Context& ctx);
     void RunStack(PassContext& pc, bool preBloom);
 
     bool AllocTargets(Dx12Context& ctx, uint32_t w, uint32_t h);
     bool AllocPostTargets(Dx12Context& ctx, uint32_t w, uint32_t h);
+
+    struct StateSlot {
+        Texture tex[2];     // 4x1 RGBA32F
+        uint32_t cur = 0;   // 0 or 1: index of texture written last
+        bool hasValidState = false;
+        uint64_t lastPassExecution = 0;
+    };
+    using StateKey = std::pair<size_t, std::string>;
 
     bool preBloom_;           // this instance's share: pre-bloom (HDR) or post (LDR) entries
     Texture ping_[2];         // RGBA16F ping-pong, outWidth x outHeight (pre-bloom share)
@@ -335,6 +345,9 @@ private:
     uint32_t generation_ = 0;
     std::filesystem::path shaderDir_;
     std::map<std::string, EffectPipelines> psos_;
+    std::map<StateKey, StateSlot> stateSlots_;
+    uint64_t passExecutionCount_ = 0;
+    bool resetRequested_ = false;
 };
 
 class BackdropPass final : public IRenderPass {

@@ -56,6 +56,9 @@ OfflineJobDesc MakeJobDesc(const AppOptions& o, const AppSettings& st, const Vid
         j.maxSamples = (uint32_t)o.offlineSpp;
         j.minSamples = std::min(j.minSamples, j.maxSamples);
     }
+    j.still = !video;
+    j.effectDt = video ? (1.0f / (float)v.fps) : (1.0f / 60.0f);
+    j.effectReset = !video;
     return j;
 }
 
@@ -415,6 +418,12 @@ void App::RecordRealtimeVideoFrame(ID3D12GraphicsCommandList* cmd) {
         offline_.prevCamera = view.camera;
         SaveOfflinePose();
     }
+    const VideoRenderConfig& cfg = offline_.video;
+    view.effectDt = (cfg.fps > 0) ? (1.0f / (float)cfg.fps) : (1.0f / 60.0f);
+    if (offline_.frame == 0 || view.cameraCut) {
+        view.effectStateReset = true;
+    }
+    view.effectStateAdvance = (offline_.iter + 1 >= offline_.iterCount);
     renderer_.Render(cmd, view);
 }
 
@@ -453,23 +462,32 @@ void App::RecordOfflineFrame(ID3D12GraphicsCommandList* cmd) {
     OfflineView(frame, view);
     view.motionBlur = blur;
     view.prevCamera = !blur ? view.camera : (video ? offline_.prevCamera : lastLiveCamera_);
+    bool jumpCut = false;
     if (video && blur && !probe) {
         // camera cut / teleport since the previous video frame: no blur across the jump
-        if (CameraJumped(view.prevCamera, view.camera, offline_.video.fps)) view.prevCamera = view.camera;
+        if (CameraJumped(view.prevCamera, view.camera, offline_.video.fps)) {
+            view.prevCamera = view.camera;
+            jumpCut = true;
+        }
         const DirectX::XMFLOAT3 c = CharacterCenter();
         const DirectX::XMVECTOR d = DirectX::XMVectorSubtract(DirectX::XMLoadFloat3(&c),
                                                               DirectX::XMLoadFloat3(&offline_.prevCenter));
         if (DirectX::XMVectorGetX(DirectX::XMVector3Length(d)) > kPoseJumpUnits * 30.0f / (float)offline_.video.fps) {
             SaveOfflinePose();                         // the shutter opens at the new pose
             UploadOfflinePrevPose(ctx_.FrameNumber() - 1);
+            jumpCut = true;
         }
     }
     if (video) {
         SaveOfflinePose();
         offline_.prevCamera = view.camera;
     }
+    OfflineJobDesc jd = MakeJobDesc(options_, settings_, offline_.video, video, true);
+    if (video) {
+        jd.effectReset = (offline_.frame == 0) || jumpCut || view.cameraCut;
+    }
     // the irradiance cache prepass is the render's GI: every image, video frames included
-    if (!renderer_.BeginOffline(cmd, view, MakeJobDesc(options_, settings_, offline_.video, video, true))) {
+    if (!renderer_.BeginOffline(cmd, view, jd)) {
         if (!offline_.background) {
             renderer_.Render(cmd, view);  // keep this frame valid
             toast_ = {Tr("고품질 렌더를 시작할 수 없습니다"), Tr("레이 트레이싱 장면을 만들지 못했습니다"), {}, true,

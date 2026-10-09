@@ -196,6 +196,9 @@ struct FrameView {
     CameraParams prevCamera;
     bool motionBlur = false;
     OfflineSceneProps offlineProps;  // offline renderer only
+    float effectDt = 0.0f;           // >0: override effect dt (seconds; deterministic runs, video exports)
+    bool effectStateReset = false;   // force effect state reset (job start, cut)
+    bool effectStateAdvance = true;  // advance effect state this frame (false: read latest without advancing)
 };
 
 struct RenderStats {

@@ -1364,6 +1364,9 @@ void App::BuildFrameView(float frame, FrameView& view) {
     const double step = std::fabs(playTime_ - lastRenderedTime_);
     view.cameraCut = lastRenderedTime_ < 0 || step > 0.25;
     lastRenderedTime_ = playTime_;
+    if (options_.quitAfterFrames > 0 || !options_.uiScript.empty() || options_.mcp == 1 || HeadlessRun()) {
+        view.effectDt = 1.0f / 60.0f;
+    }
 }
 
 } // namespace mmdx

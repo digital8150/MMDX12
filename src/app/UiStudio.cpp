@@ -583,6 +583,9 @@ void App::BuildStudioFrameView(FrameView& view) {
     StudioComputeFocus(view);
     view.cameraCut = lastRenderedTime_ < 0 || std::fabs(d.time - lastRenderedTime_) > 0.25;
     lastRenderedTime_ = d.time;
+    if (options_.quitAfterFrames > 0 || !options_.uiScript.empty() || options_.mcp == 1 || HeadlessRun()) {
+        view.effectDt = 1.0f / 60.0f;
+    }
 }
 
 // ---------------------------------------------------------------------------
