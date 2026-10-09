@@ -1545,7 +1545,7 @@ void App::DrawStudioTopBar(float x0, float y0, float x1, float y1) {
     // project name (the file's stem; untitled until the first save)
     {
         const std::string title = d.projectPath.empty() ? std::string(Tr("제목 없음")) : PathToUtf8(d.projectPath.stem());
-        const float maxX = std::min(x + Dp(260.0f), x1 - Dp(700.0f));
+        const float maxX = std::max(x + Dp(80.0f), std::min(x + Dp(260.0f), x1 - Dp(700.0f)));
         dl->AddLine(ImVec2(x - Dp(4.0f), cy - Dp(9.0f)), ImVec2(x - Dp(4.0f), cy + Dp(9.0f)), p.line);
         x += Dp(8.0f);
         TextEllipsis(dl, Font::Semibold, size::Body, ImVec2(x, cy - Dp(10.0f)), maxX, p.ink2, title.c_str());
@@ -1589,18 +1589,24 @@ void App::DrawStudioTopBar(float x0, float y0, float x1, float y1) {
     if (Button("##import", Tr("VMD 불러오기"), icon::FolderOpen, ButtonKind::Secondary, ImVec2(vmdW, 38.0f)))
         StudioImportVmd();
     Tooltip((std::string(Tr("불러올 대상: ")) + target).c_str());
-    rx -= Dp(14.0f + 36.0f);
-    dl->AddLine(ImVec2(rx + Dp(36.0f + 7.0f), cy - Dp(11.0f)), ImVec2(rx + Dp(36.0f + 7.0f), cy + Dp(11.0f)), p.line);
-    ImGui::SetCursorScreenPos(ImVec2(rx, cy - Dp(18.0f)));
-    if (IconButton("##projmenu", icon::List, Tr("프로젝트: 새로 만들기, 열기, 다른 이름으로 저장"))) ImGui::OpenPopup("##studioproj");
-    ImGui::SetNextWindowPos(ImVec2(rx + Dp(36.0f), y1 + Dp(6.0f)), ImGuiCond_Always, ImVec2(1.0f, 0.0f));
+    // project and render menus carry text: they are primary workflows, not tool toggles
+    const float projW = 104.0f, renderW = 88.0f;
+    rx -= Dp(14.0f + projW);
+    dl->AddLine(ImVec2(rx + Dp(projW + 7.0f), cy - Dp(11.0f)), ImVec2(rx + Dp(projW + 7.0f), cy + Dp(11.0f)), p.line);
+    ImGui::SetCursorScreenPos(ImVec2(rx, cy - Dp(19.0f)));
+    if (Button("##projmenu", Tr("프로젝트"), icon::List, ButtonKind::Ghost, ImVec2(projW, 38.0f)))
+        ImGui::OpenPopup("##studioproj");
+    Tooltip(Tr("새로 만들기, 열기, 다른 이름으로 저장"));
+    ImGui::SetNextWindowPos(ImVec2(rx + Dp(projW), y1 + Dp(6.0f)), ImGuiCond_Always, ImVec2(1.0f, 0.0f));
     DrawStudioProjectMenu();
     if (!studio_) return;
     // render (video / still), screen effects, layout reset and the shortcut list
-    rx -= Dp(4.0f + 36.0f);
-    ImGui::SetCursorScreenPos(ImVec2(rx, cy - Dp(18.0f)));
-    if (IconButton("##rendermenu", icon::FilmStrip, Tr("렌더: 영상, 고품질 스틸"))) ImGui::OpenPopup("##studiorender");
-    ImGui::SetNextWindowPos(ImVec2(rx + Dp(36.0f), y1 + Dp(6.0f)), ImGuiCond_Always, ImVec2(1.0f, 0.0f));
+    rx -= Dp(4.0f + renderW);
+    ImGui::SetCursorScreenPos(ImVec2(rx, cy - Dp(19.0f)));
+    if (Button("##rendermenu", Tr("렌더"), icon::FilmStrip, ButtonKind::Ghost, ImVec2(renderW, 38.0f)))
+        ImGui::OpenPopup("##studiorender");
+    Tooltip(Tr("영상 또는 고품질 스틸 렌더"));
+    ImGui::SetNextWindowPos(ImVec2(rx + Dp(renderW), y1 + Dp(6.0f)), ImGuiCond_Always, ImVec2(1.0f, 0.0f));
     DrawStudioRenderMenu();
     rx -= Dp(4.0f + 36.0f);
     ImGui::SetCursorScreenPos(ImVec2(rx, cy - Dp(18.0f)));
@@ -1627,8 +1633,10 @@ void App::DrawStudioOutliner(float x0, float y0, float x1, float y1) {
     dl->AddLine(ImVec2(x1 - 0.5f, y0), ImVec2(x1 - 0.5f, y1), p.line);
     Text(dl, Font::Semibold, size::Caption, ImVec2(x0 + Dp(16.0f), y0 + Dp(14.0f)), p.ink3, Tr("장면"));
     // "+": add a character / stage / prop / audio / song (library or file)
-    ImGui::SetCursorScreenPos(ImVec2(x1 - Dp(12.0f + 28.0f), y0 + Dp(6.0f)));
-    if (IconButton("##addmodel", icon::Plus, Tr("추가: 캐릭터, 스테이지, 소품, 음원, 곡"), false, 28.0f)) {
+    ImGui::SetCursorScreenPos(ImVec2(x1 - Dp(12.0f + 64.0f), y0 + Dp(5.0f)));
+    const bool addClicked = Button("##addmodel", Tr("추가"), icon::Plus, ButtonKind::Ghost, ImVec2(64.0f, 30.0f));
+    Tooltip(Tr("캐릭터, 스테이지, 소품, 음원, 곡 추가"));
+    if (addClicked) {
         studioAddPage_ = 0;
         studioAddFilter_[0] = 0;
         ImGui::OpenPopup("##studioadd");
@@ -1757,7 +1765,7 @@ void App::DrawStudioOutliner(float x0, float y0, float x1, float y1) {
         ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + w - Dp(32.0f));
         ImGui::PushStyleColor(ImGuiCol_Text, ImGui::ColorConvertU32ToFloat4(p.ink3));
         PushFont(Font::Regular, size::Caption);
-        ImGui::TextWrapped("%s", Tr("캐릭터, 스테이지, 소품, 음원은 ＋ 버튼으로 라이브러리나 파일에서 추가해요."));
+        ImGui::TextWrapped("%s", Tr("캐릭터, 스테이지, 소품, 음원은 ＋ 추가 버튼으로 라이브러리나 파일에서 추가해요."));
         PopFont();
         ImGui::PopStyleColor();
         ImGui::PopTextWrapPos();
@@ -2421,7 +2429,7 @@ void App::DrawStudioViewport(float x0, float y0, float x1, float y1) {
     }
     if (d.models.empty() && studioJobs_.empty()) {
         const char* t1 = Tr("빈 프로젝트");
-        const char* t2 = Tr("왼쪽 위의 ＋ 버튼으로 캐릭터와 스테이지를 추가하세요");
+        const char* t2 = Tr("왼쪽 위의 ＋ 추가 버튼으로 캐릭터와 스테이지를 추가하세요");
         const ImVec2 s1 = TextSize(Font::Semibold, size::Title, t1), s2 = TextSize(Font::Regular, size::Small, t2);
         const float cx = (x0 + x1) * 0.5f, cy = (y0 + y1) * 0.5f;
         const float bw = std::max(s1.x, s2.x) + Dp(48.0f), bh = s1.y + s2.y + Dp(40.0f);

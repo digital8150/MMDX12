@@ -451,7 +451,7 @@ void App::DrawShaderPackDetail(float x0, float y0, float x1, float y1) {
                 if (!a.url.empty()) {
                     ImGui::SetCursorScreenPos(ImVec2(c.x + w - Dp(32.0f), c.y));
                     ImGui::PushID((int)i);
-                    if (IconButton("##authorlink", icon::LinkSimple, a.url.c_str(), false, 28.0f)) OpenUrl(a.url);
+                    if (IconButton("##authorlink", icon::LinkSimple, (std::string(Tr("웹사이트 열기: ")) + a.url).c_str(), false, 28.0f)) OpenUrl(a.url);
                     ImGui::PopID();
                 }
                 ImGui::SetCursorScreenPos(ImVec2(c.x, c.y + Dp(30.0f)));
@@ -550,11 +550,11 @@ void App::DrawShaderPackDetail(float x0, float y0, float x1, float y1) {
         if (Button("##packdocs", Tr("셰이더 팩 만드는 법"), icon::Info, ButtonKind::Ghost))
             OpenUrl("https://mmdx.codingbot.kr/" + lang + "/docs/shader-packs/");
         ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(Dp(18.0f), Dp(16.0f)));
+        // Para wraps at the window edge, so the auto-sized popup needs a width (else one word per line).
+        ImGui::SetNextWindowSize(ImVec2(Dp(340.0f), 0.0f));
         if (ImGui::BeginPopup("##removeconfirm")) {
             const std::string q = pk->name.Get(lang) + Tr(" 팩을 삭제할까요? 이 팩을 쓰던 캐릭터는 기본 셰이딩으로 돌아갑니다.");
-            ImGui::PushTextWrapPos(Dp(300.0f));
             Para(q, p.ink);
-            ImGui::PopTextWrapPos();
             Gap(10.0f);
             if (Button("##removeyes", Tr("삭제"), icon::Trash, ButtonKind::Danger)) {
                 std::string err;
@@ -751,7 +751,7 @@ void App::DrawRemotePackDetail(float x0, float y0, float x1, float y1) {
             if (!a.url.empty()) {
                 ImGui::SetCursorScreenPos(ImVec2(c.x + w - Dp(32.0f), c.y));
                 ImGui::PushID((int)i);
-                if (IconButton("##authorlink", icon::LinkSimple, a.url.c_str(), false, 28.0f)) OpenUrl(a.url);
+                if (IconButton("##authorlink", icon::LinkSimple, (std::string(Tr("웹사이트 열기: ")) + a.url).c_str(), false, 28.0f)) OpenUrl(a.url);
                 ImGui::PopID();
             }
             ImGui::SetCursorScreenPos(ImVec2(c.x, c.y + Dp(30.0f)));

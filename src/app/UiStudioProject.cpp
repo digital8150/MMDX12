@@ -702,15 +702,24 @@ void App::DrawStudioAddMenu() {
             PopFont();
             Gap(4.0f);
             ImGui::BeginChild("##songlist", ImVec2(0, Dp(300.0f)), ImGuiChildFlags_None, ImGuiWindowFlags_NoBackground);
+            int shown = 0;
             for (int i = 0; i < (int)library_.songs.size(); ++i) {
                 const SongAsset& s = library_.songs[(size_t)i];
                 if (!match(s.displayName, s.id)) continue;
+                ++shown;
                 ImGui::PushID(i);
                 if (MenuItemChip("##song", s.displayName.c_str(), icon::Music)) {
                     ImGui::CloseCurrentPopup();
                     StudioApplyLibrarySong(i);
                 }
                 ImGui::PopID();
+            }
+            if (shown == 0) {
+                PushFont(Font::Regular, size::Small);
+                ImGui::PushStyleColor(ImGuiCol_Text, ImGui::ColorConvertU32ToFloat4(p.ink3));
+                ImGui::TextUnformatted(library_.songs.empty() ? Tr("라이브러리에 없어요") : Tr("검색 결과가 없습니다"));
+                ImGui::PopStyleColor();
+                PopFont();
             }
             ImGui::EndChild();
         }

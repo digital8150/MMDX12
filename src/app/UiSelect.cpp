@@ -216,17 +216,17 @@ void App::AssetContextMenu(const std::vector<std::filesystem::path>& files, bool
             overridden |= ov.byPath.count(rel) > 0;
         }
         std::optional<AssetKind> pick;
-        if (character && Chip("##asstage", Tr("스테이지로 사용"), icon::Mountains, false, -1.0f)) pick = AssetKind::Stage;
-        if (!character && files.size() == 1 && Chip("##aschar", Tr("캐릭터로 사용"), icon::User, false, -1.0f))
+        if (character && MenuItem("##asstage", Tr("스테이지로 사용"), icon::Mountains)) pick = AssetKind::Stage;
+        if (!character && files.size() == 1 && MenuItem("##aschar", Tr("캐릭터로 사용"), icon::User))
             pick = AssetKind::Character;
         Gap(4.0f);
-        if (Chip("##ashide", Tr("숨기기"), icon::EyeSlash, false, -1.0f)) pick = AssetKind::Hidden;
+        if (MenuItem("##ashide", Tr("숨기기"), icon::EyeSlash)) pick = AssetKind::Hidden;
         if (overridden) {
             Gap(4.0f);
-            if (Chip("##asauto", Tr("자동 분류로 되돌리기"), icon::Refresh, false, -1.0f)) pick = AssetKind::Auto;
+            if (MenuItem("##asauto", Tr("자동 분류로 되돌리기"), icon::Refresh)) pick = AssetKind::Auto;
         }
         Gap(4.0f);
-        if (Chip("##asfolder", Tr("탐색기에서 보기"), icon::FolderOpen, false, -1.0f)) {
+        if (MenuItem("##asfolder", Tr("탐색기에서 보기"), icon::FolderOpen)) {
             const std::wstring args = L"/select,\"" + files[0].lexically_normal().wstring() + L"\"";
             ShellExecuteW(nullptr, L"open", L"explorer.exe", args.c_str(), nullptr, SW_SHOWNORMAL);
             ImGui::CloseCurrentPopup();
@@ -492,6 +492,13 @@ void App::DrawSelect() {
                 else dl->AddRect(a0, b0, WithAlpha(p.ink, 0.05f), r);
                 CheckBadge(dl, ImVec2(b0.x - Dp(20.0f), a0.y + Dp(20.0f)), sv);
                 ImGui::PopID();
+            }
+            if (n == 1 && !needle.empty()) {  // only the built-in "no stage" card is left
+                const char* msg = Tr("검색 결과가 없습니다");
+                const ImVec2 ms = TextSize(Font::Semibold, size::Title, msg);
+                Text(dl, Font::Semibold, size::Title, ImVec2(origin.x + (availW - ms.x) * 0.5f, origin.y + ch + Dp(40.0f)),
+                     p.ink2, msg);
+                contentH = std::max(contentH, ch + Dp(100.0f));
             }
         } else {
             const std::string needle = ToLowerAscii(filterSong_);

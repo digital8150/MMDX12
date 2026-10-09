@@ -164,7 +164,7 @@ void App::DrawStudioCameraPanel(float w) {
         ImGui::Dummy(ImVec2(w, Dp(8.0f)));
     };
     // a full-width widget with a square icon button at the right end of the row
-    const float btn = 34.0f, bw = Dp(btn);
+    const float btn = 34.0f, bw = Dp(btn), keyW = 84.0f;
     char buf[160];
     // A camera key is being edited: its fields and curves follow, so the light / shadow sections shrink to their
     // switches (their values and key buttons come back when no camera key is selected).
@@ -211,6 +211,7 @@ void App::DrawStudioCameraPanel(float w) {
         ImGui::SameLine(0, Dp(6.0f));
         if (Button("##fthirds", Tr("3분할"), nullptr, d.showThirds ? ButtonKind::Primary : ButtonKind::Secondary, ImVec2(gw, 30.0f)))
             d.showThirds = !d.showThirds;
+        Tooltip(Tr("화면을 가로·세로 3등분하는 구도 가이드선"));
         ImGui::SameLine(0, Dp(6.0f));
         if (Button("##fsafe", Tr("세이프"), nullptr, d.showSafeFrames ? ButtonKind::Primary : ButtonKind::Secondary, ImVec2(gw, 30.0f)))
             d.showSafeFrames = !d.showSafeFrames;
@@ -251,10 +252,15 @@ void App::DrawStudioCameraPanel(float w) {
         const ImVec2 t0 = ImGui::GetCursorScreenPos();
         Text(cdl, Font::Semibold, size::Small, t0, p.ink2, Tr("조명 트랙"));
         std::snprintf(buf, sizeof(buf), Tr("키 %d개"), (int)d.camera.light.size());
-        const ImVec2 ks = TextSize(Font::Regular, size::Caption, buf);
-        Text(cdl, Font::Regular, size::Caption, ImVec2(t0.x + w - ks.x - Dp(4.0f), t0.y + Dp(2.0f)), p.ink3, buf);
-        ImGui::Dummy(ImVec2(w, Dp(24.0f)));
+        const float tw = TextSize(Font::Semibold, size::Small, Tr("조명 트랙")).x;
+        Text(cdl, Font::Regular, size::Caption, ImVec2(t0.x + tw + Dp(8.0f), t0.y + Dp(2.0f)), p.ink3, buf);
+        ImGui::Dummy(ImVec2(w - Dp(keyW + 8.0f), Dp(24.0f)));
         Tooltip(Tr("카메라 VMD의 조명 키예요. 메인 조명이 VMD와 연동돼 있으면 그 색과 방향을 따라요."));
+        ImGui::SetCursorScreenPos(ImVec2(t0.x + w - Dp(keyW), t0.y - Dp(5.0f)));
+        if (Button("##lightkey", Tr("키 등록"), icon::Plus, ButtonKind::Ghost, ImVec2(keyW, 30.0f)))
+            StudioInsertKeys({RowOf(RowKind::Light)}, d.Frame());
+        Tooltip(Tr("현재 조명을 재생 헤드에 키로 등록"));
+        ImGui::SetCursorScreenPos(ImVec2(t0.x, t0.y + Dp(24.0f)));
         const LightKf cur = StudioCurrentLight();
         const float r = Dp(20.0f);
         const ImVec2 c = ImGui::GetCursorScreenPos();
@@ -267,9 +273,6 @@ void App::DrawStudioCameraPanel(float w) {
         std::snprintf(buf, sizeof(buf), "%.2f, %.2f, %.2f", cur.direction.x, cur.direction.y, cur.direction.z);
         Text(cdl, Font::Regular, size::Caption, ImVec2(tx, c.y + Dp(22.0f)), p.ink3, Tr("방향"));
         Text(cdl, Font::Regular, size::Small, ImVec2(tx + Dp(34.0f), c.y + Dp(21.0f)), p.ink2, buf);
-        ImGui::SetCursorScreenPos(ImVec2(c.x + w - bw, c.y + r - bw * 0.5f));
-        if (IconButton("##lightkey", icon::Plus, Tr("현재 조명을 키로 등록"), false, btn))
-            StudioInsertKeys({RowOf(RowKind::Light)}, d.Frame());
         ImGui::SetCursorScreenPos(c);
         ImGui::Dummy(ImVec2(w, r * 2.0f + Dp(4.0f)));
         ImGui::Dummy(ImVec2(w, Dp(2.0f)));
@@ -290,9 +293,10 @@ void App::DrawStudioCameraPanel(float w) {
         }
         Text(cdl, Font::Regular, size::Small, ImVec2(c.x, c.y + (bw - Dp(16.0f)) * 0.5f),
              d.useShadowTrack && !d.camera.shadow.empty() ? p.ink2 : p.ink3, buf);
-        ImGui::SetCursorScreenPos(ImVec2(c.x + w - bw, c.y));
-        if (IconButton("##shadowkey", icon::Plus, Tr("셀프 섀도 키 등록"), false, btn))
+        ImGui::SetCursorScreenPos(ImVec2(c.x + w - Dp(keyW), c.y + (bw - Dp(30.0f)) * 0.5f));
+        if (Button("##shadowkey", Tr("키 등록"), icon::Plus, ButtonKind::Ghost, ImVec2(keyW, 30.0f)))
             StudioInsertKeys({RowOf(RowKind::Shadow)}, d.Frame());
+        Tooltip(Tr("현재 셀프 섀도 설정을 재생 헤드에 키로 등록"));
         ImGui::SetCursorScreenPos(c);
         ImGui::Dummy(ImVec2(w, bw));
     }
@@ -436,6 +440,7 @@ bool App::DrawStudioCameraKeyFields(float w, RowKind kind, int frame, bool live)
             studioKeyChanged_ = true;
             StudioEndKeyEdit();
         }
+        Tooltip(Tr("MMD의 셀프 섀도 모드예요 (VMD에 그대로 저장돼요). 모드 2는 카메라 가까운 곳의 그림자를 더 선명하게 그려요."));
         ImGui::Dummy(ImVec2(w, Dp(6.0f)));
     }
     float ui = ShadowUiFromVmd(k->distance);

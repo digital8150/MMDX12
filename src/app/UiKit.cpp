@@ -590,7 +590,7 @@ bool SearchField(const char* id, char* buf, size_t bufSize, const char* hint, fl
     if (buf[0]) {
         ImGui::SetCursorScreenPos(ImVec2(origin.x + width - Dp(32.0f), origin.y + Dp(5.0f)));
         ImGui::PushID(id);
-        if (IconButton("clear", icon::X, nullptr, false, 28.0f)) {
+        if (IconButton("clear", icon::X, Tr("검색어 지우기"), false, 28.0f)) {
             buf[0] = 0;
             cleared = true;
         }
@@ -674,7 +674,12 @@ bool MenuItem(const char* id, const char* label, const char* icon, const char* h
     const ImGuiID gid = w->GetID(id);
     const Palette& p = P();
     const float h = Dp(34.0f);
-    const float width = std::max(Dp(40.0f), ImGui::GetContentRegionAvail().x);
+    // Never narrower than icon + label + hint: auto-sized popups have ~0 available width on their first frame,
+    // and sizing to that ellipsized every label away (an icon-only menu).
+    const ImVec2 ls = TextSize(Font::Semibold, size::Small, label);
+    const ImVec2 hs = (hint && *hint) ? TextSize(Font::Regular, size::Caption, hint) : ImVec2(0.0f, 0.0f);
+    const float natural = Dp(20.0f) + (icon ? Dp(26.0f) : 0.0f) + ls.x + (hs.x > 0.0f ? hs.x + Dp(24.0f) : 0.0f);
+    const float width = std::max({Dp(40.0f), natural, ImGui::GetContentRegionAvail().x});
     const ImRect bb(w->DC.CursorPos, ImVec2(w->DC.CursorPos.x + width, w->DC.CursorPos.y + h));
     ImGui::ItemSize(bb);
     if (!ImGui::ItemAdd(bb, gid)) return false;
@@ -692,11 +697,9 @@ bool MenuItem(const char* id, const char* label, const char* icon, const char* h
     }
     float maxX = bb.Max.x - Dp(10.0f);
     if (hint && *hint) {
-        const ImVec2 hs = TextSize(Font::Regular, size::Caption, hint);
         Text(dl, Font::Regular, size::Caption, ImVec2(maxX - hs.x, cy - hs.y * 0.5f), p.ink3, hint);
         maxX -= hs.x + Dp(12.0f);
     }
-    const ImVec2 ls = TextSize(Font::Semibold, size::Small, label);
     TextEllipsis(dl, Font::Semibold, size::Small, ImVec2(x, cy - ls.y * 0.5f), maxX, p.ink, label);
     ImGui::RenderNavCursor(bb, gid);
     return pressed;

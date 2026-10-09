@@ -1650,9 +1650,10 @@ void App::DrawStudioMorphTab(float w) {
         ImGui::PopID();
         ImGui::Dummy(ImVec2(w, Dp(4.0f)));
     }
-    if (pmx.morphs.empty()) {
+    if (pmx.morphs.empty() || (slots[0].empty() && slots[1].empty() && slots[2].empty() && slots[3].empty())) {
         const ImVec2 c = ImGui::GetCursorScreenPos();
-        Text(ImGui::GetWindowDrawList(), Font::Regular, size::Small, c, p.ink3, Tr("이 모델에는 모프가 없어요"));
+        Text(ImGui::GetWindowDrawList(), Font::Regular, size::Small, c, p.ink3,
+             pmx.morphs.empty() ? Tr("이 모델에는 모프가 없어요") : Tr("검색 결과가 없습니다"));
         ImGui::Dummy(ImVec2(w, Dp(24.0f)));
     }
     ImGui::Dummy(ImVec2(w, Dp(12.0f)));

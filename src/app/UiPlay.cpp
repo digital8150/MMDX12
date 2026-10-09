@@ -336,6 +336,11 @@ void App::DrawPlayOverlay() {
         dl->AddRectFilled(ImVec2(x, cy - th * 0.5f), ImVec2(x + vw * settings_.volume, cy + th * 0.5f), p.ink2, th);
         const float hv = Anim(ImGui::GetID("##volhv"), hovered || held);
         if (hv > 0.01f) dl->AddCircleFilled(ImVec2(x + vw * settings_.volume, cy), Dp(6.0f) * hv, p.ink, 24);
+        if (hovered || held) {
+            char vbuf[32];
+            std::snprintf(vbuf, sizeof(vbuf), "%s %d%%", Tr("볼륨"), (int)std::lround(settings_.volume * 100.0f));
+            ImGui::SetTooltip("%s", vbuf);
+        }
         x += vw + Dp(12.0f);
     }
 
@@ -362,11 +367,26 @@ void App::DrawPlayOverlay() {
     {
         const char* lightIcons[] = {icon::Sun, icon::CircleHalf, icon::Sparkle, icon::Moon};
         const std::string tip = std::string(Tr("조명: ")) + LightingPresetName((LightingPreset)settings_.lighting) + " (L)";
+        // a menu of the named presets (clicking used to cycle blindly through them; L still cycles)
         ImGui::SetCursorScreenPos(ImVec2(x, cy - Dp(20.0f)));
-        if (IconButton("##light", lightIcons[settings_.lighting], tip.c_str(), false, 40.0f)) {
-            settings_.lighting = (settings_.lighting + 1) % kLightingPresetCount;
-            settings_.Save(settingsPath_);
+        if (IconButton("##light", lightIcons[settings_.lighting], tip.c_str(), false, 40.0f)) ImGui::OpenPopup("##lightmenu");
+        ImGui::SetNextWindowPos(ImVec2(x, cy - Dp(28.0f)), ImGuiCond_Always, ImVec2(0.0f, 1.0f));
+        ImGui::SetNextWindowSize(ImVec2(Dp(200.0f), 0));
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(Dp(8.0f), Dp(8.0f)));
+        if (ImGui::BeginPopup("##lightmenu")) {
+            for (int i = 0; i < kLightingPresetCount; ++i) {
+                ImGui::PushID(i);
+                const char* hint = i == settings_.lighting ? Tr("사용 중") : nullptr;
+                if (MenuItem("##preset", LightingPresetName((LightingPreset)i), lightIcons[i], hint)) {
+                    settings_.lighting = i;
+                    settings_.Save(settingsPath_);
+                    ImGui::CloseCurrentPopup();
+                }
+                ImGui::PopID();
+            }
+            ImGui::EndPopup();
         }
+        ImGui::PopStyleVar();
         x += Dp(40.0f) + Dp(10.0f);
     }
     // character size (saved per character; for models whose height does not suit the song's camera)

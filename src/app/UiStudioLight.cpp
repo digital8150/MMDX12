@@ -178,17 +178,16 @@ void App::DrawStudioLightOutliner() {
         const ImVec2 b(a.x + w, a.y + headH);
         Text(dl, Font::Semibold, size::Caption, ImVec2(a.x + Dp(16.0f), a.y + Dp(8.0f)), p.ink3, Tr("조명"));
 
-        // Preset menu button
-        ImGui::SetCursorScreenPos(ImVec2(b.x - Dp(56.0f), a.y + Dp(2.0f)));
-        if (IconButton("##lightpresets", icon::Sliders, Tr("조명 프리셋"), false, 28.0f)) {
+        // Preset and add menus: labeled, an icon alone does not say what the menu holds
+        const float addW = 64.0f, presetW = 76.0f;
+        ImGui::SetCursorScreenPos(ImVec2(b.x - Dp(12.0f + addW + 4.0f + presetW), a.y + Dp(1.0f)));
+        if (Button("##lightpresets", Tr("프리셋"), icon::Sliders, ButtonKind::Ghost, ImVec2(presetW, 30.0f)))
             ImGui::OpenPopup("##lightpresetspopup");
-        }
-
-        // Add menu button "+"
-        ImGui::SetCursorScreenPos(ImVec2(b.x - Dp(28.0f), a.y + Dp(2.0f)));
-        if (IconButton("##addlight", icon::Plus, Tr("조명 추가"), false, 28.0f)) {
+        Tooltip(Tr("조명 목록을 프리셋으로 바꾸기"));
+        ImGui::SetCursorScreenPos(ImVec2(b.x - Dp(12.0f + addW), a.y + Dp(1.0f)));
+        if (Button("##addlight", Tr("추가"), icon::Plus, ButtonKind::Ghost, ImVec2(addW, 30.0f)))
             ImGui::OpenPopup("##addlightpopup");
-        }
+        Tooltip(Tr("조명 추가: 점광원, 스팟, 면광원"));
 
         if (ImGui::BeginPopup("##lightpresetspopup")) {
             if (MenuItem("##pre_0", Tr("스튜디오"), icon::Sun)) {
@@ -245,6 +244,13 @@ void App::DrawStudioLightOutliner() {
 
         ImGui::SetCursorScreenPos(ImVec2(a.x, b.y));
         ImGui::Dummy(ImVec2(w, 0.0f));
+    }
+
+    if (d.lights.empty()) {
+        const ImVec2 c = ImGui::GetCursorScreenPos();
+        Text(dl, Font::Regular, size::Caption, ImVec2(c.x + Dp(16.0f), c.y + Dp(4.0f)), p.ink3,
+             Tr("조명이 없어요. 추가 또는 프리셋으로 넣으세요."));
+        ImGui::Dummy(ImVec2(w, Dp(26.0f)));
     }
 
     // Light rows
@@ -660,7 +666,7 @@ void App::DrawStudioLightInspector(float w) {
         ImGui::Dummy(ImVec2(w, Dp(6.0f)));
 
         if (light->aimMode == AimMode::Target) {
-            std::string currentTargetName = Tr("퍼포머");
+            std::string currentTargetName = Tr("메인 캐릭터 (자동)");
             if (light->targetUid != 0) {
                 const int idx = d.IndexOfUid(light->targetUid);
                 if (idx >= 0) currentTargetName = d.models[(size_t)idx]->name;
@@ -668,7 +674,7 @@ void App::DrawStudioLightInspector(float w) {
             row(Tr("타겟 캐릭터"), [&] {
                 if (ImGui::BeginCombo("##targetchar", currentTargetName.c_str())) {
                     const bool selPerformer = (light->targetUid == 0);
-                    if (ImGui::Selectable(Tr("퍼포머"), selPerformer)) {
+                    if (ImGui::Selectable(Tr("메인 캐릭터 (자동)"), selPerformer)) {
                         if (light->targetUid != 0) {
                             std::vector<SceneLight> before = d.lights;
                             std::vector<SceneLight> after = before;
