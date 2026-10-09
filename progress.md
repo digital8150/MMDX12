@@ -1056,3 +1056,34 @@ smoke review); Claude did the review, publish, the engine fixes and both outline
 ### Not verified / notes
 - The effects popup and the overlay changes were not re-checked visually this session.
 - While a camera key is selected, auto-key is reachable from the transport bar only (the panel's switch hides with the section).
+
+## 2026-10-09 (17) — soft shadows that are actually soft (PCSS raster, one softness scale), concert spots Soft
+
+### Done
+- Feedback: "Soft" shadows were not soft enough. Raster Soft was a fixed 1.6-6.4 texel blur of the sun cascade (a few mm in
+  cascade 0, near-identical to Hard) and 3 texels for spots / points; the ray paths capped at ~5.7 degrees, each with its
+  own slider mapping, and the PT shader-pack sun ignored softness.
+- One scale everywhere (`common.hlsli` `SoftShadowAngle` / `SoftShadowConeCos`): softness 0..1 widens the light's angular
+  radius from the path's Hard light to 15 degrees with a 1.5 power (0.5 = 5.3 degrees). Used by RT (sun + points), PT (sun,
+  pack sun, punctual), offline GI (sun, punctual).
+- Raster Soft = PCSS (mmd.hlsl `PcssBlocker` / `PcssFilter` / `PerspectivePcss`): 16-tap blocker search, 32-tap Vogel PCF
+  sized from the same angle (contact hardening), receiver-slope bias per tap, radius capped at 0.04 uv (`kPcssMaxUv`).
+  Sun cascades are orthographic: depth range = 2 * radius + reach, the reach now passed in `cascadeTexel.w`. Spots and point
+  faces linearise their perspective depth. Hard and area-light PCSS are unchanged; `shadowParams.z` is always 1.6.
+- RT Soft sun traces 4 rays instead of 2 (wider cone, less grain).
+- The concert preset's six spots are Soft (play mode `BuildLighting` and the studio `PresetLights`; the render benchmark
+  keeps its own lights). `studio_light_test` updated to the new rule.
+- Committed separately (work already in the tree): UI clarity pass (labeled project / render / add / preset buttons,
+  tooltips, play-bar lighting preset menu, MenuItem width fix for auto-sized popups, empty search / empty light list
+  messages, "메인 캐릭터 (자동)" label, translations).
+
+### Verified
+- Studio raster capture Hard / Soft 0.5 / Soft 1.0 (temp project, free camera): progressively softer floor shadow, sharp at
+  the feet; no acne or noise on the character. PT capture and a 960x540 GI still at Soft 1.0 render with no `[E]` lines.
+- Concert preset play mode in raster and RT: renders, no shader errors.
+- `studio_light_test` 106 / 106, `studio_project_test` 146 / 146.
+
+### Not verified / notes
+- The concert spots' soft shadows were not seen up close (the captured frames' camera hid them).
+- Existing Soft scenes look softer than before (intended); saved studio projects keep their own light settings.
+- Raster PCSS rotation is per pixel and static (no TAA dependence); very wide penumbrae near the camera hit the 0.04 uv cap.

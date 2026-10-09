@@ -224,6 +224,7 @@ std::vector<SceneLight> PresetLights(int presetIndex, DirectX::XMFLOAT3 focus, u
             s.v.coneInner = 0.15f;
             s.aimMode = AimMode::Sway;
             s.swayPhase = (float)i * 1.3f;
+            s.shadow = ShadowType::Soft;   // as the play-mode preset (app/Lighting.cpp)
             out.push_back(std::move(s));
         }
         SceneLight fill;

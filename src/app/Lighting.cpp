@@ -107,6 +107,7 @@ void BuildLighting(LightingPreset preset, double t, const DirectX::XMFLOAT3& foc
             s.intensity = 2.6f;
             s.spotCosOuter = std::cos(0.24f);
             s.spotCosInner = std::cos(0.15f);
+            s.shadow = LightShadowType::Soft;   // stage spots: soft-edged shadows (default softness)
             out.punctual.push_back(s);
         }
         // a warm front fill so faces never go dark between spot passes

@@ -115,6 +115,65 @@ static const float2 kPoisson[12] = {
     float2(0.507, 0.064), float2(0.896, 0.412), float2(-0.322, -0.933), float2(-0.792, -0.598)
 };
 
+// ---- soft shadows (PCSS) ----
+// Soft shadow maps match the ray paths' cone (SoftShadowAngle): a blocker search, then a PCF disk as wide as the
+// penumbra an angular light of that size casts from the average blocker distance (contact hardening).
+static const float kPcssMaxUv = 0.04;   // widest PCF radius (shadow-map uv): ~80 texels of a 2048 map
+
+// Vogel disk tap k of n, rotated: even coverage at any radius.
+float2 VogelTap(int k, int n, float rot) {
+    float a = (float)k * 2.39996323 + rot;
+    return float2(cos(a), sin(a)) * sqrt(((float)k + 0.5) / (float)n);
+}
+
+// Mean raw depth of the texels nearer to the light than z within searchUv, -1 without any.
+float PcssBlocker(Texture2DArray<float> map, float2 uv, float slice, float z, float searchUv, float rot, float mapSize) {
+    float sum = 0, count = 0;
+    [unroll] for (int k = 0; k < 16; ++k) {
+        float2 suv = saturate(uv + VogelTap(k, 16, rot) * searchUv);
+        float d = map.Load(int4(min((int2)(suv * mapSize), (int)mapSize - 1), (int)slice, 0));
+        if (d < z) { sum += d; count += 1.0; }
+    }
+    return count > 0.0 ? sum / count : -1.0;
+}
+
+// PCF disk; zPerUv lowers each tap's reference along the receiver's slope so wide kernels don't shadow their own surface.
+float PcssFilter(Texture2DArray<float> map, float2 uv, float slice, float z, float radiusUv, float zPerUv, float rot) {
+    float sum = 0;
+    [unroll] for (int k = 0; k < 32; ++k) {
+        float2 o = VogelTap(k, 32, rot);
+        sum += map.SampleCmpLevelZero(gShadowCmp, float3(uv + o * radiusUv, slice), z - length(o) * radiusUv * zPerUv);
+    }
+    return sum / 32.0;
+}
+
+// tan of the angle between the receiver and the light direction (the slope a wide kernel sees), capped.
+float ReceiverSlope(float ndl) {
+    float c = clamp(ndl, 0.25, 1.0);
+    return sqrt(1.0 - c * c) / c;
+}
+
+// PCSS on a perspective depth slice (spot cone, point-light face): a world length w at view depth d covers
+// w / (2 d tanHalf) of its uv.
+float PerspectivePcss(Texture2DArray<float> map, float2 uv, float slice, float z, float nearZ, float farZ, float tanHalf,
+                      float softness, float ndl, float rot, float invMapSize) {
+    float tanA = tan(SoftShadowAngle(0.0, softness));
+    float minUv = 0.75 * invMapSize;
+    float d = nearZ * farZ / max(farZ - z * (farZ - nearZ), 1e-4);
+    float worldPerUv = 2.0 * d * tanHalf;
+    float searchUv = clamp(tanA / (2.0 * tanHalf), minUv, kPcssMaxUv);
+    float zb = PcssBlocker(map, uv, slice, z, searchUv, rot, 1.0 / invMapSize);
+    if (zb < 0.0) return 1.0;
+    float db = nearZ * farZ / max(farZ - zb * (farZ - nearZ), 1e-4);
+    float radius = clamp(max(d - db, 0.0) * tanA / worldPerUv, minUv, kPcssMaxUv);
+    float zPerUv = worldPerUv * ReceiverSlope(ndl) * farZ * nearZ / ((farZ - nearZ) * d * d);
+    return PcssFilter(map, uv, slice, z, radius, zPerUv, rot);
+}
+
+// Per-position rotation, constant over time: TAA is often off (and always for raster videos), so a per-frame
+// rotation would shimmer.
+float PositionRotation(float3 wp) { return frac(sin(dot(wp, float3(12.9898, 78.233, 37.719))) * 43758.5453) * 6.2831853; }
+
 float ShadowCascade(float3 wp, float3 n, int c, float2 pixel) {
     float3 L = -gLightDir;
     float ndl = saturate(dot(n, L));
@@ -124,6 +183,19 @@ float ShadowCascade(float3 wp, float3 n, int c, float2 pixel) {
     float2 uv = float2(p.x * 0.5 + 0.5, 0.5 - p.y * 0.5);
     if (any(uv < 0.0) || any(uv > 1.0) || p.z > 1.0) return 1.0;
     float a = Ign(pixel) * 6.2831853;
+    if (gSunShadowParams.x > 1.5) {
+        // Soft: orthographic cascade, so depth is linear over (2 * radius + reach) world units
+        float tanA = tan(SoftShadowAngle(0.0, gSunShadowParams.y));
+        float worldPerUv = gCascadeTexel[c] / gShadowParams.x;    // 2 * cascade radius
+        float depthRange = worldPerUv + gCascadeTexel.w;
+        float minUv = gShadowParams.z * gShadowParams.x;
+        float z = p.z - 0.0004;
+        float searchUv = clamp(tanA * 20.0 / worldPerUv, minUv, kPcssMaxUv);   // blockers up to ~20 units away
+        float zb = PcssBlocker(gShadowMap, uv, c, z, searchUv, a, 1.0 / gShadowParams.x);
+        if (zb < 0.0) return 1.0;
+        float radius = clamp((z - zb) * depthRange * tanA / worldPerUv, minUv, kPcssMaxUv);
+        return PcssFilter(gShadowMap, uv, c, z, radius, worldPerUv * ReceiverSlope(ndl) / depthRange, a);
+    }
     float2x2 rot = float2x2(cos(a), -sin(a), sin(a), cos(a));
     float radius = gShadowParams.z * gShadowParams.x;
     float sum = 0;
@@ -152,10 +224,12 @@ float ShadowRt(float3 wp, float3 n, float viewZ, float2 pixel) {
     float3 origin = wp + n * (0.02 + viewZ * 0.0004) + L * 0.01;
     uint rng = RngSeed((uint2)pixel, (uint)gFrameIndex, 7u);
     float vis = 0;
-    float cosCone = (gSunShadowParams.x > 1.5) ? lerp(0.99993, 0.995, gSunShadowParams.y) : 0.99993;
-    [unroll] for (int k = 0; k < 2; ++k)
+    float cosCone = SunShadowConeCos(0.99993);
+    // Soft cones reach 15 degrees: four rays keep the wide penumbra from going grainy
+    int rays = (gSunShadowParams.x > 1.5) ? 4 : 2;
+    [loop] for (int k = 0; k < rays; ++k)
         vis += TraceShadowRay(origin, SampleCone(float2(Rand(rng), Rand(rng)), L, cosCone), 2000.0);
-    return vis * 0.5;
+    return vis / (float)rays;
 }
 #define SHADOW_TERM(wp, n, viewZ, pixel) ShadowRt(wp, n, viewZ, pixel)
 #else
@@ -179,14 +253,11 @@ float SpotShadow(Light l, float3 wp, float3 n, float dist) {
     float3 p = sp.xyz / sp.w;
     float2 uv = float2(p.x * 0.5 + 0.5, 0.5 - p.y * 0.5);
     if (any(uv < 0.0) || any(uv > 1.0) || p.z > 1.0) return 1.0;
-    if (l.shadowType > 1.5) { // Soft
-        float radius = (0.75 + l.shadowSoftness * 2.25) * gSpotShadowParams.y;
-        float sum = 0;
-        [unroll] for (int i = 0; i < 12; ++i) {
-            float2 o = kPoisson[i] * radius;
-            sum += gSpotShadowMap.SampleCmpLevelZero(gShadowCmp, float3(uv + o, slice), p.z - 0.00002);
-        }
-        return sum / 12.0;
+    if (l.shadowType > 1.5) { // Soft: PCSS over the spot's frustum (Renderer.cpp: fov, near, far)
+        float range = 1.0 / max(l.invRange, 1e-4);
+        float tanHalf = tan(min(acos(clamp(l.cosOuter, -0.99, 1.0)) * 1.08 + 0.01, 1.4835));
+        return PerspectivePcss(gSpotShadowMap, uv, slice, p.z - 0.00002, max(0.05, range * 0.004), max(range, 1.0), tanHalf,
+                               l.shadowSoftness, dot(n, ld), PositionRotation(wp), gSpotShadowParams.y);
     } else { // Hard (today)
         float r = 0.75 * gSpotShadowParams.y;
         float sum = 0;
@@ -287,14 +358,9 @@ float PointShadow(Light l, float3 wp, float3 n, float dist) {
             sum += gPointShadowMap.SampleCmpLevelZero(gShadowCmp, float3(uv + o2, slice), pz - 0.00002);
         }
         return sum / 24.0;
-    } else if (l.shadowType > 1.5) { // Soft
-        float radius = (0.75 + l.shadowSoftness * 2.25) * invMapSize;
-        float sum = 0;
-        [unroll] for (int i = 0; i < 12; ++i) {
-            float2 o = kPoisson[i] * radius;
-            sum += gPointShadowMap.SampleCmpLevelZero(gShadowCmp, float3(uv + o, slice), pz - 0.00002);
-        }
-        return sum / 12.0;
+    } else if (l.shadowType > 1.5) { // Soft: PCSS over the 90-degree face
+        return PerspectivePcss(gPointShadowMap, uv, slice, pz - 0.00002, nearZ, farZ, 1.0, l.shadowSoftness, dot(n, ld),
+                               PositionRotation(wp), invMapSize);
     } else { // Hard
         float r = 0.75 * invMapSize;
         float sum = 0;
@@ -335,7 +401,7 @@ float PointShadowRt(Light l, float3 wp, float3 n, float dist, uint lightIndex) {
         }
         return vis * 0.5;
     }
-    float cosCone = (l.shadowType > 1.5) ? lerp(0.99993, 0.995, l.shadowSoftness) : 0.99993;
+    float cosCone = (l.shadowType > 1.5) ? SoftShadowConeCos(0.99993, l.shadowSoftness) : 0.99993;
     [unroll] for (int k = 0; k < 2; ++k) {
         float3 rayDir = SampleCone(float2(Rand(rng), Rand(rng)), ld, cosCone);
         vis += TraceShadowRayMasked(origin, rayDir, max(dist - 0.05, 0.0), RT_MASK_CHARACTER);

@@ -174,7 +174,7 @@ void CSPathTrace(uint3 id : SV_DispatchThreadID) {
                         float sh = 1.0;
                         if (!diffuseChain) {
                             if (receive && gShadowParams.w < 0.5) {
-                                float3 sd = SampleCone(float2(Rand(rng), Rand(rng)), -gLightDir, kSunCosMax);
+                                float3 sd = SampleCone(float2(Rand(rng), Rand(rng)), -gLightDir, SunShadowConeCos(kSunCosMax));
                                 sh = TraceShadowRay(OffsetRayOrigin(pos, faceN), sd, 1e5);
                             }
                             packIn.sunVis = sh;
@@ -215,7 +215,7 @@ void CSPathTrace(uint3 id : SV_DispatchThreadID) {
                         flat = (g.flags & MAT_FLAT) ? 1.0 : 0.0;
                         float sh = 1.0;
                         if (receive && gShadowParams.w < 0.5 && gSunShadowParams.x > 0.5) {
-                            float cosMax = (gSunShadowParams.x > 1.5) ? lerp(kSunCosMax, 0.995, gSunShadowParams.y) : kSunCosMax;
+                            float cosMax = SunShadowConeCos(kSunCosMax);
                             float3 sd = SampleCone(float2(Rand(rng), Rand(rng)), -gLightDir, cosMax);
                             sh = TraceShadowRay(OffsetRayOrigin(pos, faceN), sd, 1e5);
                         }
@@ -256,7 +256,7 @@ void CSPathTrace(uint3 id : SV_DispatchThreadID) {
             float3 L = -gLightDir;
             float ndl = dot(n, L);
             if (!toon && ndl > 0.0 && dot(faceN, L) > 0.0) {
-                float cosMax = (gSunShadowParams.x > 1.5) ? lerp(kSunCosMax, 0.995, gSunShadowParams.y) : kSunCosMax;
+                float cosMax = SunShadowConeCos(kSunCosMax);
                 float3 sd = SampleCone(float2(Rand(rng), Rand(rng)), L, cosMax);
                 float rawVis = receive && gShadowParams.w < 0.5 && gSunShadowParams.x > 0.5
                                    ? TraceShadowRay(OffsetRayOrigin(pos, faceN), sd, 1e5)
@@ -309,7 +309,7 @@ void CSPathTrace(uint3 id : SV_DispatchThreadID) {
                         if (l.shadowType > 0.5) {
                             float3 rayDir = ld;
                             if (l.isArea <= 0.5 && l.shadowType > 1.5) {
-                                float cosCone = lerp(0.9999, 0.985, l.shadowSoftness);
+                                float cosCone = SoftShadowConeCos(0.9999, l.shadowSoftness);
                                 rayDir = SampleCone(float2(Rand(rng), Rand(rng)), ld, cosCone);
                             }
                             rawVis = TraceShadowRayMasked(OffsetRayOrigin(pos, faceN), rayDir, max(dist - 0.05, 0.0),

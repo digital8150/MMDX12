@@ -395,12 +395,9 @@ void Renderer::FillSceneConstants(const FrameView& view, uint32_t w, uint32_t h,
     sc.spotShadowParams = {(float)spotSlices, 1.0f / (float)std::max(targets_.spotShadowMap.width, 1u), 0, 0};
     const bool sunShadowsOff = view.shadowsOff || (view.light.sunShadow == LightShadowType::NoCast);
     sc.cascadeSplits = {splits[1], splits[2], splits[3], settings_.shadows && !sunShadowsOff ? 1.0f : 0.0f};
-    float sunSoftnessTexels = 1.6f;
-    if (view.light.sunShadow == LightShadowType::Soft) {
-        sunSoftnessTexels = 1.6f + std::clamp(view.light.sunShadowSoftness, 0.0f, 1.0f) * 4.8f;
-    }
-    sc.shadowParams = {1.0f / mapSize, 1.2f, sunSoftnessTexels, sunShadowsOff ? 1.0f : 0.0f};  // w: path tracer sun shadows off
-    sc.cascadeTexel = {texel[0], texel[1], texel[2], 0};
+    // z: the Hard filter radius in texels (also Soft's narrowest; Soft's PCSS widens it from the softness, mmd.hlsl)
+    sc.shadowParams = {1.0f / mapSize, 1.2f, 1.6f, sunShadowsOff ? 1.0f : 0.0f};  // w: path tracer sun shadows off
+    sc.cascadeTexel = {texel[0], texel[1], texel[2], back};
     sc.sunShadowParams = {(float)(uint8_t)view.light.sunShadow, view.light.sunShadowSoftness, view.light.sunShadowDensity, 0.0f};
     sc.sunShadowColor = {view.light.sunShadowColor.x, view.light.sunShadowColor.y, view.light.sunShadowColor.z, 0.0f};
     uint32_t pointCount = 0;

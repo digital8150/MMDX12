@@ -174,19 +174,20 @@ static void TestPresetStructure() {
               concert[8].v.range == 120.0f,
           "concert fill light position, intensity, range");
 
-    // the defaults of the common properties: every light Hard except the concert fill (NoCast), falloff None
+    // the defaults of the common properties: Hard, except the concert spots (Soft) and fill (NoCast), falloff None
     bool shadows = true, falloff = true, common = true;
     for (int p = 0; p < kLightingPresetCount; ++p) {
         next = 1;
         for (const SceneLight& l : PresetLights(p, focus, next)) {
             const bool fill = (p == 2 && l.kind == LightKind::Point);
-            shadows = shadows && l.shadow == (fill ? ShadowType::NoCast : ShadowType::Hard);
+            const bool spot = (p == 2 && l.kind == LightKind::Spot);
+            shadows = shadows && l.shadow == (fill ? ShadowType::NoCast : spot ? ShadowType::Soft : ShadowType::Hard);
             falloff = falloff && l.falloff == FalloffType::None;
             common = common && l.shadowSoftness == 0.5f && l.shadowDensity == 1.0f && Same3(l.shadowColor, {0, 0, 0}) &&
                      l.affectDiffuse && l.affectSpecular && l.viewportVisible;
         }
     }
-    Check(shadows, "preset lights: every light Hard, the concert fill NoCast");
+    Check(shadows, "preset lights: Hard, the concert spots Soft, the concert fill NoCast");
     Check(falloff, "preset lights: falloff None");
     Check(common, "preset lights: softness 0.5, density 1, black shadow colour, affect diffuse / specular, visible");
     Check(concert[0].vmdLink && concert[0].shadow == ShadowType::Hard && concert[1].shadow == ShadowType::Hard,

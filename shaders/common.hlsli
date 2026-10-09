@@ -25,7 +25,7 @@ cbuffer SceneCB : register(b0) {
     float4x4 gShadowViewProj[3];
     float4 gCascadeSplits;   // view z far of cascade 0..2, w = shadows on
     float4 gShadowParams;    // x = 1/size, y = normal offset scale, z = softness (texels)
-    float4 gCascadeTexel;    // world size of one shadow texel per cascade
+    float4 gCascadeTexel;    // xyz: world size of one shadow texel per cascade, w = depth reach behind each cascade
     float3 gEyePos;      float gTime;
     float3 gLightDir;    float gSunIntensity;
     float3 gLightColor;  float gHemiStrength;
@@ -116,9 +116,17 @@ float PunctualFalloff(float dist, float invRange, float falloffType) {
     }
 }
 
+// Soft shadows (sun and punctual lights, every path): softness 0..1 widens the light's angular radius from the
+// path's hard light (`baseAngle`) to 15 degrees. The 1.5 power keeps the low end fine (0.5 = 5.3 degrees).
+static const float kSoftShadowMaxAngle = 0.2618;
+float SoftShadowAngle(float baseAngle, float softness) {
+    return lerp(baseAngle, kSoftShadowMaxAngle, pow(saturate(softness), 1.5));
+}
+float SoftShadowConeCos(float baseCos, float softness) { return cos(SoftShadowAngle(acos(baseCos), softness)); }
+
 // Sun shadow cone for the ray paths: Hard keeps `baseCos` (each path's own sun disc), Soft widens it with softness.
 float SunShadowConeCos(float baseCos) {
-    return (gSunShadowParams.x > 1.5) ? lerp(baseCos, 0.995, saturate(gSunShadowParams.y)) : baseCos;
+    return (gSunShadowParams.x > 1.5) ? SoftShadowConeCos(baseCos, gSunShadowParams.y) : baseCos;
 }
 
 // Shared shadow transmission factoring in density and shadow colour tint.
