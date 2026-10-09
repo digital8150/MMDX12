@@ -617,7 +617,7 @@ void App::DrawStudioCameraPath(float x0, float y0, float x1, float y1) {
     const int k0 = (int)(std::lower_bound(keys.begin(), keys.end(), lo, byFrame) - keys.begin());
     const int k1 = (int)(std::lower_bound(keys.begin(), keys.end(), hi + 1, byFrame) - keys.begin());
     std::set<int> selected;
-    if (d.selectedModel < 0) {
+    if (d.selectedModel < 0 && d.selectedLightUid == 0) {
         const uint64_t row = RowOf(RowKind::Camera);
         for (int i = k0; i < k1; ++i)
             if (d.selection.count({row, keys[(size_t)i].frame})) selected.insert(i - k0);
@@ -673,7 +673,7 @@ void App::StudioCameraPathWindow(int& lo, int& hi) const {
 
 bool App::StudioPickCameraKey(ImVec2 mouse) {
     StudioDoc& d = *studio_;
-    if (d.selectedModel >= 0 || !d.showCameraPath || (d.useMotionCamera && d.cameraEval) || !d.cameraEval) return false;
+    if (d.selectedModel >= 0 || d.selectedLightUid != 0 || !d.showCameraPath || (d.useMotionCamera && d.cameraEval) || !d.cameraEval) return false;
     StudioUpdateCameraPath();
     int lo, hi;
     StudioCameraPathWindow(lo, hi);

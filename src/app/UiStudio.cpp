@@ -1091,6 +1091,8 @@ void App::StudioHandleTimeline(const TimelineEvents& ev) {
             d.selection.clear();
             selectRowKeys(id, true);
             d.rowAnchor = id;
+            if (RowKindOf(id) == RowKind::SceneLight) StudioSelectLight(RowIndexOf(id));
+            else if (IsCameraKind(RowKindOf(id))) d.selectedLightUid = 0;
         }
         // bone rows also pick the bones for the viewport (the clicked one gets the gizmo)
         d.selectedBones.clear();
@@ -1476,6 +1478,7 @@ void App::DrawStudio() {
     DrawStudioUnsavedPrompt();
     if (studio_.get() != &d) return;  // left (or replaced) from the prompt
     DrawStudioHelp();
+    DrawStudioLightPresetConfirm();
     DrawVideoRenderDialog();   // the render dialog (top bar render menu); starting it leaves for Screen::Offline
     if (screen_ != Screen::Studio) return;
     DrawToast();
@@ -1619,7 +1622,7 @@ void App::DrawStudioOutliner(float x0, float y0, float x1, float y1) {
         const ImVec2 a = ImGui::GetCursorScreenPos();
         const float w = ImGui::GetContentRegionAvail().x;
         const ImVec2 b(a.x + w, a.y + rowH);
-        const bool selected = d.selectedModel == index;
+        const bool selected = index == -1 ? (d.selectedModel == -1 && d.selectedLightUid == 0) : (d.selectedModel == index);
         ImGui::InvisibleButton("##row", ImVec2(w - Dp(index >= 0 ? 72.0f : 40.0f), rowH));
         const bool hovered = ImGui::IsItemHovered();
         if (index >= 0 && hovered) Tooltip(PathToUtf8(d.models[index]->path).c_str());
@@ -1671,6 +1674,7 @@ void App::DrawStudioOutliner(float x0, float y0, float x1, float y1) {
     std::snprintf(sub, sizeof(sub), Tr("키 %d개"),
                   (int)(d.camera.camera.size() + d.camera.light.size() + d.camera.shadow.size()));
     row(-1, icon::VideoCamera, Tr("카메라 VMD"), sub, nullptr);
+    DrawStudioLightOutliner();
     // characters first (they are what gets animated), then props, then stage parts
     for (int pass = 0; pass < 3; ++pass) {
         const ModelKind kind = pass == 0 ? ModelKind::Character : pass == 1 ? ModelKind::Prop : ModelKind::Stage;
@@ -1777,6 +1781,11 @@ void App::DrawStudioInspector(float x0, float y0, float x1, float y1) {
 
     // target
     {
+        if (d.selectedLightUid != 0) {
+            DrawStudioLightInspector(w);
+            ImGui::EndChild();
+            return;
+        }
         const ImVec2 c = ImGui::GetCursorScreenPos();
         const StudioModel* m = d.Selected();
         TextEllipsis(cdl, Font::Semibold, size::Body, c, c.x + w, p.ink, m ? m->name.c_str() : Tr("카메라 VMD"));

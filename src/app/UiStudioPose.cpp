@@ -582,7 +582,7 @@ void App::StudioViewportCameraHandles(bool hovered) {
     StudioDoc& d = *studio_;
     ImGuiIO& io = ImGui::GetIO();
     const bool free = !(d.useMotionCamera && d.cameraEval);
-    if (d.selectedModel >= 0 || d.possessCamera || !free || !d.cameraEval || d.camera.camera.empty() || d.playing) {
+    if (d.selectedModel >= 0 || d.selectedLightUid != 0 || d.possessCamera || !free || !d.cameraEval || d.camera.camera.empty() || d.playing) {
         if (studioViewDrag_ == 7) studioViewDrag_ = 0;
         studioCamHandle_ = 0;
         return;

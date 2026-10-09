@@ -343,6 +343,14 @@ private:
     void DrawStudioCameraPanel(float w);             // view / light / shadow sections of the camera inspector
     // true: no curve editor follows. live (camera only): the playhead's fields, shown with or without a key
     bool DrawStudioCameraKeyFields(float w, studio::RowKind kind, int frame, bool live = false);
+    // --- scene light editing (UiStudioLight.cpp)
+    void StudioSelectLight(uint32_t uid);
+    void StudioAddLight(studio::LightKind kind);
+    void DrawStudioLightOutliner();
+    void DrawStudioLightInspector(float w);
+    void DrawStudioLightPresetConfirm();
+    void StudioBeginLightEdit(uint32_t uid, bool keyEdit);
+    void StudioEndLightEdit(uint32_t uid);
     void StudioUpdateCameraPath();                   // samples the motion camera (cached per cameraVersion)
     void DrawStudioCameraPath(float x0, float y0, float x1, float y1);
     bool StudioPickCameraKey(ImVec2 mouse);          // click on a key dot of the path: select it and seek
@@ -409,7 +417,7 @@ private:
     DirectX::XMFLOAT3 StudioPerformerCenter() const;  // center bone of the first character (teleport detection)
     void DrawStudioRenderMenu();                      // top bar popup: video / still
     void DrawStudioHelp();                            // shortcut overlay (? key / top bar button)
-    bool StudioModal() const { return videoDialogOpen_ || studioHelpOpen_ || studioLeaveConfirm_; }
+    bool StudioModal() const { return videoDialogOpen_ || studioHelpOpen_ || studioLeaveConfirm_ || studioLightPresetPending_ >= 0; }
 
     // --- scripted UI input for tests (UiScript.cpp)
     void PumpUiScript();  // before ImGui::NewFrame: feeds the events due at framesInScene_
@@ -713,6 +721,14 @@ private:
     std::vector<DirectX::XMFLOAT3> studioCamKeys_;   // eye at each camera key
     uint64_t studioCamPathVersion_ = 0;
     int studioCamPathStride_ = 1;
+    // scene light editing
+    int studioLightPresetPending_ = -1;
+    bool studioLightEdit_ = false;
+    bool studioLightChanged_ = false;
+    bool studioLightIsKeyEdit_ = false;
+    uint32_t studioLightEditingUid_ = 0;
+    std::vector<studio::TrackState> studioLightKeyBefore_;
+    std::vector<studio::SceneLight> studioLightBaseBefore_;
 
     // benchmark
     int benchCategory_ = 0;       // index into kBenchCategories
