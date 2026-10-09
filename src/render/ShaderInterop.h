@@ -8,7 +8,7 @@
 namespace mmdx {
 
 inline constexpr uint32_t kShadowCascades = 3;
-inline constexpr uint32_t kSpotShadowSlices = 8;  // spot lights with a shadow map (the first 8 spots)
+inline constexpr uint32_t kSpotShadowSlices = 16; // one slice per possible light (Renderer::kMaxPunctualLights): no spot cap
 // Raster point shadows: every shadowed point light gets 6 slices (no light cap). Faces stay at
 // kPointShadowMapSize while the map fits the memory of kPointShadowFullResLights lights (twice that
 // at shadow quality 4096); more lights halve the face size, down to kPointShadowMinSize.
@@ -16,7 +16,7 @@ inline constexpr uint32_t kPointShadowFaces = 6;
 inline constexpr uint32_t kPointShadowMapSize = 1024;
 inline constexpr uint32_t kPointShadowMinSize = 256;
 inline constexpr uint32_t kPointShadowFullResLights = 4;
-inline constexpr uint32_t kSceneCbSize = 2048;
+inline constexpr uint32_t kSceneCbSize = 2560;  // 256-aligned slot; 16 spot matrices need > 2048
 
 struct SceneConstants {               // b0, kSceneCbSize-byte slot per frame
     DirectX::XMFLOAT4X4 view;

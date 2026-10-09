@@ -261,7 +261,9 @@ float PointShadow(Light l, float3 wp, float3 n, float dist) {
         float lightSize = 0.5 * (l.areaWidth + l.areaHeight);
         if (l.shadowType > 1.5) lightSize *= 1.0 + l.shadowSoftness * 2.0;
         float mapSize = 1.0 / invMapSize;
-        float rot = frac(sin(dot(wp, float3(12.9898, 78.233, 37.719)) + gFrameIndex * 0.618) * 43758.5453) * 6.2831853;
+        // per-position rotation, constant over time: TAA is usually off (and always for raster videos), so a
+        // per-frame rotation would shimmer
+        float rot = frac(sin(dot(wp, float3(12.9898, 78.233, 37.719))) * 43758.5453) * 6.2831853;
         float2x2 R = float2x2(cos(rot), -sin(rot), sin(rot), cos(rot));
         float searchUv = clamp(lightSize / (2.0 * major), 2.0 * invMapSize, 0.1);
         float blockerSum = 0, blockers = 0;
@@ -276,12 +278,15 @@ float PointShadow(Light l, float3 wp, float3 n, float dist) {
         if (blockers < 0.5) return 1.0;
         float b = blockerSum / blockers;
         float radius = clamp(lightSize * max(major - b, 0.0) / max(b, 1e-3) / (2.0 * major), 0.75 * invMapSize, 0.1);
+        // 24 taps (the Poisson set and its 90-degree turn at 0.7 of the radius) keep wide penumbrae smooth
         float sum = 0;
         [unroll] for (int k = 0; k < 12; ++k) {
             float2 o = mul(kPoisson[k], R) * radius;
             sum += gPointShadowMap.SampleCmpLevelZero(gShadowCmp, float3(uv + o, slice), pz - 0.00002);
+            float2 o2 = float2(-o.y, o.x) * 0.7;
+            sum += gPointShadowMap.SampleCmpLevelZero(gShadowCmp, float3(uv + o2, slice), pz - 0.00002);
         }
-        return sum / 12.0;
+        return sum / 24.0;
     } else if (l.shadowType > 1.5) { // Soft
         float radius = (0.75 + l.shadowSoftness * 2.25) * invMapSize;
         float sum = 0;
@@ -708,7 +713,7 @@ ShadowOut VSShadow(VSIn v) {
     Skin(v, wp3, wn);
     float4 wp = float4(wp3, 1.0);
     float4x4 m = gCascade < 3 ? gShadowViewProj[gCascade]
-               : (gCascade < 11 ? gSpotViewProj[gCascade - 3]
+               : (gCascade < 19 ? gSpotViewProj[gCascade - 3]
                : gPointViewProj);
     o.pos = mul(wp, m);
     o.uv = v.uv;

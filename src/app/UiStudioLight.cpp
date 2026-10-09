@@ -904,7 +904,8 @@ void App::DrawStudioLightInspector(float w) {
         separator(8.0f);
         SectionLabel(Tr("감쇠"));
 
-        const char* falloffs[] = {Tr("없음"), Tr("선형"), Tr("역제곱")};
+        // "None" is the engine's default curve (a range window x 1/(1 + 0.0004 d^2)), not a constant: label it so.
+        const char* falloffs[] = {Tr("기본"), Tr("선형"), Tr("역제곱")};
         int falloff = (int)light->falloff;
         if (Segmented("##falloff", falloffs, 3, &falloff, w / Dpi(), 32.0f)) {
             std::vector<SceneLight> before = d.lights;

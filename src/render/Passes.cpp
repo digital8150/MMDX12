@@ -167,7 +167,7 @@ uint32_t PointShadowCount(const LightParams& light, uint32_t maxLights) {
 }
 
 // Renders every shadow-casting material into one depth slice (matrixIndex = gCascade: 0..2 the sun
-// cascades, 3 + i spot slice i, 11 + i point slice i). Spot/point slices take characters only:
+// cascades, 3 + i spot slice i, 19 + i point slice i). Spot/point slices take characters only:
 // preset lights hang on a truss, and re-drawing the stage per slice would be wasteful.
 void ShadowPass::DrawSlice(PassContext& pc, const Texture& map, uint32_t slice, uint32_t matrixIndex,
                            bool charactersOnly, const DirectX::XMMATRIX* overrideMatrix) {
@@ -260,7 +260,7 @@ void ShadowPass::Execute(PassContext& pc) {
                 for (uint32_t f = 0; f < 6; ++f) {
                     const DirectX::XMMATRIX view = DirectX::XMMatrixLookToLH(eye, kFaces[f].dir, kFaces[f].up);
                     const DirectX::XMMATRIX vp = view * proj;
-                    DrawSlice(pc, point, pointIdx * 6 + f, 11 + pointIdx * 6 + f, true, &vp);
+                    DrawSlice(pc, point, pointIdx * 6 + f, kShadowCascades + kSpotShadowSlices + pointIdx * 6 + f, true, &vp);
                 }
                 ++pointIdx;
             }

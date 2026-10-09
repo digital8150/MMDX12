@@ -337,6 +337,7 @@ const Entry kEnglish[] = {
     {"빠르게 시작", "Fast start"},
     {"선택한 키 %d개", "%d keys selected"},
     {"선택한 키 없음", "No keys selected"},
+    {"기본", "Default"},
     {"선형", "Linear"},
     {"속성", "Properties"},
     {"스테이지", "Stage"},

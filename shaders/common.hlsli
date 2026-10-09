@@ -44,7 +44,7 @@ cbuffer SceneCB : register(b0) {
     float4 gGlassAbsorb;     // xyz absorption per unit
     float4 gSoftbox[8];      // [i * 4 + 0..3]: centre (w = enabled), half U, half V, radiance
     float4 gFloorParams;     // xyz albedo, w = reflectivity (< 0: default floor)
-    float4x4 gSpotViewProj[8];   // spot shadow map slices (Light.pad.x = slice)
+    float4x4 gSpotViewProj[16];   // spot shadow map slices (Light.pad.x = slice)
     float4 gSpotShadowParams;    // x = slices rendered this frame, y = 1/mapSize
     float4 gSunShadowParams;     // x = shadowType (0=NoCast, 1=Hard, 2=Soft), y = softness, z = density, w = unused (sun shadows: only x/y/z are read)
     float4 gSunShadowColor;      // xyz = shadow colour (linear RGB), w = unused
