@@ -1035,3 +1035,24 @@ smoke review); Claude did the review, publish, the engine fixes and both outline
 ### Next
 - App release with the flat-face fix and PT / GI outlines; refresh the website PT / GI docs.
 - Check PT outline + TAA under fast motion, and PT outline cost.
+
+## 2026-10-09 (16) — studio: camera key fields no longer duplicated, effects popup, overlay declutter
+
+### Done
+- Bug: selecting a camera key away from the playhead drew the camera panel's playhead "카메라 값" fields and the inspector's
+  selected-key fields together, with the same widget IDs (ImGui "2 visible items with conflicting ID"). The playhead section
+  now hides while a camera key is selected, and the key section is the only editor, including for a key under the playhead.
+  `DrawStudioCameraKeyFields` pushes separate IDs for the live and key copies.
+- Committed separately (work already in the tree): the studio top bar's screen effects popup (`DrawStudioEffectsMenu`:
+  bloom / DoF / volumetric / SSAO / SSR, LUT chips, effect stack; app-level settings), and overlay changes (bone overlay:
+  smaller minor bones, face bones hidden unless selected, depth fade, chain to the selected bone; camera path only while
+  the camera is selected, fading with frame distance from the playhead).
+
+### Verified
+- `build_dev` headless script (`captures/studio/camdup/`): camera key at frame 503 selected with the playhead at 600 shows
+  one set of fields + the curve editor, no ID warning.
+- Clean rebuild of `build` (`--clean-first`): 0 errors, 0 compiler warnings; `studio_gizmo_test` 19 / 19.
+
+### Not verified / notes
+- The effects popup and the overlay changes were not re-checked visually this session.
+- While a camera key is selected, auto-key is reachable from the transport bar only (the panel's switch hides with the section).
