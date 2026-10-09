@@ -831,7 +831,7 @@ void App::DrawStudioLightInspector(float w) {
             ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + w);
             ImGui::PushStyleColor(ImGuiCol_Text, ImGui::ColorConvertU32ToFloat4(p.ink3));
             PushFont(Font::Regular, size::Caption);
-            ImGui::TextWrapped("%s", Tr("실시간 래스터 방식에는 아직 점광원 그림자가 지원되지 않습니다 (패스 트레이서와 오프라인 GI에서는 투영됩니다)."));
+            ImGui::TextWrapped("%s", Tr("실시간 방식에서는 점광원 4개까지 그림자가 생깁니다. 그 이상은 그림자 없이 비춥니다."));
             PopFont();
             ImGui::PopStyleColor();
             ImGui::PopTextWrapPos();

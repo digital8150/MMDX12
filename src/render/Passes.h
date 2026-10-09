@@ -43,6 +43,13 @@ inline bool SpotShadowsWanted(const RenderSettings& s, RenderPath path, bool off
 // Number of spot shadow slices for these lights (slice i = the i-th spot among the first maxLights).
 uint32_t SpotShadowCount(const LightParams& light, uint32_t maxLights);
 
+// Point shadow maps are rendered for the raster path when shadows are on (RT uses ray queries).
+inline bool PointShadowsWanted(const RenderSettings& s, RenderPath path, bool offscreen) {
+    return s.shadows && (path == RenderPath::Raster);
+}
+// Number of qualifying point lights (at most kPointShadowLights).
+uint32_t PointShadowCount(const LightParams& light, uint32_t maxLights);
+
 class ShadowPass final : public IRenderPass {
 public:
     const char* Name() const override { return "Shadow"; }
@@ -50,7 +57,8 @@ public:
     void Execute(PassContext& pc) override;
 
 private:
-    void DrawSlice(PassContext& pc, const Texture& map, uint32_t slice, uint32_t matrixIndex, bool charactersOnly);
+    void DrawSlice(PassContext& pc, const Texture& map, uint32_t slice, uint32_t matrixIndex, bool charactersOnly,
+                   const DirectX::XMMATRIX* overrideMatrix = nullptr);
     ComPtr<ID3D12RootSignature> rootSig_;
     ComPtr<ID3D12PipelineState> psoOpaque_, psoAlpha_;
 };

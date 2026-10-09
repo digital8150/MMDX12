@@ -663,7 +663,32 @@ static void TestPerLightProperties() {
         Check(pPoint.shadow == LightShadowType::NoCast && pPoint.falloff == LightFalloffType::Linear &&
               pPoint.affectDiffuse && !pPoint.affectSpecular,
               "BuildSceneLighting carries point properties (NoCast, linear falloff, diffuse only)");
+
+        Check(!pSpot.castPointShadow, "BuildSceneLighting does not set castPointShadow for a spot light");
+        Check(!pPoint.castPointShadow, "BuildSceneLighting does not set castPointShadow for a NoCast point light");
     }
+
+    SceneLight pointHard = point;
+    pointHard.uid = 4;
+    pointHard.shadow = ShadowType::Hard;
+    SceneLight pointSoft = point;
+    pointSoft.uid = 5;
+    pointSoft.shadow = ShadowType::Soft;
+    std::vector<SceneLight> testLights = {pointHard, pointSoft};
+    LightParams outHardSoft;
+    BuildSceneLighting(testLights, {}, 0.0, anchors, outHardSoft);
+    Check(outHardSoft.punctual.size() == 2 && outHardSoft.punctual[0].castPointShadow && outHardSoft.punctual[1].castPointShadow,
+          "BuildSceneLighting sets castPointShadow for Hard and Soft point lights");
+
+    bool buildLightingNeverSets = true;
+    for (int p = 0; p < kLightingPresetCount; ++p) {
+        LightParams lp;
+        BuildLighting((LightingPreset)p, 0.0, {0, 0, 0}, lp);
+        for (const PunctualLight& pl : lp.punctual) {
+            if (pl.castPointShadow) buildLightingNeverSets = false;
+        }
+    }
+    Check(buildLightingNeverSets, "BuildLighting never sets castPointShadow");
 }
 
 int main() {

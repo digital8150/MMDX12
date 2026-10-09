@@ -81,6 +81,7 @@ struct RenderTargets {
     // Shadow cascades (owned here so the scene pass can bind them)
     Texture shadowMap;  // R32_TYPELESS array, kShadowCascades slices
     Texture spotShadowMap;  // R32_TYPELESS array, kSpotShadowSlices perspective slices (ShadowPass)
+    Texture pointShadowMap; // R32_TYPELESS array, kPointShadowSlices cubemap face slices (ShadowPass)
     // Outputs of optional passes for this frame (null when the pass is disabled)
     Texture* ao = nullptr;        // R8 (half res), SsaoPass after blur
     Texture* ssr = nullptr;       // RGBA16F (half res), SsrPass

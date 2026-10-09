@@ -58,6 +58,12 @@ bool Texture::Create(Dx12Context& ctx, uint32_t w, uint32_t h, DXGI_FORMAT fmt, 
     }
     if (isDepth) {
         dsv = ctx.DsvHeap().Allocate(arrayCount);
+        if (dsv == DescriptorHeap::kInvalid) {
+            LOG_ERROR("Texture::Create: out of DSV descriptors for %u slices (heap capacity %u, used %u)",
+                      arrayCount, ctx.DsvHeap().Capacity(), ctx.DsvHeap().Used());
+            Release(ctx);
+            return false;
+        }
         for (uint32_t i = 0; i < arrayCount; ++i) {
             D3D12_DEPTH_STENCIL_VIEW_DESC d{};
             d.Format = DXGI_FORMAT_D32_FLOAT;

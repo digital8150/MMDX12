@@ -48,6 +48,7 @@ cbuffer SceneCB : register(b0) {
     float4 gSpotShadowParams;    // x = slices rendered this frame, y = 1/mapSize
     float4 gSunShadowParams;     // x = shadowType (0=NoCast, 1=Hard, 2=Soft), y = softness, z = density, w = unused (sun shadows: only x/y/z are read)
     float4 gSunShadowColor;      // xyz = shadow colour (linear RGB), w = unused
+    float4 gPointShadowParams;   // x = point lights shadowed this frame (0 = none), y = 1/pointMapSize
 };
 
 static const float PI = 3.14159265;

@@ -117,7 +117,7 @@ bool ShadowPass::CreatePipelines(Dx12Context& ctx, const std::filesystem::path& 
     CD3DX12_DESCRIPTOR_RANGE table;
     table.Init(D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 3, 1);
     params[3].InitAsDescriptorTable(1, &table, D3D12_SHADER_VISIBILITY_PIXEL);
-    params[4].InitAsConstants(1, 2, 0, D3D12_SHADER_VISIBILITY_VERTEX);
+    params[4].InitAsConstants(20, 2, 0, D3D12_SHADER_VISIBILITY_VERTEX);
     CD3DX12_STATIC_SAMPLER_DESC sampler(0, D3D12_FILTER_MIN_MAG_MIP_LINEAR);
     CD3DX12_ROOT_SIGNATURE_DESC rs;
     rs.Init(5, params, 1, &sampler, D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT);
@@ -156,11 +156,21 @@ uint32_t SpotShadowCount(const LightParams& light, uint32_t maxLights) {
     return n;
 }
 
+uint32_t PointShadowCount(const LightParams& light, uint32_t maxLights) {
+    uint32_t n = 0;
+    const size_t count = std::min<size_t>(light.punctual.size(), maxLights);
+    for (size_t i = 0; i < count && n < kPointShadowLights; ++i)
+        if (light.punctual[i].spotCosOuter <= -1.0f && light.punctual[i].castPointShadow &&
+            light.punctual[i].shadow != LightShadowType::NoCast)
+            ++n;
+    return n;
+}
+
 // Renders every shadow-casting material into one depth slice (matrixIndex = gCascade: 0..2 the sun
-// cascades, 3 + i spot slice i). Spot slices take characters only: the performers are what cuts
-// shafts out of the beams, and re-drawing the whole stage per spot would cost more than the march.
+// cascades, 3 + i spot slice i, 11 + i point slice i). Spot/point slices take characters only:
+// preset lights hang on a truss, and re-drawing the stage per slice would be wasteful.
 void ShadowPass::DrawSlice(PassContext& pc, const Texture& map, uint32_t slice, uint32_t matrixIndex,
-                           bool charactersOnly) {
+                           bool charactersOnly, const DirectX::XMMATRIX* overrideMatrix) {
     ID3D12GraphicsCommandList* cmd = pc.cmd;
     D3D12_VIEWPORT vp{0, 0, (float)map.width, (float)map.height, 0, 1};
     D3D12_RECT sc{0, 0, (LONG)map.width, (LONG)map.height};
@@ -170,6 +180,11 @@ void ShadowPass::DrawSlice(PassContext& pc, const Texture& map, uint32_t slice, 
     cmd->ClearDepthStencilView(dsv, D3D12_CLEAR_FLAG_DEPTH, 1.0f, 0, 0, nullptr);
     cmd->OMSetRenderTargets(0, nullptr, FALSE, &dsv);
     cmd->SetGraphicsRoot32BitConstant(4, matrixIndex, 0);
+    if (overrideMatrix) {
+        DirectX::XMFLOAT4X4 m;
+        DirectX::XMStoreFloat4x4(&m, *overrideMatrix);
+        cmd->SetGraphicsRoot32BitConstants(4, 16, &m, 4);
+    }
     for (GpuModel* model : pc.view.models) {
         if (!model || (charactersOnly && model->Role() != ModelRole::Character)) continue;
         BindModelBuffers(cmd, *model, pc.frame);
@@ -193,15 +208,19 @@ void ShadowPass::DrawSlice(PassContext& pc, const Texture& map, uint32_t slice, 
 void ShadowPass::Execute(PassContext& pc) {
     Texture& sm = pc.targets.shadowMap;
     Texture& spot = pc.targets.spotShadowMap;
+    Texture& point = pc.targets.pointShadowMap;
     if (!sm) return;
     ID3D12GraphicsCommandList* cmd = pc.cmd;
     const bool cascades = pc.settings.shadows && !pc.view.shadowsOff && (pc.view.light.sunShadow != LightShadowType::NoCast) &&
                           !pc.view.models.empty() && (pc.path == RenderPath::Raster || (pc.settings.volumetric && !pc.offscreen));
-    // must match Renderer::FillSceneConstants (spotShadowParams.x)
+    // must match Renderer::FillSceneConstants (spotShadowParams.x / pointShadowParams.x)
     const uint32_t spots = (spot && SpotShadowsWanted(pc.settings, pc.path, pc.offscreen))
                                ? SpotShadowCount(pc.view.light, Renderer::kMaxPunctualLights)
                                : 0;
-    if (cascades || spots) {
+    const uint32_t points = (point && PointShadowsWanted(pc.settings, pc.path, pc.offscreen))
+                                ? PointShadowCount(pc.view.light, Renderer::kMaxPunctualLights)
+                                : 0;
+    if (cascades || spots || points) {
         cmd->SetGraphicsRootSignature(rootSig_.Get());
         cmd->SetGraphicsRootConstantBufferView(0, pc.sceneConstants);
         cmd->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
@@ -218,13 +237,43 @@ void ShadowPass::Execute(PassContext& pc) {
         }
         spot.Transition(cmd, kSrv);
     }
+    if (point) {
+        if (points) {
+            point.Transition(cmd, D3D12_RESOURCE_STATE_DEPTH_WRITE);
+            uint32_t pointIdx = 0;
+            const size_t count = std::min<size_t>(pc.view.light.punctual.size(), Renderer::kMaxPunctualLights);
+            for (size_t i = 0; i < count && pointIdx < kPointShadowLights; ++i) {
+                const PunctualLight& p = pc.view.light.punctual[i];
+                if (p.spotCosOuter > -1.0f || !p.castPointShadow || p.shadow == LightShadowType::NoCast) continue;
+                const float nearZ = std::max(0.05f, p.range * 0.004f);
+                const float farZ = std::max(p.range, 1.0f);
+                const DirectX::XMMATRIX proj = DirectX::XMMatrixPerspectiveFovLH(DirectX::XM_PIDIV2, 1.0f, nearZ, farZ);
+                const DirectX::XMVECTOR eye = DirectX::XMLoadFloat3(&p.position);
+                static const struct { DirectX::XMVECTOR dir; DirectX::XMVECTOR up; } kFaces[6] = {
+                    { DirectX::XMVectorSet( 1, 0, 0, 0), DirectX::XMVectorSet(0, 1, 0, 0) },
+                    { DirectX::XMVectorSet(-1, 0, 0, 0), DirectX::XMVectorSet(0, 1, 0, 0) },
+                    { DirectX::XMVectorSet( 0, 1, 0, 0), DirectX::XMVectorSet(0, 0,-1, 0) },
+                    { DirectX::XMVectorSet( 0,-1, 0, 0), DirectX::XMVectorSet(0, 0, 1, 0) },
+                    { DirectX::XMVectorSet( 0, 0, 1, 0), DirectX::XMVectorSet(0, 1, 0, 0) },
+                    { DirectX::XMVectorSet( 0, 0,-1, 0), DirectX::XMVectorSet(0, 1, 0, 0) },
+                };
+                for (uint32_t f = 0; f < 6; ++f) {
+                    const DirectX::XMMATRIX view = DirectX::XMMatrixLookToLH(eye, kFaces[f].dir, kFaces[f].up);
+                    const DirectX::XMMATRIX vp = view * proj;
+                    DrawSlice(pc, point, pointIdx * 6 + f, 11 + pointIdx * 6 + f, true, &vp);
+                }
+                ++pointIdx;
+            }
+        }
+        point.Transition(cmd, kSrv);
+    }
 }
 
 // ---- ScenePass ---------------------------------------------------------------------------
 
 bool ScenePass::CreatePipelines(Dx12Context& ctx, const std::filesystem::path& shaderDir, uint32_t msaa) {
     ID3D12Device* device = ctx.Device();
-    CD3DX12_ROOT_PARAMETER params[13];
+    CD3DX12_ROOT_PARAMETER params[14];
     params[0].InitAsConstantBufferView(0, 0, D3D12_SHADER_VISIBILITY_ALL);   // SceneConstants
     params[1].InitAsConstantBufferView(1, 0, D3D12_SHADER_VISIBILITY_ALL);   // MaterialConstants
     params[2].InitAsShaderResourceView(0, 0, D3D12_SHADER_VISIBILITY_ALL);    // bones (shader packs read the head)
@@ -251,6 +300,9 @@ bool ScenePass::CreatePipelines(Dx12Context& ctx, const std::filesystem::path& s
     CD3DX12_DESCRIPTOR_RANGE packTexTable;
     packTexTable.Init(D3D12_DESCRIPTOR_RANGE_TYPE_SRV, kPackMaxTextures, 0, 5);
     params[12].InitAsDescriptorTable(1, &packTexTable, D3D12_SHADER_VISIBILITY_ALL);
+    CD3DX12_DESCRIPTOR_RANGE pointTable;
+    pointTable.Init(D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 1, 8);
+    params[13].InitAsDescriptorTable(1, &pointTable, D3D12_SHADER_VISIBILITY_PIXEL); // point shadow maps
 
     CD3DX12_STATIC_SAMPLER_DESC samplers[4];
     samplers[0].Init(0, D3D12_FILTER_ANISOTROPIC, D3D12_TEXTURE_ADDRESS_MODE_WRAP,
@@ -270,7 +322,7 @@ bool ScenePass::CreatePipelines(Dx12Context& ctx, const std::filesystem::path& s
                      D3D12_SHADER_VISIBILITY_PIXEL);
 
     CD3DX12_ROOT_SIGNATURE_DESC rs;
-    rs.Init(13, params, 4, samplers, D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT);
+    rs.Init(14, params, 4, samplers, D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT);
     if (!CreateRootSignature(device, rs, rootSig_, "ScenePass: CreateRootSignature")) return false;
 
     const std::filesystem::path file = shaderDir / L"mmd.hlsl";
@@ -571,6 +623,7 @@ void ScenePass::Execute(PassContext& pc) {
     cmd->SetGraphicsRootSignature(rootSig_.Get());
     cmd->SetGraphicsRootDescriptorTable(5, pc.transient.SrvTable(ctx, {&t.shadowMap}));
     cmd->SetGraphicsRootDescriptorTable(11, pc.transient.SrvTable(ctx, {&t.spotShadowMap}));
+    cmd->SetGraphicsRootDescriptorTable(13, pc.transient.SrvTable(ctx, {&t.pointShadowMap}));
     cmd->SetGraphicsRootShaderResourceView(6, pc.lights);
     if (rt) {
         cmd->SetGraphicsRootShaderResourceView(7, pc.rt->Tlas());

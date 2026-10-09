@@ -93,7 +93,7 @@ public:
 
     DescriptorHeap& SrvHeap() { return srvHeap_; }  // shader-visible CBV/SRV/UAV, capacity 16384
     DescriptorHeap& RtvHeap() { return rtvHeap_; }  // capacity 64
-    DescriptorHeap& DsvHeap() { return dsvHeap_; }  // capacity 16
+    DescriptorHeap& DsvHeap() { return dsvHeap_; }  // capacity 64
 
 private:
     void CreateBackBuffers();

@@ -193,7 +193,9 @@ void BuildSceneLighting(const std::vector<studio::SceneLight>& lights, const std
         p.falloff = (LightFalloffType)l.falloff;
         p.affectDiffuse = l.affectDiffuse;
         p.affectSpecular = l.affectSpecular;
-        if (l.kind == LightKind::Spot) {
+        if (l.kind == LightKind::Point) {
+            p.castPointShadow = (l.shadow != studio::ShadowType::NoCast);
+        } else if (l.kind == LightKind::Spot) {
             DirectX::XMFLOAT3 target = ResolveSpotAim(l, v, t, anchors);
             p.direction = {target.x - v.position.x, target.y - v.position.y, target.z - v.position.z};
             if (p.direction.x * p.direction.x + p.direction.y * p.direction.y + p.direction.z * p.direction.z < 1e-6f)

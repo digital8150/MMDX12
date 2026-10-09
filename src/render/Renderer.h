@@ -94,6 +94,7 @@ public:
 private:
     void EnsureTargets(uint32_t width, uint32_t height, uint32_t outWidth, uint32_t outHeight, uint32_t msaa);
     void EnsureShadowMap(uint32_t size);
+    void EnsurePointShadowMap(const LightParams& light, bool offscreen);
     void ReleaseTargets();
     void CreateBuiltinTextures();
     void ReadGpuTimer();

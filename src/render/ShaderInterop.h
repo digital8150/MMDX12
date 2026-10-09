@@ -9,6 +9,10 @@ namespace mmdx {
 
 inline constexpr uint32_t kShadowCascades = 3;
 inline constexpr uint32_t kSpotShadowSlices = 8;  // spot lights with a shadow map (the first 8 spots)
+inline constexpr uint32_t kPointShadowLights = 4; // point lights with a shadow map (the first 4 point lights)
+inline constexpr uint32_t kPointShadowFaces = 6;
+inline constexpr uint32_t kPointShadowSlices = kPointShadowLights * kPointShadowFaces; // 24 slices
+inline constexpr uint32_t kPointShadowMapSize = 1024;
 inline constexpr uint32_t kSceneCbSize = 2048;
 
 struct SceneConstants {               // b0, kSceneCbSize-byte slot per frame
@@ -46,6 +50,7 @@ struct SceneConstants {               // b0, kSceneCbSize-byte slot per frame
     DirectX::XMFLOAT4 spotShadowParams;  // x = slices rendered this frame (0 = none), y = 1/mapSize
     DirectX::XMFLOAT4 sunShadowParams;   // x = shadowType (0=NoCast, 1=Hard, 2=Soft), y = softness, z = density, w = unused
     DirectX::XMFLOAT4 sunShadowColor;    // xyz = shadow colour (linear RGB), w = unused
+    DirectX::XMFLOAT4 pointShadowParams; // x = point lights shadowed this frame (0 = none), y = 1/pointMapSize
 };
 static_assert(sizeof(SceneConstants) <= kSceneCbSize, "SceneConstants layout");
 
@@ -90,7 +95,8 @@ struct GpuLight {
     DirectX::XMFLOAT3 shadowColor; float falloff;     // falloff: 0 = None, 1 = Linear, 2 = InverseSquare
     float affectDiffuse;         // 1.0 = on, 0.0 = off
     float affectSpecular;        // 1.0 = on, 0.0 = off
-    float _pad[2];
+    float pointShadowSlice;      // point shadow base slice (0, 6, 12, 18), -1 = none
+    float _pad;
 };
 static_assert(sizeof(GpuLight) == 96, "GpuLight layout");
 

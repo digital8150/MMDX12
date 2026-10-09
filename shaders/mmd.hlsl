@@ -42,10 +42,11 @@ struct Light {
     float3 dir; float cosInner;
     float shadowSlice; float shadowType; float shadowSoftness; float shadowDensity;
     float3 shadowColor; float falloff;
-    float affectDiffuse; float affectSpecular; float2 pad;
+    float affectDiffuse; float affectSpecular; float pointShadowSlice; float pad;
 };
 StructuredBuffer<Light> gLights : register(t6);
 Texture2DArray<float> gSpotShadowMap : register(t7);
+Texture2DArray<float> gPointShadowMap : register(t8);
 SamplerState gWrap  : register(s0);
 SamplerState gClamp : register(s1);
 SamplerComparisonState gShadowCmp : register(s2);
@@ -196,6 +197,100 @@ float SpotShadow(Light l, float3 wp, float3 n, float dist) {
     }
 }
 
+// Point shadow map (cube-like depth array, 6 slices per light): major axis determines face,
+// UV and projected depth derived analytically, 2x2 PCF (Hard) or 12 Poisson taps (Soft).
+float PointShadow(Light l, float3 wp, float3 n, float dist) {
+    if (l.shadowType < 0.5 || gPointShadowParams.x < 0.5) return 1.0;
+    float baseSlice = l.pointShadowSlice;
+    if (baseSlice < 0.0) return 1.0;
+
+    float invMapSize = gPointShadowParams.y;
+    float texel = dist * 2.0 * invMapSize;
+    float3 ld = (l.pos - wp) / max(dist, 1e-4);
+    float offset = texel * (2.0 - saturate(dot(n, ld)));
+    float3 d = (wp + n * offset) - l.pos;
+
+    float3 absD = abs(d);
+    uint face = 0;
+    float2 uv = 0.0;
+    float major = 0.0;
+
+    if (absD.x >= absD.y && absD.x >= absD.z) {
+        major = absD.x;
+        if (d.x > 0.0) {
+            face = 0;
+            uv = float2(-d.z, -d.y) / d.x;
+        } else {
+            face = 1;
+            uv = float2(d.z, -d.y) / -d.x;
+        }
+    } else if (absD.y >= absD.x && absD.y >= absD.z) {
+        major = absD.y;
+        if (d.y > 0.0) {
+            face = 2;
+            uv = float2(d.x, d.z) / d.y;
+        } else {
+            face = 3;
+            uv = float2(d.x, -d.z) / -d.y;
+        }
+    } else {
+        major = absD.z;
+        if (d.z > 0.0) {
+            face = 4;
+            uv = float2(d.x, -d.y) / d.z;
+        } else {
+            face = 5;
+            uv = float2(-d.x, -d.y) / -d.z;
+        }
+    }
+    uv = uv * 0.5 + 0.5;
+
+    float range = 1.0 / max(l.invRange, 1e-4);
+    float nearZ = max(0.05, range * 0.004);
+    float farZ = max(range, 1.0);
+    float pz = (farZ / (farZ - nearZ)) * (1.0 - nearZ / max(major, 1e-4));
+    if (pz > 1.0 || pz < 0.0) return 1.0;
+
+    float slice = baseSlice + (float)face;
+    uv = clamp(uv, 0.5 * invMapSize, 1.0 - 0.5 * invMapSize);
+
+    if (l.shadowType > 1.5) { // Soft
+        float radius = (0.75 + l.shadowSoftness * 2.25) * invMapSize;
+        float sum = 0;
+        [unroll] for (int i = 0; i < 12; ++i) {
+            float2 o = kPoisson[i] * radius;
+            sum += gPointShadowMap.SampleCmpLevelZero(gShadowCmp, float3(uv + o, slice), pz - 0.00002);
+        }
+        return sum / 12.0;
+    } else { // Hard
+        float r = 0.75 * invMapSize;
+        float sum = 0;
+        [unroll] for (int k = 0; k < 4; ++k) {
+            float2 o = float2((k & 1) ? r : -r, (k & 2) ? r : -r);
+            sum += gPointShadowMap.SampleCmpLevelZero(gShadowCmp, float3(uv + o, slice), pz - 0.00002);
+        }
+        return sum * 0.25;
+    }
+}
+
+#ifdef RT_SHADOWS
+// Two cone-jittered rays toward the point light, honouring alpha-tested casters.
+float PointShadowRt(Light l, float3 wp, float3 n, float dist, uint lightIndex) {
+    if (l.shadowType < 0.5 || l.pointShadowSlice < 0.0) return 1.0;
+    float3 ld = (l.pos - wp) / max(dist, 1e-4);
+    float3 origin = wp + n * 0.02 + ld * 0.01;
+    uint2 seedCoord = (uint2)abs(float2(wp.x * 37.0 + wp.y * 17.0, wp.z * 37.0 + wp.y * 11.0));
+    uint rng = RngSeed(seedCoord, (uint)gFrameIndex, 17u + lightIndex);
+    float vis = 0;
+    float cosCone = (l.shadowType > 1.5) ? lerp(0.99993, 0.995, l.shadowSoftness) : 0.99993;
+    [unroll] for (int k = 0; k < 2; ++k) {
+        float3 rayDir = SampleCone(float2(Rand(rng), Rand(rng)), ld, cosCone);
+        vis += TraceShadowRayMasked(origin, rayDir, max(dist - 0.05, 0.0), RT_MASK_CHARACTER);
+    }
+    return vis * 0.5;
+}
+#endif
+
 float3 PunctualDiffuse(float3 wp, float3 n, float toonSoft, float flat) {
     float3 sum = 0;
     uint count = (uint)gNumLights;
@@ -208,7 +303,17 @@ float3 PunctualDiffuse(float3 wp, float3 n, float toonSoft, float flat) {
         float atten = PunctualFalloff(dist, l.invRange, l.falloff);
         if (l.cosOuter > -1.0) atten *= smoothstep(l.cosOuter, l.cosInner, dot(-ld, l.dir));
         float rawVis = 1.0;
-        if (atten > 0.0) rawVis = SpotShadow(l, wp, n, dist);
+        if (atten > 0.0) {
+            if (l.cosOuter > -1.0) {
+                rawVis = SpotShadow(l, wp, n, dist);
+            } else {
+#ifdef RT_SHADOWS
+                rawVis = PointShadowRt(l, wp, n, dist, i);
+#else
+                rawVis = PointShadow(l, wp, n, dist);
+#endif
+            }
+        }
         float3 shadowTerm = ShadowTransmission(rawVis, l.shadowDensity, l.shadowColor);
         float ndl = dot(n, ld);
         float diff = lerp(saturate(ndl), smoothstep(-0.05, 0.25, ndl), toonSoft);
@@ -230,7 +335,17 @@ float3 PunctualSpecular(float3 wp, float3 n, float3 V, float power) {
         float atten = PunctualFalloff(dist, l.invRange, l.falloff);
         if (l.cosOuter > -1.0) atten *= smoothstep(l.cosOuter, l.cosInner, dot(-ld, l.dir));
         float rawVis = 1.0;
-        if (atten > 0.0) rawVis = SpotShadow(l, wp, n, dist);
+        if (atten > 0.0) {
+            if (l.cosOuter > -1.0) {
+                rawVis = SpotShadow(l, wp, n, dist);
+            } else {
+#ifdef RT_SHADOWS
+                rawVis = PointShadowRt(l, wp, n, dist, i);
+#else
+                rawVis = PointShadow(l, wp, n, dist);
+#endif
+            }
+        }
         float3 shadowTerm = ShadowTransmission(rawVis, l.shadowDensity, l.shadowColor);
         float3 h = normalize(ld + V);
         sum += l.color * shadowTerm * atten * pow(saturate(dot(n, h)), power) * saturate(dot(n, ld));
@@ -530,7 +645,11 @@ PSOut PSWireFloor(VSOut i) {
 
 // ---- shadow map ------------------------------------------------------------------
 
-cbuffer ShadowCB : register(b2) { uint gCascade; };
+cbuffer ShadowCB : register(b2) {
+    uint gCascade;
+    uint3 gShadowPad;
+    row_major float4x4 gPointViewProj;
+};
 struct ShadowOut { float4 pos : SV_Position; float2 uv : TEXCOORD0; };
 
 ShadowOut VSShadow(VSIn v) {
@@ -538,7 +657,10 @@ ShadowOut VSShadow(VSIn v) {
     float3 wp3, wn;
     Skin(v, wp3, wn);
     float4 wp = float4(wp3, 1.0);
-    o.pos = mul(wp, gCascade < 3 ? gShadowViewProj[gCascade] : gSpotViewProj[gCascade - 3]);
+    float4x4 m = gCascade < 3 ? gShadowViewProj[gCascade]
+               : (gCascade < 11 ? gSpotViewProj[gCascade - 3]
+               : gPointViewProj);
+    o.pos = mul(wp, m);
     o.uv = v.uv;
     return o;
 }

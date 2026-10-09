@@ -220,6 +220,18 @@ void Renderer::EnsureShadowMap(uint32_t size) {
                                   L"shadow.spots", 1, kSpotShadowSlices);
 }
 
+void Renderer::EnsurePointShadowMap(const LightParams& light, bool offscreen) {
+    if (!PointShadowsWanted(settings_, EffectivePath(), offscreen) ||
+        PointShadowCount(light, kMaxPunctualLights) == 0) {
+        return;
+    }
+    if (targets_.pointShadowMap && targets_.pointShadowMap.width == kPointShadowMapSize) return;
+    ctx_->WaitForGpu();
+    targets_.pointShadowMap.Create(*ctx_, kPointShadowMapSize, kPointShadowMapSize, RenderTargets::kDepthFormat,
+                                   D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL, D3D12_RESOURCE_STATE_DEPTH_WRITE,
+                                   L"shadow.points", 1, kPointShadowSlices);
+}
+
 void Renderer::EnsureTargets(uint32_t width, uint32_t height, uint32_t outWidth, uint32_t outHeight, uint32_t msaa) {
     if (targets_.width == width && targets_.height == height && targets_.msaa == msaa && targets_.colorMsaa &&
         targets_.outWidth == outWidth && targets_.outHeight == outHeight)
@@ -384,6 +396,11 @@ void Renderer::FillSceneConstants(const FrameView& view, uint32_t w, uint32_t h,
     sc.cascadeTexel = {texel[0], texel[1], texel[2], 0};
     sc.sunShadowParams = {(float)(uint8_t)view.light.sunShadow, view.light.sunShadowSoftness, view.light.sunShadowDensity, 0.0f};
     sc.sunShadowColor = {view.light.sunShadowColor.x, view.light.sunShadowColor.y, view.light.sunShadowColor.z, 0.0f};
+    uint32_t pointCount = 0;
+    if (targets_.pointShadowMap && PointShadowsWanted(settings_, EffectivePath(), offscreen)) {
+        pointCount = PointShadowCount(view.light, kMaxPunctualLights);
+    }
+    sc.pointShadowParams = {(float)pointCount, 1.0f / (float)std::max(targets_.pointShadowMap.width ? targets_.pointShadowMap.width : kPointShadowMapSize, 1u), 0, 0};
 
     const LightParams& lp = view.light;
     sc.eyePos = cam.eye;
@@ -420,6 +437,7 @@ void Renderer::FillSceneConstants(const FrameView& view, uint32_t w, uint32_t h,
 uint32_t Renderer::FillGpuLights(const LightParams& light, GpuLight* out) {
     const size_t count = std::min<size_t>(light.punctual.size(), kMaxPunctualLights);
     uint32_t spot = 0;
+    uint32_t pointIndex = 0;
     for (size_t i = 0; i < count; ++i) {
         const PunctualLight& p = light.punctual[i];
         GpuLight& g = out[i];
@@ -438,14 +456,20 @@ uint32_t Renderer::FillGpuLights(const LightParams& light, GpuLight* out) {
         g.falloff = (float)(uint8_t)p.falloff;
         g.affectDiffuse = p.affectDiffuse ? 1.0f : 0.0f;
         g.affectSpecular = p.affectSpecular ? 1.0f : 0.0f;
-        g._pad[0] = 0.0f;
-        g._pad[1] = 0.0f;
+        if (p.spotCosOuter <= -1.0f && p.castPointShadow && p.shadow != LightShadowType::NoCast && pointIndex < kPointShadowLights) {
+            g.pointShadowSlice = (float)(pointIndex * 6);
+            ++pointIndex;
+        } else {
+            g.pointShadowSlice = -1.0f;
+        }
+        g._pad = 0.0f;
     }
     return (uint32_t)count;
 }
 
 void Renderer::RecordScene(ID3D12GraphicsCommandList* cmd, const FrameView& view, uint32_t w, uint32_t h,
                            uint32_t cbSlot, uint64_t frame, bool offscreen) {
+    EnsurePointShadowMap(view.light, offscreen);
     SceneConstants sc{};
     FillSceneConstants(view, w, h, offscreen, sc);
     memcpy(sceneCbMapped_ + (size_t)cbSlot * kSceneCbSize, &sc, sizeof(sc));
@@ -860,6 +884,7 @@ void Renderer::Shutdown() {
     ReleaseTargets();
     targets_.shadowMap.Release(*ctx_);
     targets_.spotShadowMap.Release(*ctx_);
+    targets_.pointShadowMap.Release(*ctx_);
     lut_.Release(*ctx_);
     targets_.lut = nullptr;
     passes_.clear();

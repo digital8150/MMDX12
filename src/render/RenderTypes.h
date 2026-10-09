@@ -117,6 +117,7 @@ struct PunctualLight {
     LightFalloffType falloff = LightFalloffType::None;
     bool affectDiffuse = true;
     bool affectSpecular = true;
+    bool castPointShadow = false;  // opt-in point-light shadow; set by BuildSceneLighting (studio only)
 };
 
 struct LightParams {
