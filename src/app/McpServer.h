@@ -48,6 +48,8 @@ struct McpRequest {
     std::shared_ptr<McpPromise> promise;
 };
 
+// The app side of MCP: a named pipe (owner-only) that several clients (bridges) may use at once, each served by its
+// own thread; their requests are queued for the main thread (PopRequests, App::PumpMcp).
 class McpServer {
 public:
     McpServer();
@@ -57,23 +59,31 @@ public:
     void Stop();
 
     bool IsRunning() const { return running_; }
-    bool IsConnected() const { return connected_; }
+    bool IsConnected() const { return clientCount_ > 0; }
+    int ClientCount() const { return clientCount_; }
     std::string PipeName() const { return pipeNameUtf8_; }
 
     std::vector<McpRequest> PopRequests();
 
 private:
-    void WorkerLoop();
+    void ListenLoop(void* firstPipe);
+    void ClientLoop(void* pipe, std::shared_ptr<std::atomic<bool>> done);
+
+    struct Client {
+        std::thread thread;
+        std::shared_ptr<std::atomic<bool>> done;
+    };
 
     std::atomic<bool> running_{false};
-    std::atomic<bool> connected_{false};
+    std::atomic<int> clientCount_{0};
     std::string pipeNameUtf8_;
     std::wstring pipeNameWide_;
 
-    void* hPipe_ = (void*)(intptr_t)-1; // INVALID_HANDLE_VALUE
     void* shutdownEvent_ = nullptr;
-    void* ioEvent_ = nullptr;
-    std::thread workerThread_;
+    void* securityDescriptor_ = nullptr;   // LocalAlloc'ed, shared by every pipe instance
+    std::thread listenerThread_;
+    std::mutex clientsMtx_;
+    std::vector<Client> clients_;
 
     std::mutex queueMtx_;
     std::vector<McpRequest> queue_;

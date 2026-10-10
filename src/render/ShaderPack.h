@@ -20,10 +20,11 @@ namespace mmdx {
 
 // The PackShade / PackEffect contract version (pack_api.hlsli / effect_api.hlsli PACK_API_VERSION). A pack declares
 // the version it was written for; packs with a higher version are listed as incompatible and never compiled.
-inline constexpr int kPackApiVersion = 4;
+inline constexpr int kPackApiVersion = 5;
 inline constexpr uint32_t kPackMaxParams = 16;
 inline constexpr uint32_t kPackMaxTextures = 16;   // pack.json "textures" entries (one SRV each)
 inline constexpr uint32_t kPackMaxTextureSize = 4096;   // per-texture width / height cap
+inline constexpr uint32_t kPackMaxPasses = 8;           // effect packs: pack.json "passes" (API v5)
 using PackParamValues = std::array<float, kPackMaxParams>;
 
 // What a pack does: replace the character material shading (surface.hlsl, default; every v1/v2 pack) or a whole-screen
@@ -145,6 +146,16 @@ struct ShaderPack {
     PackType type = PackType::Surface;
     PackEffectStage stage = PackEffectStage::Post;   // effect packs only
     uint32_t stateFloats = 0;                        // effect packs only: "state": { "floats": N } (1..16)
+    // effect packs only (API v5): "passes" = intermediate passes that run before PackEffect, in order. Each draws
+    // `entry` (float4 entry(PackPassInput)) into its own RGBA16F target of output size x `scale`; later passes and
+    // PackEffect read it as PackPassSample(index, uv).
+    struct Pass {
+        std::string entry;    // HLSL identifier
+        float scale = 1.0f;   // 1/64 .. 1 of the output size
+    };
+    std::vector<Pass> passes;   // at most kPackMaxPasses
+    bool replacesDof = false;   // "replaces": ["dof"]: while enabled, the engine's depth of field (DofPass, the GI
+                                // thin lens) stays off and the pack draws it (PackFocusZ / PackFocusAperture)
     // shading
     struct Rule {
         PackClass cls = PackClass::Body;
@@ -242,6 +253,10 @@ private:
     std::map<std::string, std::pair<uint64_t, PackStatus>> statusById_;   // files stamp -> status
     std::map<std::string, std::string> messageById_;
 };
+
+// True when `stack` has an enabled, selectable effect pack that declares "replaces": ["dof"]: the engine's depth of field
+// (DofPass, the offline GI thin lens) is skipped because the pack draws its own.
+bool EffectStackReplacesDof(const std::vector<EffectStackEntry>& stack);
 
 // The process-wide registry (scanned on first use).
 ShaderPackRegistry& ShaderPacks();

@@ -47,3 +47,20 @@ float4 PSEffectState(FsOut i) : SV_Target {
     return float4(newState[base], newState[base + 1], newState[base + 2], newState[base + 3]);
 }
 #endif
+
+#ifdef PACK_PASS_ENTRY
+// One of the pack's intermediate passes (pack.json "passes", API v5): PACK_PASS_ENTRY is its function, the result is
+// stored in the pass's own RGBA16F target (gP2.xy = its size, gP2.z = its index).
+float4 PSPackPass(FsOut i) : SV_Target {
+    PackPassInput In;
+    In.uv = i.uv;
+    In.pixel = i.pos.xy;
+    In.size = gP2.xy;
+    In.outputSize = gEffectOutputSize;
+    In.time = gEffectTime;
+    In.frameIndex = gEffectFrameIndex;
+    In.dt = gP0.z;
+    In.pass = (uint)gP2.z;
+    return PACK_PASS_ENTRY(In);
+}
+#endif

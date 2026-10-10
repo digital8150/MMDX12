@@ -269,6 +269,8 @@ bool OfflineRenderer::Impl::EnsureTargets(uint32_t w, uint32_t h) {
     fxDepth.Release(c);
     fxNormal.Release(c);
     fxVel.Release(c);
+    effectPre.ReleaseTargets(c);    // the effect packs' pass targets / state slots of the old size
+    effectPost.ReleaseTargets(c);
     const D3D12_RESOURCE_FLAGS uav = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
     const uint32_t qw = (w + 3) / 4, qh = (h + 3) / 4;
     const float zero[4] = {0, 0, 0, 0};
@@ -1042,7 +1044,9 @@ void OfflineRenderer::Begin(ID3D12GraphicsCommandList* cmd, TransientDescriptors
     m.volReady = false;
     m.motion = view.motionBlur;
     m.focus = view.focusDistance;
-    const float aperture = job.dof ? job.dofAperture * std::max(0.0f, view.apertureScale) : 0.0f;
+    // an effect pack that replaces the depth of field (pack.json "replaces": ["dof"]) draws it on the image instead
+    const bool lensDof = job.dof && !EffectStackReplacesDof(job.effects);
+    const float aperture = lensDof ? job.dofAperture * std::max(0.0f, view.apertureScale) : 0.0f;
     m.lensRadius = view.focusDistance > 0.0f && aperture > 0.0f ? kLensScale * aperture * view.focusDistance : 0.0f;
     // itemsPerFrame carries over: consecutive images (video) cost about the same per dispatch
     for (Impl::Slot& s : m.slots) { s.counted = false; s.timed = false; }

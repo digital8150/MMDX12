@@ -460,7 +460,13 @@ void App::ExecuteMcp(const std::string& tool, const nlohmann::json& args, std::s
         r["volumetric"] = settings_.volumetric;
         r["bloom_convolution"] = settings_.bloomConvolution;
         nlohmann::json fx = nlohmann::json::array();
-        for (const EffectStackEntry& e : settings_.effectStack) fx.push_back({{"id", e.pack}, {"enabled", e.enabled}});
+        for (const EffectStackEntry& e : settings_.effectStack) {
+            nlohmann::json params = nlohmann::json::object();
+            for (const auto& [k, v] : e.params) params[k] = v;
+            nlohmann::json entry = {{"id", e.pack}, {"enabled", e.enabled}, {"params", params}};
+            if (!e.textureFolder.empty()) entry["texture_folder"] = e.textureFolder;
+            fx.push_back(entry);
+        }
         r["effects"] = fx;
         if (screen_ == Screen::Play && scene_) r["shader_pack"] = settings_.CharacterShader(scene_->characterId).pack;
         promise->Resolve(r);
@@ -526,8 +532,73 @@ void App::ExecuteMcp(const std::string& tool, const nlohmann::json& args, std::s
                         promise->Reject("Unknown effect pack: " + id);
                         return;
                     }
-                    effects.push_back({id, true, {}, {}});
+                    // an effect already in the stack keeps its parameters and texture folder
+                    EffectStackEntry entry{id, true, {}, {}};
+                    for (const EffectStackEntry& cur : settings_.effectStack)
+                        if (cur.pack == id) {
+                            entry.params = cur.params;
+                            entry.textureFolder = cur.textureFolder;
+                            break;
+                        }
+                    effects.push_back(std::move(entry));
                 }
+            }
+        }
+        if (args.contains("effect_stack")) {  // the whole stack with parameters: [{id, enabled, params, texture_folder}]
+            if (args.contains("effects")) {
+                promise->Reject("Pass either effects or effect_stack, not both");
+                return;
+            }
+            const nlohmann::json& list = args["effect_stack"];
+            if (!list.is_array()) {
+                promise->Reject("effect_stack must be an array of {id, enabled, params, texture_folder}");
+                return;
+            }
+            for (const nlohmann::json& item : list) {
+                if (!item.is_object() || !item.contains("id") || !item["id"].is_string()) {
+                    promise->Reject("effect_stack entries need a string id");
+                    return;
+                }
+                const std::string id = item["id"].get<std::string>();
+                const ShaderPack* ep = reg.Find(id);
+                if (!ep || ep->type != PackType::Effect) {
+                    promise->Reject("Unknown effect pack: " + id);
+                    return;
+                }
+                EffectStackEntry entry{id, true, {}, {}};
+                if (item.contains("enabled")) {
+                    if (!item["enabled"].is_boolean()) {
+                        promise->Reject("effect_stack " + id + ": enabled must be a boolean");
+                        return;
+                    }
+                    entry.enabled = item["enabled"].get<bool>();
+                }
+                if (item.contains("params")) {
+                    if (!item["params"].is_object()) {
+                        promise->Reject("effect_stack " + id + ": params must be an object {key: number}");
+                        return;
+                    }
+                    for (const auto& [key, value] : item["params"].items()) {
+                        const auto it = std::find_if(ep->params.begin(), ep->params.end(),
+                                                     [&](const ShaderPackParam& sp) { return sp.key == key; });
+                        if (it == ep->params.end() || !value.is_number()) {
+                            std::string known;
+                            for (const ShaderPackParam& sp : ep->params) known += (known.empty() ? "" : ", ") + sp.key;
+                            promise->Reject("effect_stack " + id + ": unknown or non-numeric param '" + key +
+                                            "' (known: " + known + ")");
+                            return;
+                        }
+                        entry.params[key] = std::clamp(value.get<float>(), it->min, it->max);
+                    }
+                }
+                if (item.contains("texture_folder")) {
+                    if (!item["texture_folder"].is_string()) {
+                        promise->Reject("effect_stack " + id + ": texture_folder must be a string");
+                        return;
+                    }
+                    entry.textureFolder = item["texture_folder"].get<std::string>();
+                }
+                effects.push_back(std::move(entry));
             }
         }
 
@@ -545,7 +616,7 @@ void App::ExecuteMcp(const std::string& tool, const nlohmann::json& args, std::s
             sc.pack = shaderPack;
             settings_.SetCharacterShader(scene_->characterId, sc);
         }
-        if (args.contains("effects")) settings_.effectStack = std::move(effects);
+        if (args.contains("effects") || args.contains("effect_stack")) settings_.effectStack = std::move(effects);
         ApplyRenderSettings();
         settings_.Save(settingsPath_);
         ExecuteMcp("get_render_settings", {}, promise);  // answers with the settings now in effect

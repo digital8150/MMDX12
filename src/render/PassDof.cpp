@@ -38,6 +38,7 @@ void DofPass::Execute(PassContext& pc) {
     if (!pc.settings.dof || pc.offscreen || !out_ || !pc.targets.hdrFinal) return;
     const float aperture = pc.settings.dofAperture * pc.view.apertureScale;
     if (aperture <= 0.0f) return;  // a focus key with aperture 0: everything sharp
+    if (EffectStackReplacesDof(pc.settings.packEffects)) return;   // an effect pack draws the depth of field instead
 
     const float maxCocPx = pc.settings.dofMaxRadius * static_cast<float>(out_.height) / 1080.0f;
     const float r = maxCocPx * 0.5f;   // max radius in half-res pixels

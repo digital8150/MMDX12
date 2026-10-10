@@ -358,6 +358,8 @@ bool ParseShaderPackManifest(const std::string& json, const std::filesystem::pat
     out.type = PackType::Surface;
     out.stage = PackEffectStage::Post;
     out.stateFloats = 0;
+    out.passes.clear();
+    out.replacesDof = false;
     out.status = PackStatus::Ready;
     out.statusMessage.clear();
 
@@ -584,12 +586,64 @@ bool ParseShaderPackManifest(const std::string& json, const std::filesystem::pat
                 }
             }
         }
-        if (out.apiVersion != 4) {
-            problems.push_back("packs with 'state' must declare \"apiVersion\": 4");
+        if (out.apiVersion < 4) {
+            problems.push_back("packs with 'state' must declare \"apiVersion\": 4 or newer");
         }
         if (out.type != PackType::Effect) {
             problems.push_back("state is only supported for effect packs");
         }
+    }
+
+    // passes (API v5): optional "passes": [ { "entry": "Name", "scale": 0.5 }, ... ], effect packs only
+    if (auto it = j.find("passes"); it != j.end()) {
+        if (!it->is_array()) {
+            problems.push_back("passes must be an array of { \"entry\": name, \"scale\": s }");
+        } else {
+            if (it->size() > kPackMaxPasses)
+                problems.push_back("at most " + std::to_string(kPackMaxPasses) + " passes (" + std::to_string(it->size()) + ")");
+            for (const auto& pj : *it) {
+                if (out.passes.size() >= kPackMaxPasses) break;
+                if (!pj.is_object()) {
+                    problems.push_back("every passes entry must be an object");
+                    continue;
+                }
+                ShaderPack::Pass pass;
+                pass.entry = Str(pj, "entry");
+                bool ident = !pass.entry.empty() && pass.entry.size() <= 64 &&
+                             !(pass.entry[0] >= '0' && pass.entry[0] <= '9');
+                for (char c : pass.entry)
+                    ident &= (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_';
+                if (!ident || pass.entry == "PackEffect" || pass.entry == "PackEffectState") {
+                    problems.push_back("pass entry '" + pass.entry + "' must be an HLSL function name");
+                    continue;
+                }
+                if (auto sit = pj.find("scale"); sit != pj.end()) {
+                    if (!sit->is_number() || sit->get<double>() < 1.0 / 64.0 || sit->get<double>() > 1.0) {
+                        problems.push_back("pass '" + pass.entry + "': scale must be a number in 1/64 .. 1");
+                        continue;
+                    }
+                    pass.scale = sit->get<float>();
+                }
+                out.passes.push_back(std::move(pass));
+            }
+        }
+        if (out.apiVersion < 5) problems.push_back("packs with 'passes' must declare \"apiVersion\": 5 or newer");
+        if (out.type != PackType::Effect) problems.push_back("passes are only supported for effect packs");
+    }
+
+    // replaces (API v5): engine effects the pack draws itself while it is enabled; only "dof" is known
+    if (auto it = j.find("replaces"); it != j.end()) {
+        if (!it->is_array()) {
+            problems.push_back("replaces must be an array of strings (\"dof\")");
+        } else {
+            for (const auto& r : *it) {
+                if (r.is_string() && r.get<std::string>() == "dof") out.replacesDof = true;
+                else problems.push_back("replaces: unknown entry (known: \"dof\")");
+            }
+        }
+        if (out.apiVersion < 5) problems.push_back("packs with 'replaces' must declare \"apiVersion\": 5 or newer");
+        if (out.type != PackType::Effect || out.stage != PackEffectStage::PreBloom)
+            problems.push_back("replaces needs an effect pack with \"stage\": \"pre-bloom\"");
     }
 
     // optional preview
@@ -941,6 +995,15 @@ bool ShaderPackRegistry::CreateFromTemplate(const std::string& id, const std::st
     dir = dest;
     Scan();
     return true;
+}
+
+bool EffectStackReplacesDof(const std::vector<EffectStackEntry>& stack) {
+    for (const EffectStackEntry& e : stack) {
+        if (!e.enabled) continue;
+        const ShaderPack* pack = ShaderPacks().Find(e.pack);
+        if (pack && pack->type == PackType::Effect && pack->Selectable() && pack->replacesDof) return true;
+    }
+    return false;
 }
 
 ShaderPackRegistry& ShaderPacks() {

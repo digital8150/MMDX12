@@ -22,6 +22,7 @@
 //   BackdropPass  blurred copy of ldr for frosted UI panels (on screen only)
 //   PresentPass   letterboxed stretch to the back buffer (on screen only)
 #pragma once
+#include <deque>
 #include <map>
 #include <string>
 #include "render/RenderPass.h"
@@ -327,6 +328,30 @@ private:
     void ReleasePackPsos(Dx12Context& ctx);   // waits for the GPU, frees the pack texture SRVs and PSOs
     void ReleaseStateSlots(Dx12Context& ctx);
     void RunStack(PassContext& pc, bool preBloom);
+    // One entry's draws (state update, intermediate passes, PackEffect); shared by RunStack and RunOffline.
+    struct EntryRun {
+        const ShaderPack* pack = nullptr;
+        const EffectPipelines* pipes = nullptr;
+        const EffectStackEntry* entry = nullptr;
+        size_t stackIndex = 0;
+        Texture *src = nullptr, *dst = nullptr, *depth = nullptr, *velocity = nullptr, *normal = nullptr;
+        uint32_t outW = 0, outH = 0;
+        float dt = 0.0f;
+        bool resetState = false;      // camera cut / resize / job reset
+        uint32_t stateSteps = 0;      // state updates this run (0 = none, unless the slot has no valid state yet)
+        float focus[4] = {};          // gP1: focus z, focus aperture, user DoF aperture, max CoC px
+    };
+    void RunEntry(PassContext& pc, const EntryRun& run);
+    void DropStaleStateSlots(Dx12Context& ctx, const std::vector<EffectStackEntry>& stack);
+    // API v5 intermediate-pass targets (RGBA16F), pooled by size
+    Texture* PassTarget(Dx12Context& ctx, uint32_t w, uint32_t h, uint32_t n);
+    void TrimPassPool(Dx12Context& ctx);
+    void ReleasePassPool(Dx12Context& ctx);
+    struct PoolTexture {
+        Texture tex;
+        uint64_t lastUse = 0;
+    };
+    std::map<std::pair<uint32_t, uint32_t>, std::deque<PoolTexture>> passPool_;   // deque: stable addresses
 
     bool AllocTargets(Dx12Context& ctx, uint32_t w, uint32_t h);
     bool AllocPostTargets(Dx12Context& ctx, uint32_t w, uint32_t h);

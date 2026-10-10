@@ -1,4 +1,4 @@
-# Shader pack effects (API 3)
+# Shader pack effects (API 3, 4, 5)
 
 A shader pack with `"type": "effect"` is a whole-screen effect (chromatic aberration, film grain, CRT, glitch, custom
 vignette ...). Users stack effects in the shader manager and the play bar's effect button; the stack runs top to bottom on
@@ -127,3 +127,55 @@ float3 PackEffect(PackEffectInput i) {
     - Videos: 1 state pass per output image with `dt = 1/fps`, resetting on first frame or jump cut. State slots persist across frames of the video.
     - Stills: runs the state pass 64 times on the same image with `dt = 1/60` (reset only on step 0) to converge temporal state before running `PackEffect` once.
 
+
+## API v5: intermediate passes and the camera focus
+
+API v5 lets an effect run several passes before `PackEffect` (downsample chains, blurs, gathers: lens flares, bokeh
+depth of field, ambient occlusion) and gives every effect the engine's depth-of-field focus. A pack may also take
+over the engine's depth of field.
+
+### Manifest
+
+```json
+{
+  "apiVersion": 5,
+  "type": "effect",
+  "stage": "pre-bloom",
+  "passes": [
+    { "entry": "Bright", "scale": 0.25 },
+    { "entry": "Blur",   "scale": 0.0625 }
+  ],
+  "replaces": ["dof"]
+}
+```
+
+- `passes` (at most 8): each entry names an HLSL function `float4 Name(PackPassInput i)` and the size of its target as
+  a fraction of the output (`scale`, 1/64 .. 1, default 1). Passes run in order; each writes its own RGBA16F target.
+- `replaces` (pre-bloom packs only): `["dof"]` = while the entry is enabled, the engine's depth of field (DofPass and
+  the offline GI thin lens) is skipped and the pack draws it. No other values exist yet.
+- `passes`, `replaces` and the focus helpers need `"apiVersion": 5`; `state` (v4) works together with them.
+
+### HLSL
+
+```hlsl
+float4 Bright(PackPassInput i) { return float4(max(gEffectSource.SampleLevel(gLinear, i.uv, 0).rgb - 1.0, 0.0), 1); }
+float4 Blur(PackPassInput i)   { return PackPassSample(0, i.uv); }   // pass 0's target, bilinear
+float3 PackEffect(PackEffectInput i) { return i.color.rgb + PackPassSample(1, i.uv).rgb; }
+```
+
+- `PackPassInput`: `uv` and `pixel` of this pass's target, `size` (its pixels), `outputSize`, `time`, `frameIndex`,
+  `dt`, `pass` (its index). The frame inputs (`gEffectSource`, depth, normal, velocity), the pack textures, the
+  parameters and the state are bound in every pass.
+- `PackPassSample(n, uv)` (bilinear, clamp), `PackPassLoad(n, pixel)`, `PackPassSize(n)` read pass `n`'s target. A pass
+  may read the passes before it; reading its own target or a later one is undefined. `PackEffect` may read all.
+- Focus (the studio focus track, play mode's character head, else a five-tap autofocus on the screen centre):
+  `PackFocusZ()` = view-space z of the focus plane; `PackFocusAperture()` = the focus key's aperture scale (0 = sharp,
+  1 default); `PackDofAperture()` / `PackDofMaxRadius()` = the user's global DoF aperture and max blur radius (output
+  px); `PackCocPx(viewZ, focusZ, aperture, maxRadius)` = the engine lens model's signed circle of confusion in output
+  px (negative = in front of the focus plane).
+- Pass targets are pooled by size and shared by all entries; they exist only while an entry with passes is enabled.
+  A pack without `passes` keeps the v3 / v4 root signature and PSO exactly (no extra cost, identical frame).
+
+`pack_check --compile` compiles every pass (`PSPackPass` with `PACK_PASS_ENTRY`) and prints the passes and `replaces`.
+Examples (online gallery, sources in the website repo `shader-packs/`): lens_dirt, lens_reflection, lens_flare,
+bokeh_dof (replaces the depth of field, follows the focus track), screen_ao.

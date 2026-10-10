@@ -211,6 +211,14 @@ progress.md is the session log. Read its latest entry first.
   pre-bloom entries run on the lit HDR before the bloom (`CSLitCompose`, the bloom then reads the effect output), post entries on the sRGB
   result (`PackEffectPass::RunOffline`). Their depth / normal come from the offline G-buffer (depth from `offline_effect.hlsl`, the normal in view
   space like the real-time normal target), motion is zero.
+  API v5 (docs/shader_effect_api.md): pack.json `"passes"` (<= 8 `{entry, scale}`; `PSPackPass` with `PACK_PASS_ENTRY`,
+  RGBA16F targets pooled by size in `PackEffectPass::passPool_`, read as `PackPassSample(n, uv)` from a t0..t7 space8 table
+  that exists only in packs with passes) and the focus helpers (`PackFocusZ` / `PackFocusAperture` / `PackDofAperture` /
+  `PackCocPx`, gP1 = FrameView focus + the DoF settings). `"replaces": ["dof"]` (`EffectStackReplacesDof`) skips DofPass and
+  the GI thin lens while that entry is enabled. One entry's draws = `PackEffectPass::RunEntry` (shared by RunStack /
+  RunOffline). Gallery examples on it: lens_dirt, lens_reflection, lens_flare, bokeh_dof, screen_ao (and
+  chromatic_aberration 2.0.0, still v3). MMD scenes rarely hold HDR lights (a lit window is ~0.4 linear): the lens packs
+  pick "lights" by luminance x local contrast, not a plain threshold.
 - MCP (docs/mcp.md): `tools/mmdx12_mcp.cpp` is the stdio MCP bridge; it forwards tool calls over the named pipe
   `\\.\pipe\mmdx12_mcp[_<pid>]` to `McpServer` (app/McpServer.*, worker thread), which queues them for the main thread:
   `App::PumpMcp` / `ExecuteMcp` (app/AppMcp.cpp) before ImGui::NewFrame. Tool schemas + timeouts live in app/McpTools.h

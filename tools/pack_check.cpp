@@ -154,6 +154,9 @@ bool PrintManifest(const ShaderPack& pack, const std::string& error) {
         printf("  type: effect (stage: %s)\n", pack.stage == mmdx::PackEffectStage::PreBloom ? "pre-bloom" : "post");
         if (pack.stateFloats > 0)
             printf("  state: %u floats\n", pack.stateFloats);
+        for (const mmdx::ShaderPack::Pass& pass : pack.passes)
+            printf("  pass: %s (scale %.4g)\n", pass.entry.c_str(), pass.scale);
+        if (pack.replacesDof) printf("  replaces: dof\n");
     } else {
         printf("  type: surface\n");
         printf("  pt_surface: %s\n", pack.hasPtSurface ? "yes" : "no");
@@ -440,6 +443,8 @@ int wmain(int argc, wchar_t** argv) {
             defines.push_back({"PACK_STATE", "1"});
             defines.push_back({"PACK_STATE_FLOATS", std::to_string(pack.stateFloats)});
         }
+        if (effect && !pack.passes.empty())
+            defines.push_back({"PACK_PASS_COUNT", std::to_string(pack.passes.size())});
         printf("compile: %s of %s (ps_6_0, MMDX_PACK = %s, %u textures)\n",
                effect ? "PSEffect" : "PSPack", mmdx::PathToUtf8(mmdHlsl.filename()).c_str(), incDefine.c_str(), texCount);
         std::string errors;
@@ -463,6 +468,23 @@ int wmain(int argc, wchar_t** argv) {
                 ok = false;
             } else {
                 printf("compile ok (%zu bytes)\n", stateBlob->GetBufferSize());
+            }
+        }
+
+        if (effect) {
+            for (const mmdx::ShaderPack::Pass& pass : pack.passes) {
+                auto passDefines = defines;
+                passDefines.push_back({"PACK_PASS_ENTRY", pass.entry});
+                printf("compile: pass %s (PSPackPass, scale %.4g)\n", pass.entry.c_str(), pass.scale);
+                std::string passErrors;
+                const mmdx::ComPtr passBlob = mmdx::CompileShaderDxc(mmdHlsl, "PSPackPass", "ps_6_0", passDefines, &passErrors);
+                if (!passErrors.empty()) printf("%s\n", passErrors.c_str());
+                if (!passBlob) {
+                    printf("[problem] pass %s compile failed\n", pass.entry.c_str());
+                    ok = false;
+                } else {
+                    printf("compile ok (%zu bytes)\n", passBlob->GetBufferSize());
+                }
             }
         }
 

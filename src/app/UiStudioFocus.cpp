@@ -13,6 +13,7 @@
 #include "app/UiKit.h"
 #include "core/I18n.h"
 #include "imgui.h"
+#include "render/ShaderPack.h"
 
 namespace mmdx {
 
@@ -150,6 +151,8 @@ void App::DrawStudioFocusSection(float w) {
     const Palette& p = P();
     ImDrawList* cdl = ImGui::GetWindowDrawList();
     const float keyW = 84.0f;
+    // an effect pack that replaces the depth of field (bokeh_dof ...) follows the focus track as well
+    const bool dofOn = settings_.dof || EffectStackReplacesDof(settings_.effectStack);
     char buf[200];
 
     const ImVec2 t0 = ImGui::GetCursorScreenPos();
@@ -178,7 +181,7 @@ void App::DrawStudioFocusSection(float w) {
         std::snprintf(buf, sizeof(buf), "%s · %.1f", modeName, studioFocusShown_);
     {
         const ImVec2 c = ImGui::GetCursorScreenPos();
-        TextEllipsis(cdl, Font::Regular, size::Small, c, c.x + w, settings_.dof ? p.ink2 : p.ink3, buf);
+        TextEllipsis(cdl, Font::Regular, size::Small, c, c.x + w, dofOn ? p.ink2 : p.ink3, buf);
         ImGui::Dummy(ImVec2(w, Dp(20.0f)));
         if (studioFocusAperture_ < 0.999f || studioFocusAperture_ > 1.001f) {
             std::snprintf(buf, sizeof(buf), Tr("조리개 배율 %.2f"), studioFocusAperture_);
@@ -230,7 +233,7 @@ void App::DrawStudioFocusSection(float w) {
         Tooltip(Tr("재생 헤드에 초점 키를 만들어 이 지점부터 초점을 맞출 대상을 정해요 (다음 초점 키까지)."));
         ImGui::Dummy(ImVec2(w, Dp(4.0f)));
     }
-    if (!settings_.dof) {
+    if (!dofOn) {
         const ImVec2 c = ImGui::GetCursorScreenPos();
         ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + w);
         ImGui::PushStyleColor(ImGuiCol_Text, ImGui::ColorConvertU32ToFloat4(p.ink3));

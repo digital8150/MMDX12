@@ -296,7 +296,21 @@ inline nlohmann::json GetMcpToolDefinitions() {
                 }},
                 {"effects", {
                     {"type", "string"},
-                    {"description", "Comma-separated effect pack IDs, or 'none'"}
+                    {"description", "Comma-separated effect pack IDs in stack order, or 'none'. Effects already in the stack keep their parameters; new ones start at the pack defaults"}
+                }},
+                {"effect_stack", {
+                    {"type", "array"},
+                    {"description", "The whole effect stack with parameters, in order (replaces it; use instead of effects). Parameter keys are the pack's pack.json params; values are clamped to their ranges, missing keys use the defaults"},
+                    {"items", {
+                        {"type", "object"},
+                        {"properties", {
+                            {"id", {{"type", "string"}, {"description", "Effect pack id"}}},
+                            {"enabled", {{"type", "boolean"}, {"description", "Default true"}}},
+                            {"params", {{"type", "object"}, {"additionalProperties", {{"type", "number"}}}, {"description", "Parameter key -> value"}}},
+                            {"texture_folder", {{"type", "string"}, {"description", "Per-entry texture folder (empty = the pack-level folder)"}}}
+                        }},
+                        {"required", {"id"}}
+                    }}
                 }}
             }}
         }}

@@ -1162,3 +1162,49 @@ smoke review); Claude did the review, publish, the engine fixes and both outline
   video paths were not exercised; GI video below 960x540 via CLI cancels at BeginOffline (also without effects).
 - The studio DoF focus track (d66b57a) was committed as found from an earlier session; only its unit test was run here.
 - Next: McDoF focus smoothing + an `enb_adaptation` (eye adaptation) pack on the new state contract.
+
+## 2026-10-10 (afternoon) — clean-room lens / DoF / AO effect packs, effect API v5, multi-client MCP, release 1.7.0
+
+### Done
+- The ENB-derived packs (CC BY-NC-ND, local only) are replaced by our own effects, written from scratch (no ENB code;
+  the dirt / bokeh-shape texture atlases are the user's own): `lens_dirt`, `lens_reflection`, `lens_flare`, `bokeh_dof`,
+  `screen_ao` (MIT, online gallery, sources in the website repo `shader-packs/`) and `chromatic_aberration` 2.0.0
+  (spectral lateral colour, barrel / pincushion distortion, edge softness, vignetting; same param keys, still API 3 / post).
+- Why the ports looked wrong: MMD scenes hold almost no HDR lights (a lit night window is ~0.4 linear), so fixed
+  thresholds caught nothing or caught bright skin. The lens packs pick lights by luminance x local contrast (true HDR
+  always counts) and respond with saturating curves.
+- Effect API v5 (docs/shader_effect_api.md): pack.json `passes` (<= 8 `{entry, scale}`, RGBA16F targets pooled by size,
+  `PackPassSample/Load/Size`), focus helpers (`PackFocusZ` = the studio focus track / play-mode head / centre autofocus,
+  `PackFocusAperture`, `PackDofAperture`, `PackDofMaxRadius`, `PackCocPx`), `"replaces": ["dof"]` (DofPass and the GI thin
+  lens stay off while such an entry is enabled; the studio focus panel no longer says DoF is off then). One entry's draws
+  = `PackEffectPass::RunEntry` (RunStack / RunOffline share it). `pack_check` compiles every pass and validates passes /
+  replaces. Packs without passes keep the v3 / v4 root signature and PSO.
+- `bokeh_dof`: half-res CoC, tile max + dilation, scatter-as-gather over round / bladed / texture (heart ...) apertures,
+  cat's eye, highlight boost (only where blurred), fill, full-res composite, focus-zone view. `screen_ao`: horizon-based
+  AO with depth-reconstructed normals (mesh normals on stages are unreliable), colour bounce, depth-aware blur,
+  joint-bilateral upsample. `lens_flare`: aperture-shaped ghosts, ring, anamorphic streak (two-step horizontal blur),
+  star spikes. `lens_reflection`: inverted disc reflections with coating tints and per-channel scale. `lens_dirt`:
+  near / wide light glow lighting the dirt atlas.
+- MCP: `set_render_settings.effect_stack` (`[{id, enabled, params, texture_folder}]`, params validated and clamped),
+  `effects` keeps the parameters of entries already in the stack, `get_render_settings` returns them. `McpServer` takes
+  up to 8 clients at once (a listener keeps one free pipe instance, one thread per client); a stale bridge no longer
+  locks everyone else out.
+- Website: effect docs (4 languages) gained API 4 / 5 sections and no longer say effects skip offline GI. Gallery previews
+  of the new packs are GI stills of the liar dancer project at frame 3909, rendered over MCP.
+- Clean-up: only `build/` remains (build_dev / build_release removed, the baseline worktree removed; the `ptpack_*`
+  test packs moved to captures/ptpack_packs).
+
+### Verified
+- GI stills from a HEAD baseline build and this build: byte-identical with no effect, with `film_grain` (v3) and with
+  `state_probe` (v4).
+- Studio focus keys drive `bokeh_dof` (auto, manual 200, aperture 0 = sharp); offline GI uses the pack instead of the lens.
+- All six packs `pack_check --compile` OK; negative manifests rejected; `shader_choice_test`, `studio_focus_test`,
+  `studio_project_test` pass. All six together: 3.2 ms GPU at 1080p (RTX 4070 Ti).
+- Two MCP bridges connected at once: a `wait_frames 300` on one did not block `get_state` on the other.
+
+### Not verified / notes
+- The `enb_*` packs are still installed locally in build/bin/shader_packs (never distributed).
+- Lens effects stay subtle in ordinary MMD scenes by design; the previews use raised intensities.
+- In the studio, an effect's blur near the viewport border samples the dark area outside the viewport.
+- `bokeh_dof` replaces the GI thin lens in offline renders, which is physically worse there.
+- The bokeh shape atlas's cell 4 is a game emblem (user-provided texture; their call).

@@ -13,9 +13,11 @@
 #define EFFECT_API_HLSLI
 
 // Must equal kPackApiVersion (render/ShaderPack.h). One manifest version for surface and effect packs.
-#define PACK_API_VERSION 4
+#define PACK_API_VERSION 5
 
 // gP0.xy (fullscreen.hlsli's PassCB, b1) = the output size in pixels; time / frame come from SceneConstants.
+// gP1 = (focus z (<= 0: autofocus), focus aperture scale, the user's DoF aperture, the user's max CoC radius in output
+// px); gP2 = (this draw's target size in px, pass index (-1 = PackEffect / PackEffectState), 0).
 #define gEffectOutputSize float2(gP0.x, gP0.y)
 #define gEffectTime gTime
 #define gEffectFrameIndex gFrameIndex
@@ -69,6 +71,65 @@ Texture2D<float2> gEffectVelocity : register(t2, space6);    // uv(cur) - uv(pre
 Texture2D<float4> gEffectNormal : register(t3, space6);      // oct normal .xy (RGBA16_FLOAT)
 
 cbuffer EffectParams : register(b2) { float4 gPackEffectParams[4]; }
+
+// ---- camera focus (API v5): the engine's depth-of-field focus, shared with DofPass and the offline GI lens --
+// View-space z of the focus plane this frame (MMD units): the studio focus track / play mode's character head,
+// else an autofocus on the screen centre (the same five depth taps DofPass uses).
+float PackFocusZ() {
+    if (gP1.x > 0.0) return gP1.x;
+    float z = 0.0;
+    z += LinearZ(gEffectDepth.SampleLevel(gPoint, float2(0.5, 0.5), 0));
+    z += LinearZ(gEffectDepth.SampleLevel(gPoint, float2(0.47, 0.5), 0));
+    z += LinearZ(gEffectDepth.SampleLevel(gPoint, float2(0.53, 0.5), 0));
+    z += LinearZ(gEffectDepth.SampleLevel(gPoint, float2(0.5, 0.46), 0));
+    z += LinearZ(gEffectDepth.SampleLevel(gPoint, float2(0.5, 0.54), 0));
+    return z * 0.2;
+}
+// The focus key's aperture scale (studio focus track: 0 = everything sharp, 1 = the default; play mode 1).
+float PackFocusAperture() { return gP1.y; }
+// The user's global depth-of-field settings (lobby / studio render panel): aperture (0.2 .. 3, 1 = default) and the
+// largest blur radius in output pixels (already scaled with the output height). A pack may follow them or ignore them.
+float PackDofAperture() { return gP1.z; }
+float PackDofMaxRadius() { return gP1.w; }
+// Signed circle of confusion in output pixels, the engine's lens model (DofPass): negative = in front of the focus
+// plane. `aperture` multiplies the user's aperture and the focus key; `maxRadius` in output px.
+float PackCocPx(float viewZ, float focusZ, float aperture, float maxRadius) {
+    return clamp(aperture * (viewZ - focusZ) / max(viewZ, 1e-4), -1.0, 1.0) * maxRadius;
+}
+
+// ---- intermediate passes (API v5, pack.json "passes") ----------------------------------------------------
+// Pass n's target (RGBA16F, output size x its scale), bound for the later passes and PackEffect. A pass must not
+// read its own target or a later one (undefined).
+#ifndef PACK_PASS_COUNT
+#define PACK_PASS_COUNT 0
+#endif
+#if PACK_PASS_COUNT > 0
+Texture2D<float4> gPackPass[8] : register(t0, space8);
+float4 PackPassSample(uint n, float2 uv) { return gPackPass[n & 7u].SampleLevel(gLinear, uv, 0); }
+float4 PackPassLoad(uint n, int2 px) { return gPackPass[n & 7u].Load(int3(px, 0)); }
+float2 PackPassSize(uint n) {
+    uint w, h;
+    gPackPass[n & 7u].GetDimensions(w, h);
+    return float2(w, h);
+}
+#else
+float4 PackPassSample(uint n, float2 uv) { return float4(0, 0, 0, 0); }
+float4 PackPassLoad(uint n, int2 px) { return float4(0, 0, 0, 0); }
+float2 PackPassSize(uint n) { return float2(0, 0); }
+#endif
+
+// What a pass entry receives (float4 Entry(PackPassInput i)); the result is stored in its target.
+struct PackPassInput {
+    float2 uv;            // texel centre in this pass's target, 0..1
+    float2 pixel;         // SV_Position.xy in this pass's target
+    float2 size;          // this pass's target size in pixels
+    float2 outputSize;    // output resolution in pixels
+    float time;
+    float frameIndex;
+    float dt;
+    uint pass;            // this pass's index in pack.json "passes"
+};
+
 
 // ---- pack textures (pack.json "textures", the v2 surface-pack API, same semantics) -------------------
 // sRGB textures return LINEAR values (do not apply SrgbToLinear again), others the stored values;
