@@ -1208,3 +1208,30 @@ smoke review); Claude did the review, publish, the engine fixes and both outline
 - In the studio, an effect's blur near the viewport border samples the dark area outside the viewport.
 - `bokeh_dof` replaces the GI thin lens in offline renders, which is physically worse there.
 - The bokeh shape atlas's cell 4 is a game emblem (user-provided texture; their call).
+
+## 2026-10-10 (evening) — RTAO temporal accumulation
+
+### Done
+- Problem: the ray-traced AO shimmered. `rtao.hlsl` shoots 4 cosine rays per half-res pixel with a seed that changes every
+  frame, nothing averaged them over time, and TAA is off by default (only the Ultra preset enables it), so the per-frame noise
+  went straight to the screen through a 7-tap depth-only blur.
+- `ssao.hlsl` `PSTemporal` (RayTraced only): reprojects last frame's accumulated AO with the velocity of the nearest of the 2x2
+  full-res pixels, clamps it to this frame's 3x3 neighbourhood (mean +- 1.25 sigma), blends with a history weight of
+  0.92 (still) down to 0.6 (4 half-res texels per frame). Chain: rtao -> raw_ -> PSTemporal -> hist_[2] -> blur H -> blur V.
+- `SsaoPass` owns `hist_[2]` (R8, half res) + `histValid_`/`histEye_`; the history is dropped on resize, camera cut, an eye jump
+  over 12 units, offscreen renders, and any frame without RTAO. The raster SSAO path is unchanged (same code path as before).
+
+### Verified
+- Clean build, `--render rt` run with no `[E]`/`[W]`.
+- Paused static scene (Miku, no stage, `catch_the_wave`, `--autoplay --seek 20 --paused --render rt --effect none`, frames 240
+  and 242 via `--ui-script capture`): mean abs frame difference 0.210 -> 0.063 /255, pixels differing by more than 3: 1.92 % -> 0.21 %.
+  Baseline = the same build with `PSTemporal` patched to `return cur;` in build/bin/shaders (restored afterwards).
+  GPU 2.05 -> 2.09 ms; the two captures look the same.
+
+### Not verified / notes
+- Ghosting while the camera or character moves was only seen in one playing frame, not measured. Tuning knobs: the history weight
+  range and `speed / 4.0` in `PSTemporal`, the 1.25 sigma clamp.
+- RT real-time video renders (`--offline-renderer rt`) are offscreen, so they get no accumulation (same rule as TAA). The raster
+  SSAO also reseeds its noise every frame and could get the same stage.
+- `--ui-script` takes one capture at a time: a capture on the very next frame is dropped (use frames two apart). `capture` is not
+  available through MCP `ui_input`. Without `--autoplay` the scene is not loaded and the lobby stays up (`--seek` alone does nothing).

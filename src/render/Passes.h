@@ -9,7 +9,7 @@
 //   ResolvePass   MSAA -> single sample (colour, normal, velocity, closest depth) not PathTraced
 //   PathTracePass path tracer + temporal/a-trous denoiser -> colour/normal/velocity/depth
 //                                                                                 PathTraced only
-//   SsaoPass      half-res AO (RayTraced: ray-traced AO) + depth-aware blur       not PathTraced
+//   SsaoPass      half-res AO (RayTraced: ray-traced AO, temporally accumulated) + depth-aware blur   not PathTraced
 //   SsrPass       half-res reflections (RayTraced: ray-traced)                    not PathTraced
 //   CompositePass colour * AO + reflections + haze -> lit
 //   VolumetricPass half-res ray-marched in-scattering (sun via the shadow map, spots via spot shadow maps),
@@ -125,9 +125,15 @@ public:
     void Execute(PassContext& pc) override;
 
 private:
-    FullscreenPipeline ao_, blur_;
+    FullscreenPipeline ao_, blur_, temporal_;
     ComputePipeline rtao_;   // rtao.hlsl, writes raw_ as a UAV
     Texture raw_, temp_, out_;
+    // RTAO temporal accumulation (ssao.hlsl PSTemporal): hist_[histCur_] receives this frame,
+    // hist_[histCur_ ^ 1] holds last frame when histValid_.
+    Texture hist_[2];
+    uint32_t histCur_ = 0;
+    bool histValid_ = false;
+    DirectX::XMFLOAT3 histEye_{};   // eye of the last accumulated frame (jump detection)
 };
 
 class SsrPass final : public IRenderPass {

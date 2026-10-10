@@ -847,7 +847,8 @@ void ResolvePass::Execute(PassContext& pc) {
 
 bool SsaoPass::CreatePipelines(Dx12Context& ctx, const std::filesystem::path& shaderDir, uint32_t) {
     const bool ok = ao_.Create(ctx, shaderDir / L"ssao.hlsl", "PSAo", {DXGI_FORMAT_R8_UNORM}) &&
-                    blur_.Create(ctx, shaderDir / L"ssao.hlsl", "PSBlur", {DXGI_FORMAT_R8_UNORM});
+                    blur_.Create(ctx, shaderDir / L"ssao.hlsl", "PSBlur", {DXGI_FORMAT_R8_UNORM}) &&
+                    temporal_.Create(ctx, shaderDir / L"ssao.hlsl", "PSTemporal", {DXGI_FORMAT_R8_UNORM});
     if (!ok) return false;
     if (RtPipelinesSupported(ctx) && !rtao_.Create(ctx, shaderDir / L"rtao.hlsl", "CSRtao"))
         LOG_WARN("SSAO: ray-traced AO unavailable");  // never fails the pass
@@ -862,20 +863,32 @@ void SsaoPass::OnResize(Dx12Context& ctx, RenderTargets& targets) {
     raw_.Create(ctx, w, h, DXGI_FORMAT_R8_UNORM, rtUav, kSrv, L"ssao.raw", 1, 1, one);
     temp_.Create(ctx, w, h, DXGI_FORMAT_R8_UNORM, D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET, kSrv, L"ssao.temp", 1, 1, one);
     out_.Create(ctx, w, h, DXGI_FORMAT_R8_UNORM, D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET, kSrv, L"ssao.out", 1, 1, one);
+    for (uint32_t i = 0; i < 2; ++i)
+        hist_[i].Create(ctx, w, h, DXGI_FORMAT_R8_UNORM, D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET, kSrv,
+                        i ? L"ssao.hist1" : L"ssao.hist0", 1, 1, one);
+    histValid_ = false;
 }
 
 void SsaoPass::ReleaseTargets(Dx12Context& ctx) {
     raw_.Release(ctx);
     temp_.Release(ctx);
     out_.Release(ctx);
+    for (Texture& hist : hist_) hist.Release(ctx);
+    histValid_ = false;
 }
 
 void SsaoPass::Execute(PassContext& pc) {
     RenderTargets& t = pc.targets;
     ID3D12GraphicsCommandList* cmd = pc.cmd;
     t.ao = nullptr;
-    if (pc.path == RenderPath::PathTraced || !pc.settings.ssao || !out_) return;
-    if (pc.path == RenderPath::RayTraced && pc.rt && rtao_) {
+    if (pc.path == RenderPath::PathTraced || !pc.settings.ssao || !out_) {
+        histValid_ = false;
+        return;
+    }
+    const bool rtAo = pc.path == RenderPath::RayTraced && pc.rt && rtao_;
+    // Blur input: the raw raster AO, or the ray-traced AO after temporal accumulation.
+    Texture* src = &raw_;
+    if (rtAo) {
         raw_.Transition(cmd, kUav);
         t.depth.Transition(cmd, kSrvAll);
         t.normal.Transition(cmd, kSrvAll);
@@ -885,16 +898,34 @@ void SsaoPass::Execute(PassContext& pc) {
         raw_.Transition(cmd, kSrv);
         t.depth.Transition(cmd, kSrv);
         t.normal.Transition(cmd, kSrv);
+
+        // Reprojection needs last frame on screen: no offscreen renders (their history would depend on
+        // whatever rendered before) and no camera cut or jump (the history is another view).
+        const float dx = pc.view.camera.eye.x - histEye_.x, dy = pc.view.camera.eye.y - histEye_.y;
+        const float dz = pc.view.camera.eye.z - histEye_.z;
+        const bool histOk = histValid_ && !pc.offscreen && !pc.view.cameraCut && dx * dx + dy * dy + dz * dz <= 144.0f;
+        histEye_ = pc.view.camera.eye;
+
+        Texture& acc = hist_[histCur_];
+        Texture& prev = hist_[histCur_ ^ 1];
+        const float tc[4] = {histOk ? 1.0f : 0.0f, 0, 0, 0};
+        acc.Transition(cmd, kRt);
+        temporal_.Draw(pc, {&acc}, pc.transient.SrvTable(pc.ctx, {&t.depth, nullptr, &raw_, &prev, &t.velocity}), tc, 4);
+        acc.Transition(cmd, kSrv);
+        histCur_ ^= 1;
+        histValid_ = true;
+        src = &acc;
     } else {
         const float c0[4] = {pc.settings.ssaoRadius, 16.0f, 1.0f / t.width, 1.0f / t.height};
         raw_.Transition(cmd, kRt);
         ao_.Draw(pc, {&raw_}, pc.transient.SrvTable(pc.ctx, {&t.depth, &t.normal}), c0, 4);
         raw_.Transition(cmd, kSrv);
+        histValid_ = false;
     }
 
     const float h[4] = {1.0f / raw_.width, 0, 0, 0};
     temp_.Transition(cmd, kRt);
-    blur_.Draw(pc, {&temp_}, pc.transient.SrvTable(pc.ctx, {&t.depth, nullptr, &raw_}), h, 4);
+    blur_.Draw(pc, {&temp_}, pc.transient.SrvTable(pc.ctx, {&t.depth, nullptr, src}), h, 4);
     temp_.Transition(cmd, kSrv);
 
     const float v[4] = {0, 1.0f / raw_.height, 0, 0};
