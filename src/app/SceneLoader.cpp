@@ -240,4 +240,11 @@ bool LoadRenderBenchPackage(const std::vector<CharacterAsset>& characters, const
     }
 }
 
+std::shared_ptr<PmxModel> LoadCharacterModelOnly(const std::filesystem::path& path) {
+    auto pmx = std::make_shared<PmxModel>();
+    std::string err;
+    if (!LoadModelFile(path, ModelRole::Character, *pmx, &err)) return nullptr;
+    return pmx;
+}
+
 } // namespace mmdx

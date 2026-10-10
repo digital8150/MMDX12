@@ -19,6 +19,7 @@ struct TimelineRow {
     bool expanded = true;       // only meaningful for groups; the CALLER hides collapsed children (do not pass them in)
     bool keysEditable = true;   // false: keys are drawn dimmed and cannot be selected or moved (summary rows)
     bool selected = false;      // row picked on the label column: label cell drawn highlighted
+    ImU32 tint = 0;             // track-type marker: a thin bar at the label's left edge (0 = none)
     std::vector<TimelineKey> keys;  // sorted by frame ascending
 };
 
@@ -54,12 +55,13 @@ struct TimelineEvents {
     bool addKeyAt = false; uint64_t addKeyRow = 0; int addKeyFrame = 0;  // double click on an empty spot of an editable, non-group row
     bool rowClick = false; uint64_t rowClickId = 0; RowClickMode rowClickMode = RowClickMode::Replace;  // label clicked
     bool rangeChanged = false;                         // view.rangeStart/rangeEnd were changed by the widget this frame
+    bool contextMenu = false; int contextFrame = 0; uint64_t contextRow = 0;  // right click in the key area (row 0 = none)
 };
 
 // Draws the timeline into the current ImGui window at the cursor, filling `size` (x or y <= 0 means "remaining space").
 //   label column on the left (width 220 unscaled px, rows 24 px tall, ruler 28 px tall),
 //   key area on the right. `currentFrame` draws the playhead; `maxFrame` limits horizontal scrolling (plus a margin of 120 frames).
-//   Features: label clicks, Shift+drag range on the ruler, right click on the ruler clears the range, wheel on the ruler zooms, scrollbar at the bottom.
+//   Features: label clicks, Shift+drag range on the ruler, right click on the ruler clears the range, right click on the keys asks for the host's key menu, wheel on the ruler zooms, scrollbar at the bottom.
 // Returns true if any event flag in `ev` is set.
 bool Timeline(const char* id, ImVec2 size, const std::vector<TimelineRow>& rows, int currentFrame, int maxFrame,
               TimelineView& view, TimelineEvents& ev);

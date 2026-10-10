@@ -1051,32 +1051,36 @@ void CSRender(uint3 id : SV_DispatchThreadID) {
         float ptSunVis = 0.0;
         if (isPtPackHit) {
             RtPtPackRecord rec = LoadPtPackRecord(s.g.packSrv);
-            PtPackBindRecord(rec);
-            PtPackIn packIn;
-            packIn.pos = s.pos;
-            packIn.normal = s.n;
-            packIn.V = -d;
-            packIn.uv = s.uv;
-            packIn.L = -gLightDir;
-            if (!diffuseChain) {
-                float3 sv = SunVisibility(s, rng);
-                ptSunVis = Luminance(sv);
-            }
-            packIn.sunVis = ptSunVis;
-            packIn.baseColor = SrgbToLinear(saturate(s.tex.rgb * s.g.diffuse.rgb));
-            packIn.materialClass = rec.materialClass;
-            [unroll] for (int p = 0; p < 16; ++p)
-                packIn.params[p] = rec.params[p >> 2][p & 3];
-            packIn.headRight = rec.headRight.xyz;
-            packIn.headPos = rec.headPos.xyz;
-            packIn.headScale = rec.headPos.w;
-            packIn.headUp = rec.headUp.xyz;
-            packIn.headForward = rec.headForward.xyz;
-            packIn.headValid = (rec.headValid != 0);
+            if (rec.materialClass != PACK_CLASS_OFF) {
+                PtPackBindRecord(rec);
+                PtPackIn packIn;
+                packIn.pos = s.pos;
+                packIn.normal = s.n;
+                packIn.V = -d;
+                packIn.uv = s.uv;
+                packIn.L = -gLightDir;
+                if (!diffuseChain) {
+                    float3 sv = SunVisibility(s, rng);
+                    ptSunVis = Luminance(sv);
+                }
+                packIn.sunVis = ptSunVis;
+                packIn.baseColor = SrgbToLinear(saturate(s.tex.rgb * s.g.diffuse.rgb));
+                packIn.materialClass = rec.materialClass;
+                [unroll] for (int p = 0; p < 16; ++p)
+                    packIn.params[p] = rec.params[p >> 2][p & 3];
+                packIn.headRight = rec.headRight.xyz;
+                packIn.headPos = rec.headPos.xyz;
+                packIn.headScale = rec.headPos.w;
+                packIn.headUp = rec.headUp.xyz;
+                packIn.headForward = rec.headForward.xyz;
+                packIn.headValid = (rec.headValid != 0);
 
-            ptPackOut = PackEvaluate(packIn);
-            s.albedo = ptPackOut.albedo;
-            s.flat = ptPackOut.flatFace;   // the pack decides, not MAT_FLAT (as in pathtrace.hlsl)
+                ptPackOut = PackEvaluate(packIn);
+                s.albedo = ptPackOut.albedo;
+                s.flat = ptPackOut.flatFace;   // the pack decides, not MAT_FLAT (as in pathtrace.hlsl)
+            } else {
+                isPtPackHit = false;
+            }
         }
 #endif
         if (specChain) {

@@ -37,6 +37,7 @@ ComputePipeline* PtPackVariants::Resolve(Dx12Context& ctx,
     bool warnedMultiple = false;
     for (GpuModel* model : models) {
         if (!model || model->Role() != ModelRole::Character || model->ShaderPackId().empty()) continue;
+        if (!model->PackActive()) continue;   // every material switched off
         const ShaderPack* pack = reg.Find(model->ShaderPackId());
         if (!pack || !pack->hasPtSurface) continue;
         if (!chosenPack) {

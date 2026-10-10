@@ -374,8 +374,10 @@ void App::UpdateOffline() {
         StartStudioRender(options_.offlineStill.empty());
         return;
     }
-    if (screen_ == Screen::Offline && !ImGui::GetIO().WantCaptureKeyboard && ImGui::IsKeyPressed(ImGuiKey_Escape))
+    if (screen_ == Screen::Offline && !ImGui::GetIO().WantCaptureKeyboard && ImGui::IsKeyPressed(ImGuiKey_Escape)) {
+        LOG_INFO("offline render: Esc pressed, cancelling");
         offline_.cancelRequested = true;
+    }
 }
 
 void App::RecordRealtimeVideoFrame(ID3D12GraphicsCommandList* cmd) {
@@ -488,6 +490,7 @@ void App::RecordOfflineFrame(ID3D12GraphicsCommandList* cmd) {
     }
     // the irradiance cache prepass is the render's GI: every image, video frames included
     if (!renderer_.BeginOffline(cmd, view, jd)) {
+        LOG_ERROR("offline render: could not start (ray tracing scene not built: %zu models)", view.models.size());
         if (!offline_.background) {
             renderer_.Render(cmd, view);  // keep this frame valid
             toast_ = {Tr("고품질 렌더를 시작할 수 없습니다"), Tr("레이 트레이싱 장면을 만들지 못했습니다"), {}, true,
@@ -514,6 +517,7 @@ void App::AfterOfflineFrame() {
     if (offline_.realtime) {
         if (++offline_.iter < offline_.iterCount) return;   // more passes accumulate into this frame
         if (!renderer_.ReadFinalImage(img)) {
+            LOG_ERROR("offline render: could not read the frame");
             toast_ = {Tr("렌더 결과를 읽을 수 없습니다"), "", {}, true, timeSeconds_ + 8.0};
             FinishOffline(true);
             return;
@@ -521,6 +525,7 @@ void App::AfterOfflineFrame() {
     } else {
         if (renderer_.OfflineStatus().phase != OfflinePhase::Done) return;
         if (!renderer_.ReadOfflineImage(img)) {
+            LOG_ERROR("offline render: could not read the result image");
             toast_ = {Tr("렌더 결과를 읽을 수 없습니다"), "", {}, true, timeSeconds_ + 8.0};
             FinishOffline(true);
             return;
@@ -533,6 +538,7 @@ void App::AfterOfflineFrame() {
         std::error_code ec;
         std::filesystem::create_directories(offline_.output.parent_path(), ec);
         const bool ok = SavePngRGBA8(offline_.output, img.Width(), img.Height(), img.mips[0].pixels.data(), img.Width() * 4);
+        if (!ok) LOG_ERROR("offline render: could not write %s", PathToUtf8(offline_.output).c_str());
         toast_ = ok ? Toast{Tr("고품질 스크린샷을 저장했습니다"), PathToUtf8(offline_.output.filename()), offline_.output,
                             false, timeSeconds_ + 8.0}
                     : Toast{Tr("스크린샷을 저장할 수 없습니다"), PathToUtf8(offline_.output), {}, true, timeSeconds_ + 8.0};
@@ -688,8 +694,10 @@ void App::DrawOfflineOverlay() {
     {
         const float cancelW = ButtonWidth(Tr("취소"), true);
         ImGui::SetCursorScreenPos(ImVec2(x1 - cancelW, y + Dp(14.0f)));
-        if (Button("##offcancel", Tr("취소"), icon::X, ButtonKind::Secondary, ImVec2(0, 34)))
+        if (Button("##offcancel", Tr("취소"), icon::X, ButtonKind::Secondary, ImVec2(0, 34))) {
+            LOG_INFO("offline render: cancel button");
             offline_.cancelRequested = true;
+        }
         Icon(dl, video ? icon::FilmStrip : icon::Image, Dp(20.0f), ImVec2(x0 + Dp(10.0f), y + Dp(28.0f)), p.accent);
         Text(dl, Font::Semibold, size::Title, ImVec2(x0 + Dp(30.0f), y + Dp(18.0f)), p.ink,
              video ? Tr("고품질 영상 렌더링") : probe ? Tr("샘플 렌더링으로 시간 측정 중") : Tr("고품질 스크린샷 렌더링"));

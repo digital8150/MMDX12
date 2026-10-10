@@ -59,6 +59,29 @@ uint64_t App::StageThumb(int index) {
     return thumbs_.Get("s:" + a.id, ThumbnailKind::Stage, a.parts);
 }
 
+// Theme choice (system / light / dark): an icon button at `pos` and its popup, right-aligned at (popupRight, popupY).
+// Shared by the app bar and the studio's top bar; applies through SetThemeSetting (before the next frame).
+void App::DrawThemeButton(ImVec2 pos, float popupRight, float popupY) {
+    ImGui::SetCursorScreenPos(pos);
+    if (IconButton("##theme", IsDark() ? icon::Moon : icon::Sun, Tr("테마"))) ImGui::OpenPopup("##themepopup");
+    ImGui::SetNextWindowPos(ImVec2(popupRight, popupY), ImGuiCond_Always, ImVec2(1.0f, 0.0f));
+    ImGui::SetNextWindowSize(ImVec2(Dp(200.0f), 0));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(Dp(12.0f), Dp(12.0f)));
+    if (ImGui::BeginPopup("##themepopup")) {
+        const char* names[] = {Tr("시스템 설정"), Tr("라이트"), Tr("다크")};
+        const char* icons[] = {icon::Globe, icon::Sun, icon::Moon};
+        for (int i = 0; i < 3; ++i) {
+            if (Chip((std::string("##theme") + std::to_string(i)).c_str(), names[i], icons[i], settings_.theme == i, -1.0f)) {
+                SetThemeSetting(i);
+                ImGui::CloseCurrentPopup();
+            }
+            Gap(4.0f);
+        }
+        ImGui::EndPopup();
+    }
+    ImGui::PopStyleVar();
+}
+
 void App::DrawAppBar(int activeNav) {
     ImDrawList* dl = ImGui::GetWindowDrawList();
     const Palette& p = P();
@@ -99,7 +122,7 @@ void App::DrawAppBar(int activeNav) {
     const std::string path = PathToUtf8(library_.root.empty() ? ResolveLibraryPath() : library_.root);
     const float pillW = Dp(300.0f);
     const float right = W - Dp(kPad);
-    const ImVec2 pa(right - pillW - Dp(126.0f), (h - Dp(36.0f)) * 0.5f);
+    const ImVec2 pa(right - pillW - Dp(166.0f), (h - Dp(36.0f)) * 0.5f);
 
     if (mcpServer_ && mcpServer_->IsConnected()) {
         const float mcpW = Dp(68.0f);
@@ -154,6 +177,8 @@ void App::DrawAppBar(int activeNav) {
     ImGui::SetCursorScreenPos(ImVec2(right - Dp(36.0f), (h - Dp(36.0f)) * 0.5f));
     if (IconButton("##rescan", icon::Refresh, Tr("라이브러리 다시 검색"))) StartScan();
 
+    DrawThemeButton(ImVec2(right - Dp(156.0f), (h - Dp(36.0f)) * 0.5f), right - Dp(120.0f), h + Dp(6.0f));
+
     // About: name, version, license/credits one-liner.
     ImGui::SetCursorScreenPos(ImVec2(right - Dp(116.0f), (h - Dp(36.0f)) * 0.5f));
     if (IconButton("##about", icon::Info, Tr("정보"))) ImGui::OpenPopup("##aboutpopup");
@@ -180,7 +205,7 @@ void App::DrawAppBar(int activeNav) {
     }
     ImGui::PopStyleVar();
 
-    ImGui::SetNextWindowPos(ImVec2(pa.x + pillW + Dp(126.0f), h + Dp(6.0f)), ImGuiCond_Always, ImVec2(1.0f, 0.0f));
+    ImGui::SetNextWindowPos(ImVec2(pa.x + pillW + Dp(166.0f), h + Dp(6.0f)), ImGuiCond_Always, ImVec2(1.0f, 0.0f));
     ImGui::SetNextWindowSize(ImVec2(Dp(440.0f), 0));
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(Dp(18.0f), Dp(16.0f)));
     if (ImGui::BeginPopup("##libpopup")) {
@@ -660,6 +685,42 @@ void App::DrawSelect() {
                     Icon(w->DrawList, shaderParamsOpen_ ? icon::CaretDown : icon::CaretRight, 14.0f,
                          ImVec2(da.x + colW - Dp(10.0f), da.y + Dp(15.0f)), p.ink2);
                     if (shaderParamsOpen_) shaderChanged |= DrawShaderPackParams(choice);
+                }
+                if (pack && pack->Selectable()) {
+                    // per-material classes: folded; opening it reads the model (no textures) in the background
+                    Gap(4.0f);
+                    ImGuiWindow* w = ImGui::GetCurrentWindow();
+                    const ImVec2 da = w->DC.CursorPos;
+                    bool hovered = false;
+                    if (CardItem("##shadermats", da, ImVec2(da.x + colW, da.y + Dp(30.0f)), &hovered))
+                        lobbyMaterialsOpen_ = !lobbyMaterialsOpen_;
+                    const int n = MaterialOverrideCount(choice);
+                    const std::string label = std::string(Tr("재질별 셰이딩")) +
+                                              (n ? "  ·  " + std::to_string(n) + Tr("개 지정") : std::string());
+                    Text(w->DrawList, Font::Semibold, size::Small, ImVec2(da.x, da.y + Dp(6.0f)), hovered ? p.ink : p.ink2,
+                         label.c_str());
+                    Icon(w->DrawList, lobbyMaterialsOpen_ ? icon::CaretDown : icon::CaretRight, 14.0f,
+                         ImVec2(da.x + colW - Dp(10.0f), da.y + Dp(15.0f)), p.ink2);
+                    if (lobbyMaterialsOpen_) {
+                        if (lobbyMatId_ != ch->id) {
+                            lobbyMatId_ = ch->id;
+                            lobbyMatPmx_.reset();
+                            lobbyMatFuture_ = std::async(std::launch::async, LoadCharacterModelOnly, ch->modelPath);
+                        }
+                        if (lobbyMatFuture_.valid() &&
+                            lobbyMatFuture_.wait_for(std::chrono::seconds(0)) == std::future_status::ready)
+                            lobbyMatPmx_ = lobbyMatFuture_.get();
+                        if (lobbyMatPmx_) {
+                            shaderChanged |= DrawMaterialShaderList("##lobbymats", choice, *lobbyMatPmx_, colW, Dp(300.0f));
+                        } else if (lobbyMatFuture_.valid()) {
+                            Skeleton(w->DrawList, w->DC.CursorPos, ImVec2(w->DC.CursorPos.x + colW, w->DC.CursorPos.y + Dp(28.0f)), Dp(8.0f));
+                            ImGui::Dummy(ImVec2(colW, Dp(32.0f)));
+                        } else {
+                            PushFont(Font::Regular, size::Caption);
+                            ImGui::TextDisabled("%s", Tr("모델을 읽지 못했어요"));
+                            PopFont();
+                        }
+                    }
                 }
                 if (pack) {
                     PushFont(Font::Regular, size::Caption);

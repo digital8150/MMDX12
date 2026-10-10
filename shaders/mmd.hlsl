@@ -602,7 +602,7 @@ PSOut PSPack(VSOut i, bool front : SV_IsFrontFace) {
     s.tex = (gFlags & MAT_HAS_TEXTURE) ? ApplyTexFactor(gTexture.Sample(gWrap, i.uv), gTexMul, gTexAdd) : float4(1, 1, 1, 1);
     s.alpha = gDiffuse.a * s.tex.a;
     if (s.alpha < 0.004) discard;
-    s.materialClass = gPackClass;
+    s.materialClass = (gPackClass == PACK_CLASS_OFF) ? PACK_BODY : gPackClass;
     float rawShadow = (gFlags & MAT_RECEIVE) ? SHADOW_TERM(i.worldPos, s.N, i.viewZ, i.pos.xy) : 1.0;
     float occ = (1.0 - rawShadow) * gSunShadowParams.z;
     s.shadow = 1.0 - occ;
@@ -637,7 +637,8 @@ EdgeOut VSEdge(VSIn v) {
     float px = gEdgeSize * v.edge * gEdgeScale;                           // outline width in pixels
 #if PACK_HAS_EDGE
     // pack outlines (PackEdge): per-material width scale
-    px *= max(PackEdge(gPackClass, gEdgeColor, gEdgeSize).widthScale, 0.0);
+    uint edgeClass = (gPackClass == PACK_CLASS_OFF) ? PACK_BODY : gPackClass;
+    px *= max(PackEdge(edgeClass, gEdgeColor, gEdgeSize).widthScale, 0.0);
 #endif
     o.pos = ExpandEdge(mul(wp, gViewProj), wn, px);
     o.curClip = ExpandEdge(mul(wp, gViewProjNoJitter), wn, px);
@@ -664,7 +665,8 @@ void PSDepthAlpha(VSOut i) {
 // Compiled only for the pack's edge PSO (MMDX_PACK); otherwise the default PSEdge above draws.
 #if PACK_HAS_EDGE
 PSOut PSEdgePack(EdgeOut i) {
-    PackEdgeResult e = PackEdge(gPackClass, gEdgeColor, gEdgeSize);
+    uint edgeClass = (gPackClass == PACK_CLASS_OFF) ? PACK_BODY : gPackClass;
+    PackEdgeResult e = PackEdge(edgeClass, gEdgeColor, gEdgeSize);
     PSOut o;
     o.color = float4(SrgbToLinear(saturate(e.color.rgb)) * gSunIntensity * 0.85, saturate(e.color.a));
     o.normal = float4(OctEncode(float3(0, 0, -1)), 0.0, saturate(e.color.a));

@@ -26,6 +26,7 @@
 #include <chrono>
 #include <filesystem>
 #include <future>
+#include <set>
 #include <memory>
 #include <optional>
 #include <string>
@@ -99,7 +100,8 @@ namespace mmdx {
 //                                open (range: --offline-range in timeline seconds, else the timeline range, else the
 //                                whole project; motion camera; project audio) and quits; --offline-still renders the
 //                                --seek frame (GI).
-//   --ui-scale <f>               UI scale for this run instead of the monitor's DPI scale (1.5 = 144 dpi; captures)
+//   --theme <auto|light|dark>    colour theme for this run instead of the saved one (auto = follow Windows)
+//   --ui-scale <f>              UI scale for this run instead of the monitor's DPI scale (1.5 = 144 dpi; captures)
 //   --update-feed <url-or-file>  auto-update feed override: an https URL, a file: URL or a local
 //                                latest.json path (testing); the zip url may also be file:/local
 //   --apply-update               internal: apply a staged update with no window, then exit
@@ -145,6 +147,7 @@ struct AppOptions {
     int offlineQuality = -1;                           // --offline-quality (-1 = settings)
     int offlineRenderer = -1;                          // --offline-renderer <raster|rt|pt|gi> (-1 = settings)
     bool offlineProbe = false;                         // --offline-probe: sample render for the time estimate, then quit
+    int theme = -1;     // --theme auto|light|dark for this run only (-1: keep the saved setting; 0 auto, 1 light, 2 dark)
     int language = -1;  // --lang auto|ko|en|ja|zh for this run only (-1: keep the saved setting)
     std::filesystem::path project;  // --project
     float uiScale = 0.0f;           // --ui-scale (0 = the window's DPI scale)
@@ -217,6 +220,11 @@ private:
     void PollScan();
     void ApplyCommandLinePreselection();
     void ApplyRenderSettings();
+    // Theme: settings_.theme (or --theme) resolved to light / dark, applied to the UI kit palette, the ImGui style and
+    // the title bar. Requests go through themeDirty_ and run before the next ImGui frame (never mid-frame).
+    void ApplyTheme();
+    void DrawThemeButton(ImVec2 pos, float popupRight, float popupY);  // icon button + system / light / dark popup
+    void SetThemeSetting(int theme);  // 0 auto, 1 light, 2 dark: saves and applies
     void ApplyGraphicsPreset(int preset);  // sets the effect toggles of AppSettings
     void RefreshColorLuts();            // rescans luts_, resolves options_.lut
     void ApplyColorLut();               // uploads settings_.colorLut when it differs from appliedLut_
@@ -281,7 +289,9 @@ private:
     void StudioSelectAll();
     void StudioDeleteSelected(const char* undoName);
     void StudioCopySelected();
-    void StudioPaste(bool curvesOnly);               // at the current frame; curvesOnly: interpolation onto existing keys
+    // at the current frame; curvesOnly: interpolation onto existing keys; mirrored: bone keys onto the other side, reflected
+    void StudioPaste(bool curvesOnly, bool mirrored = false);
+    void DrawStudioKeyMenu();                        // timeline right-click menu (key actions at the clicked frame)
     void StudioRegisterKeys();                       // I: key the target rows at the current frame
     void StudioShiftFrames(bool remove);             // MMD frame insert/delete (range length or 1 frame)
     void StudioCopyCurve();                          // inspector: interpolation of the first selected key
@@ -329,6 +339,10 @@ private:
     void StudioPossess(bool on);
     void StudioViewportCameraHandles(bool hovered);  // eye / target handles of the camera (free view, camera selected)
     std::string iniPath_;                            // ImGui ini (panel layout); must outlive the context
+    bool studioFocusEffects_ = false;               // top bar effects button: bring the effects tab forward
+    bool studioResetLayoutDone_ = false;            // default layout just built: show the properties tab
+    int studioKeyMenuFrame_ = 0;                     // frame / row the timeline key menu was opened on
+    uint64_t studioKeyMenuRow_ = 0;
     int studioActiveView_ = 0;                       // quad view: 0 perspective, 1 top, 2 front, 3 left (the view under the mouse)
     void StudioDrawPoseOverlay(const studio::ViewProj& vp, float x0, float y0, float x1, float y1);  // bones + gizmo of another view
     void StudioOrthoNavigate(const studio::ViewProj& vp, bool hovered, bool active);  // pan / zoom of the orthographic views
@@ -445,7 +459,7 @@ private:
     void StudioRestoreAfterRender();                  // FinishOffline: time, camera mode, physics back to the editor's
     DirectX::XMFLOAT3 StudioPerformerCenter() const;  // center bone of the first character (teleport detection)
     void DrawStudioRenderMenu();                      // top bar popup: video / still
-    void DrawStudioEffectsMenu();                     // top bar popup: screen effects + effect stack
+    void DrawStudioEffectsPanel(float x0, float y0, float x1, float y1);  // the "효과" panel: screen effects + effect stack
     void DrawStudioHelp();                            // shortcut overlay (? key / top bar button)
     bool StudioModal() const { return videoDialogOpen_ || studioHelpOpen_ || studioLeaveConfirm_ || studioLightPresetPending_ >= 0; }
 
@@ -546,6 +560,17 @@ private:
     // A row showing the chosen pack; click opens a searchable pack list (+ "셰이더 관리"). True = changed.
     bool DrawShaderSelector(const char* id, ShaderChoice& choice, float width);
     bool DrawShaderPackParams(ShaderChoice& choice);                     // the chosen pack's sliders + reset
+    // per-material class / default-shading list of a pack model (`maxHeight` caps the scrolling list)
+    bool DrawMaterialShaderList(const char* id, ShaderChoice& choice, const PmxModel& pmx, float width, float maxHeight);
+    static int MaterialOverrideCount(const ShaderChoice& choice);
+    std::set<int> materialSel_;                    // DrawMaterialShaderList: selected rows (Ctrl / Shift + click)
+    std::string materialSelOwner_;                 // the list the selection belongs to
+    int materialSelAnchor_ = -1;
+    bool playMaterialsOpen_ = false;               // play bar shader popup: the material list is expanded
+    bool lobbyMaterialsOpen_ = false;              // library shader tab: the material list is expanded
+    std::string lobbyMatId_;                       // character whose model the list below was loaded for
+    std::future<std::shared_ptr<PmxModel>> lobbyMatFuture_;
+    std::shared_ptr<PmxModel> lobbyMatPmx_;
     uint64_t PackThumb(const ShaderPack& pack);                          // preview texture, 0 = none / loading
     uint64_t RemotePackThumb(const RemotePack& pack);
     void DrawPackImage(ImDrawList* dl, uint64_t tex, const std::string& key, ImVec2 a, ImVec2 b, float rounding,
@@ -587,6 +612,7 @@ private:
     HWND hwnd_ = nullptr;
     bool running_ = true;
     bool minimized_ = false;
+    bool themeDirty_ = false;   // re-resolve and apply the theme before the next frame (user choice / Windows theme changed)
     Screen screen_ = Screen::Scanning;
 
     Dx12Context ctx_;
@@ -747,7 +773,6 @@ private:
     uint32_t studioReplaceUid_ = 0;                // "+" popup in replace mode: the model whose file is swapped (0: add)
     bool studioOpenAdd_ = false;                   // the outliner opens the "+" popup next frame (model menu's replace)
     bool studioHelpOpen_ = false;                  // shortcut overlay
-    bool studioEffectsOpen_ = false;               // screen effects popup
     bool studioRenderWhole_ = false;               // render dialog: whole project instead of the timeline range
     // viewport pose editing (cached from the last drawn frame: overlay, picking, scripts)
     studio::ViewProj studioVp_;

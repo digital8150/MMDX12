@@ -165,16 +165,16 @@ void App::DrawStudioRenderMenu() {
     ImGui::PopStyleVar();
 }
 
-void App::DrawStudioEffectsMenu() {
+// The studio's "효과" panel (a tab next to the properties): real-time effects, colour LUT and the effect stack.
+// Draws in the panel's content rect (screen coordinates), scrolling inside its own child.
+void App::DrawStudioEffectsPanel(float x0, float y0, float x1, float y1) {
     using namespace ui;
-    ImGui::SetNextWindowSize(ImVec2(Dp(360.0f), 0));
-    ImGui::SetNextWindowSizeConstraints(
-        ImVec2(Dp(340.0f), Dp(100.0f)),
-        ImVec2(Dp(420.0f), std::max(Dp(200.0f), ImGui::GetMainViewport()->WorkSize.y - Dp(80.0f))));
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(Dp(14.0f), Dp(14.0f)));
-    studioEffectsOpen_ = false;
-    if (ImGui::BeginPopup("##studioeffects")) {
-        studioEffectsOpen_ = true;
+    ImGui::SetCursorScreenPos(ImVec2(x0, y0));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(Dp(16.0f), Dp(14.0f)));
+    const bool visible = ImGui::BeginChild("##studioeffects", ImVec2(x1 - x0, y1 - y0), ImGuiChildFlags_AlwaysUseWindowPadding,
+                                           ImGuiWindowFlags_NoBackground);
+    ImGui::PopStyleVar();
+    if (visible) {
         bool changed = false;
 
         SectionLabel(Tr("실시간 효과"));
@@ -232,10 +232,8 @@ void App::DrawStudioEffectsMenu() {
             ApplyRenderSettings();
             settings_.Save(settingsPath_);
         }
-
-        ImGui::EndPopup();
     }
-    ImGui::PopStyleVar();
+    ImGui::EndChild();
 }
 
 // ---------------------------------------------------------------------------

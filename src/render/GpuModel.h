@@ -37,6 +37,7 @@ public:
         bool alphaTested = false;    // texture has alpha: shadow pass samples it
         bool visible = true;         // diffuse alpha > 0 (MMD skips invisible materials, edges included)
         bool morphable = false;      // a material morph targets it (constants change at run time)
+        bool packOff = false;        // shader pack switched off for this material (ShaderChoice::materials): default shading
         float edgeSize = 0;
     };
 
@@ -68,8 +69,11 @@ public:
     // parameters into the material constants; a no-op when nothing changed, so call it every frame before
     // UpdateMaterials. The scene pass draws the model with the pack's PSOs while ShaderPackId() is not empty.
     // `textureFolder` is the model's resolved per-character texture folder (empty = the pack folder only).
-    void SetShaderPack(const ShaderPack* pack, const PackParamValues& params, const std::filesystem::path& textureFolder);
+    void SetShaderPack(const ShaderPack* pack, const PackParamValues& params, const std::filesystem::path& textureFolder,
+                       const MaterialClassOverrides& materials = {});
     const std::string& ShaderPackId() const { return packId_; }
+    // the pack shades at least one material (false without a pack, or with every material switched off)
+    bool PackActive() const;
     const std::filesystem::path& ShaderTextureFolder() const { return packTextureFolder_; }
 
     const std::string& Name() const { return name_; }
@@ -168,6 +172,7 @@ private:
     uint32_t packGeneration_ = 0;
     std::filesystem::path packTextureFolder_;
     PackParamValues packParams_{};
+    MaterialClassOverrides packOverrides_{};
 };
 
 } // namespace mmdx

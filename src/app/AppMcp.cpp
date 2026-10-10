@@ -1011,6 +1011,7 @@ void App::ExecuteMcp(const std::string& tool, const nlohmann::json& args, std::s
     }
 
     if (tool == "render_cancel") {
+        LOG_INFO("offline render: cancelled over MCP");
         offline_.cancelRequested = true;
         promise->Resolve({{"status", "cancelling"}});
         return;

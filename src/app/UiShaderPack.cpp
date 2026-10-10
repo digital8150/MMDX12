@@ -6,10 +6,13 @@
 #include <ShlObj.h>
 
 #include <algorithm>
+#include <climits>
+#include <set>
 #include <cmath>
 #include <thread>
 
 #include "app/Icons.h"
+#include "asset/PmxModel.h"
 #include "app/UiKit.h"
 #include "core/I18n.h"
 #include "core/TextUtil.h"
@@ -87,7 +90,148 @@ void App::ApplyShaderChoice(GpuModel& gpu, const ShaderChoice& choice) {
     // per-character texture folder: the choice's folder, else the pack-level one (registry setting)
     const std::filesystem::path folder =
         choice.textureFolder.empty() ? ShaderPacks().TextureFolder(choice.pack) : Utf8ToPath(choice.textureFolder);
-    gpu.SetShaderPack(pack, pack->Resolve(choice.params), folder);
+    gpu.SetShaderPack(pack, pack->Resolve(choice.params), folder, choice.materials);
+}
+
+namespace {
+const char* MaterialClassName(int cls) {
+    switch (cls) {
+        case (int)PackClass::Body: return Tr("의상");
+        case (int)PackClass::Skin: return Tr("피부");
+        case (int)PackClass::Face: return Tr("얼굴");
+        case (int)PackClass::Eye: return Tr("눈");
+        case (int)PackClass::Hair: return Tr("머리카락");
+        case (int)PackClass::Weapon: return Tr("무기");
+        default: return Tr("기본 셰이딩");
+    }
+}
+} // namespace
+
+int App::MaterialOverrideCount(const ShaderChoice& choice) { return (int)choice.materials.size(); }
+
+// Per-material class / default shading of a pack model. One row per material: name + a class dropdown ("자동" shows the
+// pack's own pick). Ctrl / Shift + click selects several rows; a dropdown on a selected row then sets all of them.
+bool App::DrawMaterialShaderList(const char* id, ShaderChoice& choice, const PmxModel& pmx, float width, float maxHeight) {
+    const ShaderPack* pack = choice.pack.empty() ? nullptr : ShaderPacks().Find(choice.pack);
+    if (!pack || pmx.materials.empty()) return false;
+    const Palette& p = P();
+    bool changed = false;
+    // the selection belongs to one list (model + widget); another list starts empty
+    const std::string owner = std::string(id) + "|" + std::to_string(pmx.materials.size()) + "|" + pmx.name;
+    if (owner != materialSelOwner_) {
+        materialSelOwner_ = owner;
+        materialSel_.clear();
+        materialSelAnchor_ = -1;
+    }
+
+    // header: count + reset
+    {
+        ImDrawList* dl = ImGui::GetWindowDrawList();
+        const ImVec2 c = ImGui::GetCursorScreenPos();
+        char head[96];
+        const int n = MaterialOverrideCount(choice);
+        if (n > 0) std::snprintf(head, sizeof(head), Tr("재질 %d개 · %d개 직접 지정"), (int)pmx.materials.size(), n);
+        else std::snprintf(head, sizeof(head), Tr("재질 %d개 · 모두 자동"), (int)pmx.materials.size());
+        Text(dl, Font::Regular, size::Caption, ImVec2(c.x, c.y + Dp(6.0f)), p.ink3, head);
+        if (n > 0) {
+            const float bw = TextSize(Font::Semibold, size::Small, Tr("모두 자동")).x / Dpi() + 24.0f;
+            ImGui::SetCursorScreenPos(ImVec2(c.x + width - Dp(bw), c.y));
+            if (Button((std::string(id) + "_reset").c_str(), Tr("모두 자동"), nullptr, ButtonKind::Ghost, ImVec2(bw, 26.0f))) {
+                choice.materials.clear();
+                changed = true;
+            }
+            ImGui::SetCursorScreenPos(ImVec2(c.x, c.y + Dp(28.0f)));
+        } else {
+            ImGui::Dummy(ImVec2(width, Dp(26.0f)));
+        }
+    }
+
+    const float rowH = Dp(32.0f), comboW = std::min(Dp(132.0f), width * 0.48f);
+    const float listH = std::min(maxHeight, rowH * (float)pmx.materials.size() + Dp(4.0f));
+    ImGui::BeginChild((std::string(id) + "_list").c_str(), ImVec2(width, listH), ImGuiChildFlags_None,
+                      ImGuiWindowFlags_NoBackground);
+    ImGuiIO& io = ImGui::GetIO();
+    for (int i = 0; i < (int)pmx.materials.size(); ++i) {
+        const PmxMaterial& m = pmx.materials[(size_t)i];
+        ImGui::PushID(i);
+        ImDrawList* dl = ImGui::GetWindowDrawList();
+        const ImVec2 a = ImGui::GetCursorScreenPos();
+        const float w = ImGui::GetContentRegionAvail().x;
+        const ImVec2 b(a.x + w, a.y + rowH - Dp(2.0f));
+        const bool sel = materialSel_.count(i) > 0;
+        // row hit area (left of the dropdown): plain click = only this row, Ctrl = toggle, Shift = range
+        ImGui::InvisibleButton("##row", ImVec2(std::max(1.0f, w - comboW - Dp(6.0f)), b.y - a.y));
+        const bool hovered = ImGui::IsItemHovered();
+        if (ImGui::IsItemClicked()) {
+            if (io.KeyShift && materialSelAnchor_ >= 0) {
+                if (!io.KeyCtrl) materialSel_.clear();
+                for (int k = std::min(i, materialSelAnchor_); k <= std::max(i, materialSelAnchor_); ++k) materialSel_.insert(k);
+            } else if (io.KeyCtrl) {
+                if (!materialSel_.erase(i)) materialSel_.insert(i);
+                materialSelAnchor_ = i;
+            } else {
+                const bool only = sel && materialSel_.size() == 1;
+                materialSel_.clear();
+                if (!only) materialSel_.insert(i);
+                materialSelAnchor_ = i;
+            }
+        }
+        if (sel) dl->AddRectFilled(a, b, p.accentSoft, Dp(8.0f));
+        else if (hovered) dl->AddRectFilled(a, b, WithAlpha(p.ink, IsDark() ? 0.07f : 0.04f), Dp(8.0f));
+
+        const auto it = choice.materials.find(m.name);
+        const int cur = it != choice.materials.end() ? it->second : -2;   // -2 = automatic
+        const bool tex = m.textureIndex >= 0 && (size_t)m.textureIndex < pmx.textures.size();
+        const int autoCls = (int)pack->Classify(m.name, m.nameEn, tex ? pmx.textures[(size_t)m.textureIndex] : std::string());
+        const float ty = a.y + (b.y - a.y - Dp(size::Small * 1.25f)) * 0.5f;
+        TextEllipsis(dl, Font::Regular, size::Small, ImVec2(a.x + Dp(10.0f), ty), b.x - comboW - Dp(14.0f),
+                     cur == -2 ? p.ink2 : p.ink, m.name.empty() ? m.nameEn.c_str() : m.name.c_str());
+
+        // class dropdown
+        std::string preview = cur == -2 ? std::string(Tr("자동")) + " · " + MaterialClassName(autoCls) : MaterialClassName(cur);
+        ImGui::SetCursorScreenPos(ImVec2(b.x - comboW, a.y + (b.y - a.y - ImGui::GetFrameHeight()) * 0.5f));
+        ImGui::SetNextItemWidth(comboW);
+        PushFont(Font::Regular, size::Small);
+        ImGui::PushStyleColor(ImGuiCol_Text, ImGui::ColorConvertU32ToFloat4(cur == -2 ? p.ink3 : (cur == kMaterialPackOff ? p.warn : p.ink)));
+        const bool open = ImGui::BeginCombo("##cls", preview.c_str(), ImGuiComboFlags_HeightLarge | ImGuiComboFlags_NoArrowButton);
+        ImGui::PopStyleColor();
+        {   // a quiet caret instead of ImGui's arrow box
+            const ImVec2 cmax = ImGui::GetItemRectMax(), cmin = ImGui::GetItemRectMin();
+            Icon(ImGui::GetWindowDrawList(), icon::CaretDown, 12.0f, ImVec2(cmax.x - Dp(12.0f), (cmin.y + cmax.y) * 0.5f), p.ink3);
+        }
+        if (open) {
+            int pick = INT_MIN;
+            const std::string autoLabel = std::string(Tr("자동")) + "  (" + MaterialClassName(autoCls) + ")";
+            if (ImGui::Selectable(autoLabel.c_str(), cur == -2)) pick = -2;
+            ImGui::Separator();
+            for (int c = 0; c <= (int)PackClass::Weapon; ++c)
+                if (ImGui::Selectable(MaterialClassName(c), cur == c)) pick = c;
+            ImGui::Separator();
+            if (ImGui::Selectable(Tr("기본 셰이딩 (팩 끄기)"), cur == kMaterialPackOff)) pick = kMaterialPackOff;
+            ImGui::EndCombo();
+            if (pick != INT_MIN) {
+                std::set<int> targets = sel && materialSel_.size() > 1 ? materialSel_ : std::set<int>{i};
+                for (int t : targets) {
+                    const std::string& name = pmx.materials[(size_t)t].name;
+                    if (pick == -2) choice.materials.erase(name);
+                    else choice.materials[name] = pick;
+                }
+                changed = true;
+            }
+        }
+        PopFont();
+        if (sel && materialSel_.size() > 1 && ImGui::IsItemHovered()) Tooltip(Tr("선택한 재질 모두에 적용"));
+        ImGui::SetCursorScreenPos(ImVec2(a.x, a.y + rowH));
+        ImGui::PopID();
+    }
+    ImGui::Dummy(ImVec2(1, 1));
+    ImGui::EndChild();
+    PushFont(Font::Regular, size::Caption);
+    ImGui::PushStyleColor(ImGuiCol_Text, ImGui::ColorConvertU32ToFloat4(p.ink3));
+    ImGui::TextWrapped("%s", Tr("Ctrl · Shift + 클릭으로 여러 재질을 골라 한 번에 바꿀 수 있어요. 기본 셰이딩은 그 재질만 팩 없이 그립니다."));
+    ImGui::PopStyleColor();
+    PopFont();
+    return changed;
 }
 
 ShaderChoice App::PlayShaderChoice() const {
@@ -403,10 +547,29 @@ void App::DrawStudioShaderRow(float w) {
         PopFont();
     }
     const ShaderPack* pack = choice.pack.empty() ? nullptr : ShaderPacks().Find(choice.pack);
-    if (pack && !pack->params.empty()) {
+    if (pack) {
         Gap(6.0f);
-        if (Button("##studioshaderparams", Tr("팩 설정"), icon::Sliders, ButtonKind::Ghost))
-            ImGui::OpenPopup("##studioshaderparamspopup");
+        if (!pack->params.empty()) {
+            if (Button("##studioshaderparams", Tr("팩 설정"), icon::Sliders, ButtonKind::Ghost))
+                ImGui::OpenPopup("##studioshaderparamspopup");
+            ImGui::SameLine(0, Dp(4.0f));
+        }
+        const int overrides = MaterialOverrideCount(choice);
+        const std::string matLabel = overrides ? std::string(Tr("재질")) + "  " + std::to_string(overrides) : std::string(Tr("재질"));
+        if (Button("##studioshadermats", matLabel.c_str(), icon::Palette, ButtonKind::Ghost))
+            ImGui::OpenPopup("##studioshadermatspopup");
+        Tooltip(Tr("재질마다 분류를 바꾸거나 팩을 끕니다"));
+        ImGui::SetNextWindowSize(ImVec2(Dp(380.0f), 0));
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(Dp(14.0f), Dp(12.0f)));
+        if (ImGui::BeginPopup("##studioshadermatspopup")) {
+            SectionLabel(Tr("재질별 셰이딩"));
+            changed |= DrawMaterialShaderList("##studiomats", choice, *m->pmx, ImGui::GetContentRegionAvail().x,
+                                              ImGui::GetMainViewport()->WorkSize.y * 0.6f);
+            ImGui::EndPopup();
+        }
+        ImGui::PopStyleVar();
+    }
+    if (pack && !pack->params.empty()) {
         ImGui::SetNextWindowSize(ImVec2(PackParamsPopupWidth(choice), 0));
         ImGui::SetNextWindowSizeConstraints(ImVec2(0, 0),
                                             ImVec2(FLT_MAX, ImGui::GetMainViewport()->WorkSize.y - Dp(24.0f)));

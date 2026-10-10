@@ -20,6 +20,7 @@
 #define PACK_EYE  3u
 #define PACK_HAIR 4u
 #define PACK_WEAPON 5u
+#define PACK_CLASS_OFF 255u
 
 struct PackSurface {
     float3 worldPos;      // world space (MMD units, +Y up)

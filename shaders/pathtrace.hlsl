@@ -164,51 +164,56 @@ void CSPathTrace(uint3 id : SV_DispatchThreadID) {
                     bool isPtPackHit = (g.flags & RTG_PT_PACK) != 0;
                     if (isPtPackHit) {
                         RtPtPackRecord rec = LoadPtPackRecord(g.packSrv);
-                        PtPackBindRecord(rec);
-                        PtPackIn packIn;
-                        packIn.pos = pos;
-                        packIn.normal = n;
-                        packIn.V = -dir;
-                        packIn.uv = sf.uv;
-                        packIn.L = -gLightDir;
-                        float sh = 1.0;
-                        if (!diffuseChain) {
-                            if (receive && gShadowParams.w < 0.5) {
-                                float3 sd = SampleCone(float2(Rand(rng), Rand(rng)), -gLightDir, SunShadowConeCos(kSunCosMax));
-                                sh = TraceShadowRay(OffsetRayOrigin(pos, faceN), sd, 1e5);
+                        if (rec.materialClass != PACK_CLASS_OFF) {
+                            PtPackBindRecord(rec);
+                            PtPackIn packIn;
+                            packIn.pos = pos;
+                            packIn.normal = n;
+                            packIn.V = -dir;
+                            packIn.uv = sf.uv;
+                            packIn.L = -gLightDir;
+                            float sh = 1.0;
+                            if (!diffuseChain) {
+                                if (receive && gShadowParams.w < 0.5) {
+                                    float3 sd = SampleCone(float2(Rand(rng), Rand(rng)), -gLightDir, SunShadowConeCos(kSunCosMax));
+                                    sh = TraceShadowRay(OffsetRayOrigin(pos, faceN), sd, 1e5);
+                                }
+                                packIn.sunVis = sh;
+                            } else {
+                                packIn.sunVis = 0.0;
                             }
-                            packIn.sunVis = sh;
-                        } else {
-                            packIn.sunVis = 0.0;
-                        }
-                        packIn.baseColor = SrgbToLinear(saturate(tex.rgb * g.diffuse.rgb));
-                        packIn.materialClass = rec.materialClass;
-                        [unroll] for (int p = 0; p < 16; ++p)
-                            packIn.params[p] = rec.params[p >> 2][p & 3];
-                        packIn.headRight = rec.headRight.xyz;
-                        packIn.headPos = rec.headPos.xyz;
-                        packIn.headScale = rec.headPos.w;
-                        packIn.headUp = rec.headUp.xyz;
-                        packIn.headForward = rec.headForward.xyz;
-                        packIn.headValid = (rec.headValid != 0);
+                            packIn.baseColor = SrgbToLinear(saturate(tex.rgb * g.diffuse.rgb));
+                            packIn.materialClass = rec.materialClass;
+                            [unroll] for (int p = 0; p < 16; ++p)
+                                packIn.params[p] = rec.params[p >> 2][p & 3];
+                            packIn.headRight = rec.headRight.xyz;
+                            packIn.headPos = rec.headPos.xyz;
+                            packIn.headScale = rec.headPos.w;
+                            packIn.headUp = rec.headUp.xyz;
+                            packIn.headForward = rec.headForward.xyz;
+                            packIn.headValid = (rec.headValid != 0);
 
-                        PtPackOut ptPackOut = PackEvaluate(packIn);
-                        albedo = ptPackOut.albedo;
-                        // the pack decides: MAT_FLAT (a material without toon) would drop its terminator
-                        flat = ptPackOut.flatFace ? 1.0 : 0.0;
+                            PtPackOut ptPackOut = PackEvaluate(packIn);
+                            albedo = ptPackOut.albedo;
+                            // the pack decides: MAT_FLAT (a material without toon) would drop its terminator
+                            flat = ptPackOut.flatFace ? 1.0 : 0.0;
 
-                        if (!diffuseChain) {
-                            toon = true;
-                            radiance += throughput * PtPackComposeSunDirect(ptPackOut, n, sh, flat > 0.5);
-                            if (flat > 0.5) {
-                                // raster flat fill: no sky/ground gradient and no occlusion modelling the face
-                                float3 fill = lerp(gGroundColor, gSkyZenith, 0.65) * gSunIntensity * gHemiStrength;
-                                radiance += throughput * albedo * fill;
+                            if (!diffuseChain) {
+                                toon = true;
+                                radiance += throughput * PtPackComposeSunDirect(ptPackOut, n, sh, flat > 0.5);
+                                if (flat > 0.5) {
+                                    // raster flat fill: no sky/ground gradient and no occlusion modelling the face
+                                    float3 fill = lerp(gGroundColor, gSkyZenith, 0.65) * gSunIntensity * gHemiStrength;
+                                    radiance += throughput * albedo * fill;
+                                }
+                            } else {
+                                toon = false;
                             }
                         } else {
-                            toon = false;
+                            isPtPackHit = false;
                         }
-                    } else
+                    }
+                    if (!isPtPackHit)
 #endif
                     {
                         toon = true;

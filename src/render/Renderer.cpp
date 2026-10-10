@@ -721,6 +721,7 @@ bool Renderer::RenderToImage(const FrameView& view, uint32_t w, uint32_t h, Imag
     bool ok = targets_.colorMsaa && targets_.ldr;
     ComPtr<ID3D12Resource> readback;
     D3D12_PLACED_SUBRESOURCE_FOOTPRINT fp{};
+    UINT64 total = 0;
     if (ok) {
         ID3D12DescriptorHeap* heaps[] = {ctx_->SrvHeap().Heap()};
         offList_->SetDescriptorHeaps(1, heaps);
@@ -728,7 +729,6 @@ bool Renderer::RenderToImage(const FrameView& view, uint32_t w, uint32_t h, Imag
         RecordScene(offList_.Get(), view, w, h, kOffscreenSlot, 0, true);
 
         D3D12_RESOURCE_DESC desc = targets_.ldr.res->GetDesc();
-        UINT64 total = 0;
         device->GetCopyableFootprints(&desc, 0, 1, 0, &fp, nullptr, nullptr, &total);
         D3D12_HEAP_PROPERTIES rb{D3D12_HEAP_TYPE_READBACK};
         CD3DX12_RESOURCE_DESC bd = CD3DX12_RESOURCE_DESC::Buffer(total);
@@ -749,7 +749,7 @@ bool Renderer::RenderToImage(const FrameView& view, uint32_t w, uint32_t h, Imag
         ctx_->Queue()->ExecuteCommandLists(1, lists);
         ctx_->WaitForGpu();
         uint8_t* data = nullptr;
-        D3D12_RANGE range{0, (SIZE_T)(fp.Footprint.RowPitch * h)};
+        D3D12_RANGE range{0, (SIZE_T)total};   // the buffer's size (the last row has no pitch padding)
         if (SUCCEEDED(readback->Map(0, &range, (void**)&data))) {
             out = ImageRGBA8{};
             out.mips.push_back({w, h, std::vector<uint8_t>((size_t)w * h * 4)});
@@ -814,7 +814,7 @@ bool Renderer::ReadFinalImage(ImageRGBA8& out) {
     ctx_->WaitForGpu();
 
     uint8_t* data = nullptr;
-    D3D12_RANGE range{0, (SIZE_T)(fp.Footprint.RowPitch * h)};
+    D3D12_RANGE range{0, (SIZE_T)total};   // the buffer's size (the last row has no pitch padding)
     if (FAILED(readback->Map(0, &range, (void**)&data))) return false;
     out = ImageRGBA8{};
     out.mips.push_back({w, h, std::vector<uint8_t>((size_t)w * h * 4)});

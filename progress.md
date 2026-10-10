@@ -1235,3 +1235,23 @@ smoke review); Claude did the review, publish, the engine fixes and both outline
   SSAO also reseeds its noise every frame and could get the same stage.
 - `--ui-script` takes one capture at a time: a capture on the very next frame is dropped (use frames two apart). `capture` is not
   available through MCP `ui_input`. Without `--autoplay` the scene is not loaded and the lobby stays up (`--seek` alone does nothing).
+
+## 2026-10-10 (late) — T-pose fix, dark theme, per-material shader overrides, studio UI restraint (committed at session close)
+
+### Done
+- `asset/RestPose.*`: native PMX/PMD characters whose upper arms rest above 20 deg below horizontal (T-pose, the Project
+  Sekai rips) are turned to MMD's 38 deg A-pose at load (bones, vertices by the chain's weight share, vertex morphs, rigid
+  bodies, joints, tail / fixed / local axes). Stages, props and glTF/FBX imports are untouched. Test: `tools/rest_pose_test`.
+  Thumbnail cache version 6 (old thumbnails showed the T-pose).
+- Dark theme: `MakeDarkPalette` (UiKit), live palette `ui::P()`, settings `theme=` (auto / light / dark), `--theme`; DESIGN.md
+  has the dark token table.
+- Per-material shader overrides (`ShaderChoice::materials`: material name -> pack class or default shading, `kPackClassOff`
+  through raster / edge / RT / PT / offline GI); ini `characterShaderMaterial=`, `.mmdxproj` "shader"."materials"; UI
+  `App::DrawMaterialShaderList` (studio inspector, play bar, library shader tab via `LoadCharacterModelOnly`).
+- Studio UI restraint pass: timeline right-click key menu (add / copy / cut / paste / mirrored paste / curves / delete),
+  volume popover, one-frame steppers, screen effects as a dock tab, camera-target row tints, click-to-type drag fields.
+- Offline render: log lines for cancel / start / read / write failures; readback ranges use the buffer size.
+
+### Verified
+- Full build (except the locked `mmdx12_mcp.exe`), `rest_pose_test`, `shader_choice_test`, `studio_project_test`,
+  `studio_edit_test`, `studio_focus_test` pass.

@@ -282,6 +282,8 @@ static void TestRoundTrip() {
         m.shader.params["gloss"] = 0.25f;
         m.shader.textureFolder = "F:/tex/other";
         m.shader.SwitchPack("test_pack");
+        m.shader.materials["\xE9\xAB\xAA"] = (int)PackClass::Hair;                   // 髪: per-material class
+        m.shader.materials["body|01"] = kMaterialPackOff;                              // ... and a material with the pack off
         b0 = BoneKf{};
         b0.frame = 0;
         b0.t = {1, 2, 3};

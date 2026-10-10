@@ -15,7 +15,7 @@ ImU32 Hex(uint32_t rgb, float a = 1.0f) {
     return IM_COL32((rgb >> 16) & 0xFF, (rgb >> 8) & 0xFF, rgb & 0xFF, (int)(a * 255.0f + 0.5f));
 }
 
-Palette MakePalette() {
+Palette MakeLightPalette() {
     Palette p{};
     p.bg = Hex(0xF3F5F7);
     p.surface = Hex(0xFFFFFF);
@@ -35,10 +35,38 @@ Palette MakePalette() {
     p.dangerSoft = Hex(0xFBE9EA);
     p.warn = Hex(0x9A6400);
     p.warnSoft = Hex(0xFBF1DD);
+    p.knob = Hex(0xFFFFFF);
     return p;
 }
 
-const Palette g_palette = MakePalette();
+// Dark: the same cool hue family, ink and surfaces swapped. `sunken` stays the recessed tone (darker than
+// `surface`), the accent keeps its hue (Miku teal) and `accentInk` lifts to a light teal for text on dark.
+Palette MakeDarkPalette() {
+    Palette p{};
+    p.bg = Hex(0x0F1316);
+    p.surface = Hex(0x181D22);
+    p.sunken = Hex(0x0C0F12);
+    p.line = Hex(0x262D34);
+    p.lineStrong = Hex(0x3A444E);
+    p.ink = Hex(0xE8ECEF);
+    p.ink2 = Hex(0xA9B3BC);
+    p.ink3 = Hex(0x78838E);
+    p.accent = Hex(0x39C5BB);
+    p.accentHover = Hex(0x4DD3C9);
+    p.accentPress = Hex(0x2FB5AB);
+    p.accentInk = Hex(0x5ED8CE);     // accent as text/icon on dark surfaces
+    p.accentSoft = Hex(0x143331);
+    p.onAccent = Hex(0x052B28);
+    p.danger = Hex(0xF06A71);
+    p.dangerSoft = Hex(0x3B1C1F);
+    p.warn = Hex(0xE3AB45);
+    p.warnSoft = Hex(0x3A2E14);
+    p.knob = Hex(0xE3E8EC);
+    return p;
+}
+
+Palette g_palette = MakeLightPalette();
+Theme g_theme = Theme::Light;
 ImFont* g_fonts[3] = {};
 float g_dpi = 1.0f;
 float g_dt = 1.0f / 60.0f;
@@ -54,6 +82,12 @@ bool IsDisabled() { return (ImGui::GetItemFlags() & ImGuiItemFlags_Disabled) != 
 } // namespace
 
 const Palette& P() { return g_palette; }
+
+void SetTheme(Theme t) {
+    g_theme = t;
+    g_palette = t == Theme::Dark ? MakeDarkPalette() : MakeLightPalette();
+}
+Theme CurrentTheme() { return g_theme; }
 
 ImU32 WithAlpha(ImU32 c, float a) {
     return (c & ~IM_COL32_A_MASK) | ((ImU32)(std::clamp(a, 0.0f, 1.0f) * 255.0f + 0.5f) << IM_COL32_A_SHIFT);
@@ -133,7 +167,7 @@ void ApplyStyle(float dpi) {
     SetDpi(dpi);
     ImGuiStyle& s = ImGui::GetStyle();
     s = ImGuiStyle();
-    ImGui::StyleColorsLight(&s);
+    if (IsDark()) ImGui::StyleColorsDark(&s); else ImGui::StyleColorsLight(&s);
     s.WindowPadding = ImVec2(0, 0);
     s.WindowRounding = 0;
     s.WindowBorderSize = 0;
@@ -186,6 +220,28 @@ void ApplyStyle(float dpi) {
     c[ImGuiCol_TabDimmedSelectedOverline] = v4(p.lineStrong);
     c[ImGuiCol_DockingPreview] = v4(WithAlpha(p.accent, 0.35f));
     c[ImGuiCol_DockingEmptyBg] = v4(p.bg);
+    // Dark: everything else the stock Dark style tints (blue title bars, grey buttons...) stays in the palette.
+    // (The light style is left exactly as it always was.)
+    if (IsDark()) {
+        // popups / combos sit one step above the panels they open over (shadows alone barely read on dark)
+        c[ImGuiCol_PopupBg] = v4(Mix(p.surface, p.ink, 0.045f));
+        c[ImGuiCol_Border] = v4(p.lineStrong);
+        c[ImGuiCol_TitleBg] = v4(p.surface);
+        c[ImGuiCol_TitleBgActive] = v4(p.surface);
+        c[ImGuiCol_TitleBgCollapsed] = v4(p.surface);
+        c[ImGuiCol_MenuBarBg] = v4(p.surface);
+        c[ImGuiCol_Button] = v4(p.sunken);
+        c[ImGuiCol_ButtonHovered] = v4(Mix(p.sunken, p.lineStrong, 0.35f));
+        c[ImGuiCol_ButtonActive] = v4(Mix(p.sunken, p.lineStrong, 0.5f));
+        c[ImGuiCol_ResizeGrip] = ImVec4(0, 0, 0, 0);
+        c[ImGuiCol_ResizeGripHovered] = v4(WithAlpha(p.accent, 0.5f));
+        c[ImGuiCol_ResizeGripActive] = v4(WithAlpha(p.accent, 0.8f));
+        c[ImGuiCol_ModalWindowDimBg] = IsDark() ? ImVec4(0, 0, 0, 0.55f) : ImVec4(0.12f, 0.15f, 0.18f, 0.35f);
+        c[ImGuiCol_NavWindowingHighlight] = v4(WithAlpha(p.ink, 0.7f));
+        c[ImGuiCol_NavWindowingDimBg] = IsDark() ? ImVec4(0, 0, 0, 0.4f) : ImVec4(0.8f, 0.8f, 0.8f, 0.3f);
+        c[ImGuiCol_DragDropTarget] = v4(WithAlpha(p.accent, 0.8f));
+        c[ImGuiCol_TextLink] = v4(p.accentInk);
+    }
     c[ImGuiCol_Separator] = v4(p.line);
     c[ImGuiCol_SeparatorHovered] = v4(p.accent);
     c[ImGuiCol_SeparatorActive] = v4(p.accentPress);
@@ -228,7 +284,10 @@ float Anim(ImGuiID id, bool target, float speed) {
 
 void SoftShadow(ImDrawList* dl, ImVec2 a, ImVec2 b, float rounding, float spread, float alpha, ImVec2 offset) {
     const int steps = 7;
-    const ImU32 base = IM_COL32(18, 52, 58, 255);  // shadows tinted toward the teal-grey ground
+    // Light: shadows tinted toward the teal-grey ground. Dark: plain black, a little denser to read on dark surfaces.
+    const bool dark = IsDark();
+    const ImU32 base = dark ? IM_COL32(0, 0, 0, 255) : IM_COL32(18, 52, 58, 255);
+    if (dark) alpha *= 1.8f;
     for (int i = steps; i >= 1; --i) {
         const float t = (float)i / steps;
         const float e = spread * t;
@@ -254,7 +313,7 @@ void FrostedPanel(ImDrawList* dl, ImVec2 a, ImVec2 b, float rounding, ImTextureI
     } else {
         dl->AddRectFilled(a, b, WithAlpha(P().surface, 0.94f), rounding);
     }
-    dl->AddRect(a, b, WithAlpha(IM_COL32_WHITE, 0.7f), rounding, 0, 1.0f);
+    dl->AddRect(a, b, WithAlpha(IM_COL32_WHITE, IsDark() ? 0.09f : 0.7f), rounding, 0, 1.0f);
 }
 
 void Text(ImDrawList* dl, Font f, float sizePx, ImVec2 pos, ImU32 col, const char* text, const char* end) {
@@ -287,7 +346,7 @@ void Skeleton(ImDrawList* dl, ImVec2 a, ImVec2 b, float rounding) {
     const float t = (float)std::fmod(g_time * 0.9, 1.6) / 1.6f;
     const float x = a.x - band + (w + band * 2.0f) * t;
     dl->PushClipRect(a, b, true);
-    const ImU32 c0 = WithAlpha(IM_COL32_WHITE, 0.0f), c1 = WithAlpha(IM_COL32_WHITE, 0.55f);
+    const ImU32 c0 = WithAlpha(IM_COL32_WHITE, 0.0f), c1 = WithAlpha(IM_COL32_WHITE, IsDark() ? 0.07f : 0.55f);
     dl->AddRectFilledMultiColor(ImVec2(x, a.y), ImVec2(x + band * 0.5f, b.y), c0, c1, c1, c0);
     dl->AddRectFilledMultiColor(ImVec2(x + band * 0.5f, a.y), ImVec2(x + band, b.y), c1, c0, c0, c1);
     dl->PopClipRect();
@@ -501,16 +560,21 @@ bool Switch(const char* id, const char* label, bool* v, const char* hint) {
     // label
     const ImVec2 ls = TextSize(Font::Regular, size::Body, label);
     const float labelY = hint ? bb.Min.y + Dp(4.0f) : bb.Min.y + (h - ls.y) * 0.5f;
-    Text(dl, Font::Regular, size::Body, ImVec2(bb.Min.x, labelY), disabled ? p.ink3 : p.ink, label);
-    if (hint) Text(dl, Font::Regular, size::Caption, ImVec2(bb.Min.x, labelY + ls.y + Dp(1.0f)), p.ink3, hint);
     // switch
     const float sw = Dp(38.0f), sh = Dp(22.0f);
+    // label and hint stop before the switch (narrow panels: an ellipsis, the full hint as a tooltip)
+    const float textMax = bb.Max.x - sw - Dp(10.0f);
+    TextEllipsis(dl, Font::Regular, size::Body, ImVec2(bb.Min.x, labelY), textMax, disabled ? p.ink3 : p.ink, label);
+    if (hint) {
+        TextEllipsis(dl, Font::Regular, size::Caption, ImVec2(bb.Min.x, labelY + ls.y + Dp(1.0f)), textMax, p.ink3, hint);
+        if (hovered && TextSize(Font::Regular, size::Caption, hint).x > textMax - bb.Min.x) Tooltip(hint);
+    }
     const ImVec2 sa(bb.Max.x - sw, bb.Min.y + (h - sh) * 0.5f), sb(bb.Max.x, sa.y + sh);
     dl->AddRectFilled(sa, sb, Mix(Mix(p.lineStrong, p.ink3, hovered ? 0.3f : 0.0f), p.accent, on), sh * 0.5f);
     const float kr = sh * 0.5f - Dp(2.5f);
     const ImVec2 kc(sa.x + sh * 0.5f + (sw - sh) * on, sa.y + sh * 0.5f);
     dl->AddCircleFilled(ImVec2(kc.x, kc.y + Dp(1.0f)), kr + Dp(0.5f), WithAlpha(IM_COL32(10, 40, 40, 255), 0.18f), 24);
-    dl->AddCircleFilled(kc, kr, p.surface, 24);
+    dl->AddCircleFilled(kc, kr, p.knob, 24);
     ImGui::RenderNavCursor(bb, gid);
     return pressed && !disabled;
 }
@@ -556,7 +620,7 @@ bool SliderRow(const char* id, const char* label, float* v, float vmin, float vm
     const float hk = Anim(gid, hovered || held);
     const ImVec2 kc(x0 + (x1 - x0) * t, cy);
     dl->AddCircleFilled(ImVec2(kc.x, kc.y + Dp(1.0f)), knobR + Dp(1.0f), WithAlpha(IM_COL32(10, 40, 40, 255), 0.16f), 24);
-    dl->AddCircleFilled(kc, knobR, p.surface, 24);
+    dl->AddCircleFilled(kc, knobR, p.knob, 24);
     dl->AddCircle(kc, knobR, Mix(p.lineStrong, p.accent, hk), 24, Dp(1.5f));
     ImGui::RenderNavCursor(bb, gid);
     return changed;
@@ -709,9 +773,11 @@ void Tooltip(const char* text) {
     if (!ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort | ImGuiHoveredFlags_AllowWhenDisabled)) return;
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(Dp(10.0f), Dp(6.0f)));
     ImGui::PushStyleVar(ImGuiStyleVar_PopupRounding, Dp(8.0f));
-    ImGui::PushStyleColor(ImGuiCol_PopupBg, ImGui::ColorConvertU32ToFloat4(P().ink));
-    ImGui::PushStyleColor(ImGuiCol_Text, ImGui::ColorConvertU32ToFloat4(P().surface));
-    ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(0, 0, 0, 0));
+    // Light: inverted (ink bubble). Dark: a raised surface with a hairline, not a glaring light bubble.
+    const bool dark = IsDark();
+    ImGui::PushStyleColor(ImGuiCol_PopupBg, ImGui::ColorConvertU32ToFloat4(dark ? Mix(P().surface, P().ink, 0.10f) : P().ink));
+    ImGui::PushStyleColor(ImGuiCol_Text, ImGui::ColorConvertU32ToFloat4(dark ? P().ink : P().surface));
+    ImGui::PushStyleColor(ImGuiCol_Border, dark ? ImGui::ColorConvertU32ToFloat4(P().lineStrong) : ImVec4(0, 0, 0, 0));
     if (ImGui::BeginTooltip()) {
         PushFont(Font::Regular, size::Small);
         ImGui::TextUnformatted(text);

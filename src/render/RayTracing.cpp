@@ -330,6 +330,7 @@ bool RtScene::Build(ID3D12GraphicsCommandList* cmd, const std::vector<GpuModel*>
     uint32_t packGeomCount = 0;
     for (GpuModel* m : models) {
         if (!usable(m) || m->Role() != ModelRole::Character || m->ShaderPackId().empty()) continue;
+        if (!m->PackActive()) continue;   // every material switched off
         const ShaderPack* sp = ShaderPacks().Find(m->ShaderPackId());
         if (sp && sp->hasPtSurface) {
             packGeomCount += (uint32_t)m->Rt().geometryMaterials.size();
@@ -406,8 +407,10 @@ bool RtScene::Build(ID3D12GraphicsCommandList* cmd, const std::vector<GpuModel*>
         bool isPtPack = false;
         const ShaderPack* sp = nullptr;
         if (m->Role() == ModelRole::Character && !m->ShaderPackId().empty()) {
-            sp = ShaderPacks().Find(m->ShaderPackId());
-            if (sp && sp->hasPtSurface) isPtPack = true;
+            if (m->PackActive()) {
+                sp = ShaderPacks().Find(m->ShaderPackId());
+                if (sp && sp->hasPtSurface) isPtPack = true;
+            }
         }
 
         uint32_t texBase = 0;

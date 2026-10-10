@@ -17,7 +17,8 @@ ShaderChoice AppSettings::CharacterShader(const std::string& id) const {
 }
 
 void AppSettings::SetCharacterShader(const std::string& id, const ShaderChoice& choice) {
-    if (choice.pack.empty() && choice.remembered.empty()) characterShaders.erase(id);   // nothing left to keep
+    if (choice.pack.empty() && choice.remembered.empty() && choice.materials.empty())
+        characterShaders.erase(id);   // nothing left to keep
     else characterShaders[id] = choice;
 }
 
@@ -92,6 +93,7 @@ bool AppSettings::Load(const std::filesystem::path& file) {
         float f;
         if (key == "libraryPath") libraryPath = value;
         else if (key == "nickname") nickname = value;
+        else if (key == "theme" && ParseInt(value, i)) theme = std::clamp(i, 0, 2);
         else if (key == "language" && ParseInt(value, i)) language = std::clamp(i, 0, 4);
         else if (key == "vsync" && ParseBool(value, b)) vsync = b;
         else if (key == "msaa" && ParseInt(value, i)) msaa = i;
@@ -210,6 +212,15 @@ bool AppSettings::Load(const std::filesystem::path& file) {
                 c.textureFolder = value.substr(0, bar);
             }
         }
+        else if (key == "characterShaderMaterial") {
+            // characterShaderMaterial=<class 0..5 or -1 = default shading>|<character id>|<material name>
+            // (the name last: PMX material names may contain '|', library ids are paths and cannot)
+            const size_t a = value.find('|');
+            const size_t b = a == std::string::npos ? a : value.find('|', a + 1);
+            if (b != std::string::npos && b > a + 1 && b + 1 < value.size() && ParseInt(value.substr(0, a), i) &&
+                i >= kMaterialPackOff && i <= (int)PackClass::Weapon)
+                characterShaders[value.substr(a + 1, b - a - 1)].materials[value.substr(b + 1)] = i;
+        }
         else if (key == "packTextureFolder") {
             // packTextureFolder=<pack id>|<utf-8 folder>
             const size_t bar = value.find('|');
@@ -315,6 +326,7 @@ bool AppSettings::Save(const std::filesystem::path& file) const {
 
     std::fprintf(f, "libraryPath=%s\n", libraryPath.c_str());
     std::fprintf(f, "nickname=%s\n", nickname.c_str());
+    std::fprintf(f, "theme=%d\n", theme);
     std::fprintf(f, "vsync=%d\n", vsync ? 1 : 0);
     std::fprintf(f, "msaa=%d\n", msaa);
     std::fprintf(f, "renderScale=%.3f\n", renderScale);
@@ -361,6 +373,8 @@ bool AppSettings::Save(const std::filesystem::path& file) const {
             if (!c.textureFolder.empty())
                 std::fprintf(f, "characterShaderTextures=%s|%s\n", c.textureFolder.c_str(), id.c_str());
         }
+        for (const auto& [name, cls] : c.materials)
+            std::fprintf(f, "characterShaderMaterial=%d|%s|%s\n", cls, id.c_str(), name.c_str());
         for (const auto& [packId, memo] : c.remembered) {
             std::string mlist;
             for (const auto& [k, v] : memo.params) {

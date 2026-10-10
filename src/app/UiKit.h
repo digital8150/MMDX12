@@ -1,5 +1,5 @@
 #pragma once
-// MMDX12 UI kit on top of Dear ImGui: light theme tokens, Pretendard + Phosphor fonts, and
+// MMDX12 UI kit on top of Dear ImGui: light / dark theme tokens, Pretendard + Phosphor fonts, and
 // the custom widgets every screen uses (buttons, segmented controls, switches, cards...).
 // Sizes are given in unscaled pixels and multiplied by the monitor DPI internally.
 #include "imgui.h"
@@ -14,8 +14,15 @@ struct Palette {
     ImU32 ink, ink2, ink3;
     ImU32 accent, accentHover, accentPress, accentInk, accentSoft, onAccent;
     ImU32 danger, dangerSoft, warn, warnSoft;
+    ImU32 knob;   // switch / slider knobs (white on light, a light grey on dark so off states still read)
 };
 const Palette& P();
+// Colour theme. P() always returns the live palette: switching rewrites it in place (call ApplyStyle
+// afterwards so the ImGui style colours follow; App::ApplyTheme does both).
+enum class Theme { Light = 0, Dark = 1 };
+void SetTheme(Theme t);
+Theme CurrentTheme();
+inline bool IsDark() { return CurrentTheme() == Theme::Dark; }
 ImU32 WithAlpha(ImU32 c, float a);  // replaces the alpha
 ImU32 Mix(ImU32 a, ImU32 b, float t);
 

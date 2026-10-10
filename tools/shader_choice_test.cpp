@@ -40,6 +40,13 @@ int main() {
     d.SwitchPack("");
     Check(d.remembered.empty(), "a pack with default settings leaves no memo");
 
+    // per-material overrides ride along (also across pack switches)
+    c.materials["\xE9\xAB\xAA"] = 4;            // 髪 -> hair
+    c.materials["skirt|lace 2"] = kMaterialPackOff;  // a name with '|' and a space
+    c.SwitchPack("nimble_toon");
+    c.SwitchPack("hoyo_toon_v2");
+    Check(c.materials.size() == 2, "material overrides survive a pack switch");
+
     // ini round trip (also with the default shading selected: only memos remain)
     AppSettings s;
     s.SetCharacterShader("model/felix.pmx", c);
@@ -59,6 +66,7 @@ int main() {
               b.remembered.at("nimble_toon").params.at("rim") == 1.5f,
           "a character on the default shading keeps its memos");
     Check(t.characterShaders.count("model/empty.pmx") == 0, "an empty choice is not stored");
+    Check(a.materials.size() == 2 && a.materials.at("skirt|lace 2") == kMaterialPackOff, "material overrides survive the ini");
     std::error_code ec;
     std::filesystem::remove(file, ec);
     std::printf(failures ? "%d FAILED\n" : "all passed\n", failures);

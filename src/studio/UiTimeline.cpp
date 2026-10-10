@@ -95,6 +95,28 @@ bool Timeline(const char* id, ImVec2 size, const std::vector<TimelineRow>& rows,
         }
     }
 
+    // The key of row `rowIndex` under the mouse (7 px pick radius), or nullptr.
+    const auto keyUnderMouse = [&](int rowIndex) -> const TimelineKey* {
+        const TimelineRow& r = rows[rowIndex];
+        const float rowY = contentY - view.scrollY + rowIndex * rowHeight + rowHeight * 0.5f;
+        float bestDistSq = Dp(7.0f) * Dp(7.0f);
+        const TimelineKey* bestKey = nullptr;
+        const float f0 = view.scrollFrame + (mousePos.x - Dp(7.0f) - originX) / (view.pxPerFrame * Dpi());
+        const float f1 = view.scrollFrame + (mousePos.x + Dp(7.0f) - originX) / (view.pxPerFrame * Dpi());
+        auto it = std::lower_bound(r.keys.begin(), r.keys.end(), (int)std::floor(f0),
+                                   [](const TimelineKey& a, int b) { return a.frame < b; });
+        for (; it != r.keys.end() && it->frame <= std::ceil(f1); ++it) {
+            const float kx = originX + (it->frame - view.scrollFrame) * view.pxPerFrame * Dpi();
+            const float dx = mousePos.x - kx, dy = mousePos.y - rowY;
+            const float distSq = dx * dx + dy * dy;
+            if (distSq <= bestDistSq) {
+                bestDistSq = distSq;
+                bestKey = &(*it);
+            }
+        }
+        return bestKey;
+    };
+
     bool leftDown = ImGui::IsMouseDown(0);
     bool leftReleased = ImGui::IsMouseReleased(0);
 
@@ -149,23 +171,7 @@ bool Timeline(const char* id, ImVec2 size, const std::vector<TimelineRow>& rows,
             if (rowIndex >= 0 && rowIndex < (int)rows.size()) {
                 const auto& r = rows[rowIndex];
                 if (r.keysEditable) {
-                    float rowY = contentY - view.scrollY + rowIndex * rowHeight + rowHeight * 0.5f;
-                    float bestDistSq = Dp(7.0f) * Dp(7.0f);
-                    const TimelineKey* bestKey = nullptr;
-                    float f0 = view.scrollFrame + (mousePos.x - Dp(7.0f) - originX) / (view.pxPerFrame * Dpi());
-                    float f1 = view.scrollFrame + (mousePos.x + Dp(7.0f) - originX) / (view.pxPerFrame * Dpi());
-                    auto it = std::lower_bound(r.keys.begin(), r.keys.end(), (int)std::floor(f0),
-                        [](const TimelineKey& a, int b) { return a.frame < b; });
-                    for (; it != r.keys.end() && it->frame <= std::ceil(f1); ++it) {
-                        float kx = originX + (it->frame - view.scrollFrame) * view.pxPerFrame * Dpi();
-                        float dx = mousePos.x - kx;
-                        float dy = mousePos.y - rowY;
-                        float distSq = dx * dx + dy * dy;
-                        if (distSq <= bestDistSq) {
-                            bestDistSq = distSq;
-                            bestKey = &(*it);
-                        }
-                    }
+                    const TimelineKey* bestKey = keyUnderMouse(rowIndex);
                     if (bestKey) {
                         hitKey = true;
                         view.anchorRow = r.id;
@@ -208,7 +214,22 @@ bool Timeline(const char* id, ImVec2 size, const std::vector<TimelineRow>& rows,
     }
 
     if (pressed && io.MouseClicked[1]) {
-        if (mousePos.y >= bb.Min.y && mousePos.y < contentY && mousePos.x >= keyAreaX) {
+        if (mousePos.x >= keyAreaX && mousePos.y >= contentY && mousePos.y < bb.Max.y - sbH) {
+            // key area: the host's key menu; a key under the mouse that is not selected becomes the selection
+            const int rowIndex = (int)((mousePos.y - contentY + view.scrollY) / rowHeight);
+            ev.contextMenu = true;
+            ev.contextFrame = std::max(0, (int)std::round((mousePos.x - originX) / (view.pxPerFrame * Dpi()) + view.scrollFrame));
+            if (rowIndex >= 0 && rowIndex < (int)rows.size()) {
+                ev.contextRow = rows[rowIndex].id;
+                if (rows[rowIndex].keysEditable)
+                    if (const TimelineKey* k = keyUnderMouse(rowIndex); k && !k->selected) {
+                        ev.select = true;
+                        ev.selectMode = SelectMode::Replace;
+                        ev.selectKeys.push_back({rows[rowIndex].id, k->frame});
+                    }
+            }
+            changed = true;
+        } else if (mousePos.y >= bb.Min.y && mousePos.y < contentY && mousePos.x >= keyAreaX) {
             if (view.rangeStart != -1 || view.rangeEnd != -1) {
                 view.rangeStart = -1;
                 view.rangeEnd = -1;
@@ -330,6 +351,7 @@ bool Timeline(const char* id, ImVec2 size, const std::vector<TimelineRow>& rows,
             dl->AddRectFilled(rmin, ImVec2(keyAreaX, rmax.y), p.accentSoft);
         }
 
+        if (r.tint) dl->AddRectFilled(ImVec2(rmin.x, rmin.y + Dp(4.0f)), ImVec2(rmin.x + Dp(3.0f), rmax.y - Dp(4.0f)), r.tint, Dp(1.5f));
         float labelX = bb.Min.x + Dp(4.0f) + r.depth * Dp(14.0f);
         if (r.isGroup) {
             Icon(dl, r.expanded ? icon::CaretDown : icon::CaretRight, 13.0f, ImVec2(labelX + Dp(8.0f), rowY + rowHeight * 0.5f), p.ink);

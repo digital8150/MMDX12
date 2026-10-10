@@ -47,6 +47,13 @@ struct EffectStackEntry {
 
 // Material classes, as the PACK_* ids in pack_api.hlsli.
 enum class PackClass : uint32_t { Body = 0, Skin = 1, Face = 2, Eye = 3, Hair = 4, Weapon = 5 };
+// MaterialConstants::packClass of a material the user switched off in a pack model: every path (raster, edge, RT,
+// PT, offline GI) draws it with the default shading, as if the model had no pack. Never reaches pack code.
+inline constexpr uint32_t kPackClassOff = 0xFFu;
+// Per-material overrides of a pack model (ShaderChoice::materials): material name (PmxMaterial::name) -> a PackClass
+// value 0..5, or kMaterialPackOff. Absent = automatic (the pack's class rules).
+inline constexpr int kMaterialPackOff = -1;
+using MaterialClassOverrides = std::map<std::string, int>;
 
 // A model's shader pack choice: pack id (empty = the default shading), the parameter values the user changed
 // (key -> value; the rest use the pack's defaults) and an optional per-character texture folder (UTF-8, empty =
@@ -63,6 +70,9 @@ struct ShaderChoice {
     std::map<std::string, float> params;
     std::string textureFolder;
     std::map<std::string, ShaderMemo> remembered;   // pack id -> its last params / texture folder (not the current pack)
+    // Per-material class overrides / "default shading" (see MaterialClassOverrides). Class semantics are shared by
+    // every pack, so they survive SwitchPack.
+    MaterialClassOverrides materials;
     // Selects `to` ("" = the default shading): the current pack's settings are remembered, `to`'s come back.
     void SwitchPack(const std::string& to) {
         if (to == pack) return;

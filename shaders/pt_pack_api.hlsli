@@ -13,6 +13,9 @@
 #define PACK_HAIR 4u
 #define PACK_WEAPON 5u
 #endif
+#ifndef PACK_CLASS_OFF   // a material the user switched off (kPackClassOff): the host never calls the pack for it
+#define PACK_CLASS_OFF 255u
+#endif
 
 struct PtPackIn {
     float3 pos;           // world position

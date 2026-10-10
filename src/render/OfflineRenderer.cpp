@@ -417,13 +417,22 @@ void OfflineRenderer::Impl::DrawEdges(ID3D12GraphicsCommandList* cmd, RtScene& r
             cmd->IASetIndexBuffer(&model->IndexBufferView());
             cmd->SetGraphicsRootShaderResourceView(2, model->BoneBuffer(frame));
             cmd->SetGraphicsRootShaderResourceView(5, model->PrevBoneBuffer(frame));
+            ID3D12PipelineState* curPso = nullptr;
             for (const GpuModel::Material& mat : model->Materials()) {
                 if (p == 0) {
                     if (mat.indexCount == 0 || !mat.visible) continue;
-                    cmd->SetPipelineState(mat.doubleSided ? depthNoCull.Get() : depthCullBack.Get());
+                    ID3D12PipelineState* want = mat.doubleSided ? depthNoCull.Get() : depthCullBack.Get();
+                    if (want != curPso) {
+                        cmd->SetPipelineState(want);
+                        curPso = want;
+                    }
                 } else {
                     if (!mat.drawEdge || mat.indexCount == 0) continue;
-                    cmd->SetPipelineState(edge);
+                    ID3D12PipelineState* want = mat.packOff ? edgePso.Get() : edge;
+                    if (want != curPso) {
+                        cmd->SetPipelineState(want);
+                        curPso = want;
+                    }
                 }
                 cmd->SetGraphicsRootConstantBufferView(1, mat.constants);
                 cmd->SetGraphicsRootDescriptorTable(3, c.SrvHeap().Gpu(mat.srvTable));
@@ -1190,8 +1199,11 @@ bool OfflineRenderer::ReadImage(ImageRGBA8& out) {
 
     const uint32_t w = m.ldr.width, h = m.ldr.height;
     uint8_t* data = nullptr;
-    D3D12_RANGE range{0, (SIZE_T)(fp.Footprint.RowPitch * h)};
-    if (FAILED(readback->Map(0, &range, (void**)&data))) return false;
+    D3D12_RANGE range{0, (SIZE_T)total};   // not RowPitch * h: the last row has no padding (w * 4 not 256-aligned)
+    if (FAILED(readback->Map(0, &range, (void**)&data))) {
+        LOG_ERROR("OfflineRenderer: readback map failed");
+        return false;
+    }
     out = ImageRGBA8{};
     out.mips.push_back({w, h, std::vector<uint8_t>((size_t)w * h * 4)});
     for (uint32_t y = 0; y < h; ++y)

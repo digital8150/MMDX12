@@ -19,6 +19,7 @@
 #include "imgui.h"
 #include "imgui_internal.h"
 #include "studio/FileDialog.h"
+#include "studio/StudioPose.h"
 #include "studio/UiBezier.h"
 
 namespace mmdx {
@@ -292,7 +293,7 @@ void App::UpdateStudio(double dt) {
         ((ImGui::IsKeyPressed(ImGuiKey_Slash, false) && io.KeyShift) || ImGui::IsKeyPressed(ImGuiKey_F1, false)))
         studioHelpOpen_ = !studioHelpOpen_;
     // holding the right button flies the viewport camera with WASDQE: the shortcuts stay out of the way
-    if (!io.WantTextInput && !StudioModal() && !studioEffectsOpen_ && !ImGui::IsPopupOpen("##studioeffects") &&
+    if (!io.WantTextInput && !StudioModal() &&
         !ImGui::IsMouseDown(ImGuiMouseButton_Right)) {
         const bool ctrl = io.KeyCtrl, shift = io.KeyShift;
         if (!ctrl && !io.KeyAlt && ImGui::IsKeyPressed(ImGuiKey_F, false)) StudioFocusSelection();
@@ -908,24 +909,45 @@ void CopyBoneCurves(const uint8_t src[64], uint8_t dst[64]) {
 }
 } // namespace
 
-void App::StudioPaste(bool curvesOnly) {
+void App::StudioPaste(bool curvesOnly, bool mirrored) {
     OpTimer timer{"StudioPaste"};
     StudioDoc& d = *studio_;
     if (d.clipboard.empty() || d.clipboardModel != d.selectedModel) return;
     const int at = d.Frame();
+    // Mirrored: a bone key lands on the other side's bone (左 <-> 右) with its pose reflected (MirrorPose); centre
+    // bones are reflected in place. Morph and camera keys paste unchanged.
+    const auto target = [&](const ClipboardKey& c, RowKind& kind, std::string& name, uint64_t& row) {
+        row = c.row;
+        if (!StudioTrackOfRow(c.row, kind, name)) return false;
+        if (mirrored && kind == RowKind::Bone) {
+            const StudioModel& m = *d.models[d.selectedModel];
+            const int other = MirrorBoneIndex(*m.pmx, (int)RowIndexOf(c.row));
+            name = m.pmx->bones[other].name;
+            row = CanonicalRow(m, RowKind::Bone, (uint32_t)other);
+        }
+        return true;
+    };
     std::vector<TrackState> before;
     std::set<std::pair<int, std::string>> seen;
     for (const ClipboardKey& c : d.clipboard) {
         RowKind kind;
         std::string name;
-        if (StudioTrackOfRow(c.row, kind, name) && seen.insert({(int)kind, name}).second)
+        uint64_t row;
+        if (target(c, kind, name, row) && seen.insert({(int)kind, name}).second)
             before.push_back(CaptureTrack(d, d.selectedModel, kind, name));
     }
     std::set<KeyId> pasted;
-    for (const ClipboardKey& c : d.clipboard) {
+    for (const ClipboardKey& c0 : d.clipboard) {
         RowKind kind;
         std::string name;
-        if (!StudioTrackOfRow(c.row, kind, name)) continue;
+        uint64_t row;
+        if (!target(c0, kind, name, row)) continue;
+        ClipboardKey c = c0;
+        if (mirrored && kind == RowKind::Bone) {
+            const PoseBone mp = MirrorPose(PoseBone{c.bone.t, c.bone.r});
+            c.bone.t = mp.t;
+            c.bone.r = mp.r;
+        }
         const int f = at + c.offset;
         if (curvesOnly) {
             // interpolation only, onto keys that already exist at the target frames (morph keys have none)
@@ -951,10 +973,10 @@ void App::StudioPaste(bool curvesOnly) {
         }
         else if (kind == RowKind::Bone) { BoneKf k = c.bone; k.frame = f; UpsertKey(d.models[d.selectedModel]->motion.bones[name], k); }
         else { MorphKf k = c.morph; k.frame = f; UpsertKey(d.models[d.selectedModel]->motion.morphs[name], k); }
-        pasted.insert({c.row, f});
+        pasted.insert({row, f});
     }
     if (pasted.empty()) return;  // curve paste with no key at any target frame: nothing changed
-    StudioPushTrackEdit(curvesOnly ? Tr("곡선만 붙여넣기") : Tr("키 붙여넣기"), before);
+    StudioPushTrackEdit(curvesOnly ? Tr("곡선만 붙여넣기") : (mirrored ? Tr("좌우 반전 붙여넣기") : Tr("키 붙여넣기")), before);
     d.selection = std::move(pasted);
     d.rowsKey = ~0ull;
 }
@@ -1442,6 +1464,7 @@ void BuildDefaultStudioDock(ImGuiID dock, ImVec2 size, float leftW, float rightW
     left = ImGui::DockBuilderSplitNode(center, ImGuiDir_Left, leftW / size.x, nullptr, &center);
     right = ImGui::DockBuilderSplitNode(center, ImGuiDir_Right, rightW / (size.x - leftW), nullptr, &center);
     ImGui::DockBuilderDockWindow("###studio_outliner", left);
+    ImGui::DockBuilderDockWindow("###studio_effects", right);
     ImGui::DockBuilderDockWindow("###studio_inspector", right);
     ImGui::DockBuilderDockWindow("###studio_timeline", bottom);
     ImGui::DockBuilderDockWindow("###studio_viewport", center);
@@ -1487,6 +1510,7 @@ void App::DrawStudio() {
         const float bottomH = std::clamp(ds.y / Dpi() * 0.3f, 220.0f, kBottomH);
         BuildDefaultStudioDock(dockId, hostSize, Dp(kOutlinerW), Dp(kInspectorW), Dp(bottomH));
         studioResetLayout_ = false;
+        studioResetLayoutDone_ = true;
     }
     ImGui::DockSpace(dockId, ImVec2(0, 0), ImGuiDockNodeFlags_None);
     ImGui::End();
@@ -1520,6 +1544,18 @@ void App::DrawStudio() {
     if (studio_.get() != &d) return;
     panel(Tr("장면"), "studio_outliner", true, true, [&](float x0, float y0, float x1, float y1) { DrawStudioOutliner(x0, y0, x1, y1); });
     panel(Tr("속성"), "studio_inspector", true, true, [&](float x0, float y0, float x1, float y1) { DrawStudioInspector(x0, y0, x1, y1); });
+    // effects: a tab next to the properties (layouts saved before it existed get it docked there too)
+    if (ImGuiWindow* insp = ImGui::FindWindowByName("###studio_inspector"); insp && insp->DockId)
+        ImGui::SetNextWindowDockID(insp->DockId, ImGuiCond_FirstUseEver);
+    if (studioFocusEffects_) {
+        ImGui::SetNextWindowFocus();
+        studioFocusEffects_ = false;
+    }
+    panel(Tr("효과"), "studio_effects", true, true, [&](float x0, float y0, float x1, float y1) { DrawStudioEffectsPanel(x0, y0, x1, y1); });
+    if (studioResetLayoutDone_) {   // a fresh layout opens on the properties tab
+        if (ImGuiWindow* insp = ImGui::FindWindowByName("###studio_inspector")) ImGui::FocusWindow(insp);
+        studioResetLayoutDone_ = false;
+    }
     panel(Tr("타임라인"), "studio_timeline", true, true, [&](float x0, float y0, float x1, float y1) { DrawStudioTimeline(x0, y0, x1, y1); });
 
     DrawStudioUnsavedPrompt();
@@ -1643,16 +1679,17 @@ void App::DrawStudioTopBar(float x0, float y0, float x1, float y1) {
     ImGui::SetCursorScreenPos(ImVec2(rx, cy - Dp(18.0f)));
     const bool effectsActive = !settings_.effectStack.empty() || settings_.bloom || settings_.dof || settings_.volumetric;
     ImGui::BeginDisabled(StudioModal());
-    if (IconButton("##effects", icon::Sparkle, Tr("화면 효과"), effectsActive)) ImGui::OpenPopup("##studioeffects");
+    if (IconButton("##effects", icon::Sparkle, Tr("화면 효과  (오른쪽 패널의 효과 탭)"), effectsActive))
+        studioFocusEffects_ = true;
     ImGui::EndDisabled();
-    ImGui::SetNextWindowPos(ImVec2(rx + Dp(36.0f), y1 + Dp(6.0f)), ImGuiCond_Always, ImVec2(1.0f, 0.0f));
-    DrawStudioEffectsMenu();
     rx -= Dp(4.0f + 36.0f);
     ImGui::SetCursorScreenPos(ImVec2(rx, cy - Dp(18.0f)));
     if (IconButton("##layoutreset", icon::Stack, Tr("패널 배치 초기화 (패널은 탭을 끌어서 옮기고 크기를 바꿀 수 있어요)"))) studioResetLayout_ = true;
     rx -= Dp(4.0f + 36.0f);
     ImGui::SetCursorScreenPos(ImVec2(rx, cy - Dp(18.0f)));
     if (IconButton("##help", icon::Keyboard, Tr("단축키  (?)"), studioHelpOpen_)) studioHelpOpen_ = !studioHelpOpen_;
+    rx -= Dp(4.0f + 36.0f);
+    DrawThemeButton(ImVec2(rx, cy - Dp(18.0f)), rx + Dp(36.0f), y1 + Dp(6.0f));
     if (mcpServer_ && mcpServer_->IsConnected()) {
         rx -= Dp(8.0f + 64.0f);
         const ImVec2 mcpPos(rx, cy - Dp(14.0f));
@@ -2050,7 +2087,8 @@ void App::DrawStudioInspector(float x0, float y0, float x1, float y1) {
     }
     ImGui::Dummy(ImVec2(w, Dp(8.0f)));
 
-    const float plot = std::min(w, Dp(168.0f));
+    // the curve grows with the panel (widen or float the inspector for a large editor), capped so it stays a square
+    const float plot = std::clamp(w, Dp(168.0f), Dp(420.0f));
     ImGui::SetCursorScreenPos(ImVec2(ImGui::GetCursorScreenPos().x + (w - plot) * 0.5f, ImGui::GetCursorScreenPos().y));
     const int channels = kind == RowKind::Bone ? 4 : 6;
     uint8_t ghosts[5][4];
@@ -2127,17 +2165,50 @@ void App::DrawStudioTimeline(float x0, float y0, float x1, float y1) {
     if (IconButton("##autokey", icon::Diamond, d.autoKey ? Tr("자동 키 켬: 값을 고치면 재생 헤드에 키가 생겨요") : Tr("자동 키 끔: I 키로 직접 등록해요"),
                    d.autoKey, 34.0f))
         d.autoKey = !d.autoKey;
-    ImGui::SameLine(0, Dp(12.0f));
+    ImGui::SameLine(0, Dp(2.0f));
+    // volume: one icon, the slider lives in its popover (the transport stays one quiet row)
+    {
+        const float vol = settings_.volume;
+        const char* glyph = vol <= 0.001f ? icon::SpeakerX : (vol < 0.5f ? icon::SpeakerLow : icon::SpeakerHigh);
+        const ImVec2 at = ImGui::GetCursorScreenPos();
+        ImGui::BeginDisabled(!d.hasAudio);
+        if (IconButton("##volume", glyph, d.hasAudio ? Tr("음량") : Tr("음량  (음원 없음)"), false, 34.0f))
+            ImGui::OpenPopup("##studiovolume");
+        ImGui::EndDisabled();
+        ImGui::SetNextWindowPos(ImVec2(at.x, at.y - Dp(6.0f)), ImGuiCond_Always, ImVec2(0.0f, 1.0f));
+        ImGui::SetNextWindowSize(ImVec2(Dp(240.0f), 0));
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(Dp(14.0f), Dp(12.0f)));
+        if (ImGui::BeginPopup("##studiovolume")) {
+            float v = settings_.volume * 100.0f;
+            if (SliderRow("##studiovol", Tr("음량"), &v, 0.0f, 100.0f, "%.0f%%")) {
+                settings_.volume = std::clamp(v / 100.0f, 0.0f, 1.0f);
+                audio_.SetVolume(settings_.volume);
+            }
+            ImGui::EndPopup();
+        }
+        ImGui::PopStyleVar();
+        ImGui::SameLine(0, Dp(12.0f));
+    }
 
-    // frame field: applied on Enter (typing must not seek on every digit)
+    // frame field with one-frame steppers (also ← / →): applied on Enter (typing must not seek on every digit)
+    const auto stepFrame = [&](int delta) {
+        StudioSetPlaying(false);
+        StudioSeek(std::max(0, d.Frame() + delta) / (double)kMmdFps);
+    };
+    ImGui::SetCursorScreenPos(ImVec2(ImGui::GetCursorScreenPos().x, cy - Dp(13.0f)));
+    if (IconButton("##prevframe", icon::CaretLeft, Tr("이전 프레임  (←)"), false, 26.0f)) stepFrame(-1);
+    ImGui::SameLine(0, Dp(2.0f));
     int frame = d.Frame();
-    ImGui::SetNextItemWidth(Dp(84.0f));
+    ImGui::SetNextItemWidth(Dp(72.0f));
     ImGui::SetCursorScreenPos(ImVec2(ImGui::GetCursorScreenPos().x, cy - ImGui::GetFrameHeight() * 0.5f));
     if (ImGui::InputInt("##frame", &frame, 0, 0, ImGuiInputTextFlags_EnterReturnsTrue)) {
         StudioSetPlaying(false);
         StudioSeek(std::max(0, frame) / (double)kMmdFps);
     }
     Tooltip(Tr("현재 프레임 (Enter로 이동)"));
+    ImGui::SameLine(0, Dp(2.0f));
+    ImGui::SetCursorScreenPos(ImVec2(ImGui::GetCursorScreenPos().x, cy - Dp(13.0f)));
+    if (IconButton("##nextframe", icon::CaretRight, Tr("다음 프레임  (→)"), false, 26.0f)) stepFrame(1);
     ImGui::SameLine(0, Dp(12.0f));
     float tx = ImGui::GetCursorScreenPos().x;
     {
@@ -2196,6 +2267,16 @@ void App::DrawStudioTimeline(float x0, float y0, float x1, float y1) {
     if (d.rowsKey != key) {
         StudioRebuildRows();
         d.rowsKey = key;
+        // track-type markers on the camera target's rows (bone / morph rows stay plain: they are the bulk)
+        for (TimelineRow& r : d.rows) {
+            switch (RowKindOf(r.id)) {
+                case RowKind::Camera: r.tint = IM_COL32(64, 170, 230, 255); break;
+                case RowKind::Light: case RowKind::SceneLight: r.tint = IM_COL32(236, 170, 50, 255); break;
+                case RowKind::Shadow: r.tint = IM_COL32(150, 110, 220, 255); break;
+                case RowKind::Focus: r.tint = IM_COL32(232, 96, 150, 255); break;
+                default: break;
+            }
+        }
     }
     const float ty = y0 + th;
     dl->AddLine(ImVec2(x0, ty - 0.5f), ImVec2(x1, ty - 0.5f), p.line);
@@ -2227,6 +2308,69 @@ void App::DrawStudioTimeline(float x0, float y0, float x1, float y1) {
     Timeline("##tl", ImVec2(0, 0), d.rows, d.Frame(), d.EndFrame(), d.view, ev);
     ImGui::EndChild();
     StudioHandleTimeline(ev);
+    if (ev.contextMenu) {
+        studioKeyMenuFrame_ = ev.contextFrame;
+        studioKeyMenuRow_ = ev.contextRow;
+        ImGui::OpenPopup("##keymenu");
+    }
+    DrawStudioKeyMenu();
+}
+
+// Timeline right click: the key actions that otherwise live in shortcuts only, at the clicked frame / row.
+void App::DrawStudioKeyMenu() {
+    using namespace ui;
+    ImGui::SetNextWindowSize(ImVec2(Dp(248.0f), 0));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(Dp(6.0f), Dp(6.0f)));
+    if (ImGui::BeginPopup("##keymenu")) {
+        StudioDoc& d = *studio_;
+        const int f = studioKeyMenuFrame_;
+        const bool keys = !d.selection.empty();
+        const bool clip = !d.clipboard.empty() && d.clipboardModel == d.selectedModel;
+        const bool bones = clip && std::any_of(d.clipboard.begin(), d.clipboard.end(),
+                                               [](const ClipboardKey& c) { return RowKindOf(c.row) == RowKind::Bone; });
+        const auto seekHere = [&] {
+            StudioSetPlaying(false);
+            StudioSeek(f / (double)kMmdFps);
+        };
+        char title[48];
+        std::snprintf(title, sizeof(title), Tr("프레임 %d"), f);
+        Text(ImGui::GetWindowDrawList(), Font::Semibold, size::Caption,
+             ImVec2(ImGui::GetCursorScreenPos().x + Dp(10.0f), ImGui::GetCursorScreenPos().y + Dp(4.0f)), P().ink3, title);
+        ImGui::Dummy(ImVec2(1, Dp(24.0f)));
+        bool close = false;
+        if (studioKeyMenuRow_ && RowKindOf(studioKeyMenuRow_) != RowKind::Group &&
+            MenuItem("##km_add", Tr("여기에 키 추가"), icon::Plus, Tr("더블클릭"))) {
+            TimelineEvents add;
+            add.addKeyAt = true;
+            add.addKeyRow = studioKeyMenuRow_;
+            add.addKeyFrame = f;
+            StudioHandleTimeline(add);
+            close = true;
+        }
+        ImGui::BeginDisabled(!keys);
+        if (MenuItem("##km_copy", Tr("복사"), icon::Copy, "Ctrl+C")) { StudioCopySelected(); close = true; }
+        if (MenuItem("##km_cut", Tr("잘라내기"), icon::Scissors, "Ctrl+X")) {
+            StudioCopySelected();
+            StudioDeleteSelected(Tr("키 잘라내기"));
+            close = true;
+        }
+        ImGui::EndDisabled();
+        ImGui::BeginDisabled(!clip);
+        if (MenuItem("##km_paste", Tr("여기에 붙여넣기"), icon::ClipboardText, "Ctrl+V")) { seekHere(); StudioPaste(false); close = true; }
+        ImGui::EndDisabled();
+        ImGui::BeginDisabled(!bones);
+        if (MenuItem("##km_mirror", Tr("좌우 반전 붙여넣기"), icon::FlipHorizontal, nullptr)) { seekHere(); StudioPaste(false, true); close = true; }
+        ImGui::EndDisabled();
+        ImGui::BeginDisabled(!clip);
+        if (MenuItem("##km_curve", Tr("곡선만 붙여넣기"), icon::Bezier, "Ctrl+Shift+V")) { seekHere(); StudioPaste(true); close = true; }
+        ImGui::EndDisabled();
+        ImGui::BeginDisabled(!keys);
+        if (MenuItem("##km_del", Tr("삭제"), icon::Trash, "Del")) { StudioDeleteSelected(Tr("키 삭제")); close = true; }
+        ImGui::EndDisabled();
+        if (close) ImGui::CloseCurrentPopup();
+        ImGui::EndPopup();
+    }
+    ImGui::PopStyleVar();
 }
 
 // Viewport navigation (Unity / Unreal style): RMB look + WASDQE fly (wheel = speed), Alt+LMB or LMB orbit, MMB pan,

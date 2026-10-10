@@ -57,6 +57,7 @@ progress.md is the session log. Read its latest entry first.
   - `anim_probe <pmx> <vmd> [cam.vmd]`: IK convergence, CPU skinning bounds, NaN scan, physics scan (explosions, cost)
   - `render_smoke`: renders a cube with no assets
   - `vmd_roundtrip <file|dir> [--vpd-selftest]`: VMD load -> save -> load comparison (SaveVmd), VPD self test
+  - `rest_pose_test [model|dir...]`: T-pose -> A-pose self test (synthetic model: bones, weights, morphs, bodies, joints), then the arm angle of every PMX/PMD found
   - `studio_edit_test`: Studio key-edit core (move/insert/delete frames, undo byte budget, 100k-key timings)
   - `studio_gizmo_test` / `studio_pose_test`: gizmo projection/hit/drag math and bone overlay; mirror names/poses, VPD pose ops
   - `studio_project_test`: .mmdxproj save/load round trip, VMD naming/cleanup, atomic writes, prop offset matrix
@@ -72,6 +73,11 @@ progress.md is the session log. Read its latest entry first.
     sidecars > folder names (characters/models, stages, songs/motions, several languages) > content. Several songs in one
     folder are split only when it also holds several audio files or cameras; audio/cameras are matched by length + file name.
     New installs get `assets/library_template` (characters/ stages/ songs/) copied into an empty library.
+  - `RestPose` (asset/RestPose.h): `LoadModelFile` turns a native PMX/PMD *character* whose upper arms rest above 20 deg below horizontal
+    (T-pose: the Project Sekai rips; every other library model measures 28..43 deg) down to MMD's 38 deg A-pose, because VMD rotations
+    are relative to the rest pose. Rotates the 腕 subtree (+ IK bones chasing it) about the shoulder: bone positions, vertices (linear
+    blend by the chain's weight share), vertex morphs, rigid bodies, joints (follow body B), tail / fixed / local axes. VMD and bone
+    morph data stay valid (MMD bone frames are world-aligned). Stages / props / glTF-FBX imports (own `ToMmdArmPose`) are untouched.
   - `ModelImport`: `LoadModelFile(path, role)` reads PMX natively and converts glTF/GLB/VRM (cgltf) and FBX/OBJ (ufbx) into a
     `PmxModel` via `ImpScene` (ImportScene.h). Characters: humanoid map (VRM table or name dictionary) -> MMD bone names,
     synthesised センター/グルーブ + leg IK, arms re-posed to 38 deg (MMD A-pose), morph aliases (あいうえお, まばたき); no physics.
@@ -92,6 +98,7 @@ progress.md is the session log. Read its latest entry first.
   - `GpuModel` keeps a 3-frame ring of bone/morph buffers so the previous pose (motion vectors) stays valid.
   - `GpuModel` handles GPU skinning. `RtScene` (RayTracing.h) skins every model into world-space `RtVertex` buffers with a compute shader and builds BLAS (characters every frame, stages once) + TLAS; shaders read geometry bindlessly (`rt_common.hlsli`, `RtGeometry` table, unbounded tables over the whole SRV heap, root signature 1.0 so descriptors stay volatile).
   - Render resolution (`targets.width/height`) vs output resolution (`outWidth/outHeight`): the upscaler (DLSS/FSR/XeSS behind `IUpscaler`) runs after TAA/composite; bloom, post, backdrop and present work at output size. Jitter uses the FSR convention (`jitterPx`), motion vectors are uv(cur) − uv(prev) so SDK MV scale is −renderSize.
+- Theme: `ui::P()` is the live palette (light / dark, `ui::SetTheme`); never cache colours in statics. `App::ApplyTheme` (settings `theme`, `--theme auto|light|dark`) runs before the next ImGui frame and re-runs `ui::ApplyStyle`. Capture both: `--theme dark|light`.
 - `app`: the `App` state machine, ImGui screens (`Ui*.cpp`) built on `UiKit` (tokens, fonts, widgets; see DESIGN.md), `ThumbnailCache`, `Lighting` presets, `SceneLoader` (worker thread), benchmark, WinHTTP leaderboard.
 - `audio`: miniaudio. The audio cursor is the master clock.
 - `studio` (+ `app/UiStudio*.cpp`): the Studio editor (Screen::Studio). `StudioDoc` holds the models with name-keyed editable
@@ -141,6 +148,12 @@ progress.md is the session log. Read its latest entry first.
     viewport rect is cleared for the render and `StudioRestoreAfterRender` puts time, camera mode and physics back.
     Videos skip unregistered pose edits. Audio: `VideoEncoder::Desc::audioStartSeconds` = start - audioOffset (negative:
     leading silence). Shortcut overlay: `DrawStudioHelp` (? / F1); `StudioModal()` blocks the studio's shortcuts.
+  - UI restraint (the competitor-comparison pass, 2026-10): new actions go into existing places, not new toolbars.
+    Timeline right click = key menu (`DrawStudioKeyMenu`: add / copy / cut / paste here / mirrored paste
+    `StudioPaste(curves, mirrored)` / curves / delete); transport: volume icon + popover, one-frame steppers around
+    the frame field; screen effects are a dock tab next to the properties (`###studio_effects`,
+    `DrawStudioEffectsPanel`; the top-bar sparkle focuses it); camera-target rows carry a type tint
+    (`TimelineRow::tint`); drag fields type on a plain click (`io.ConfigDragClickToInputText`).
   - Panels (`App::DrawStudio`): ImGui docking (the vendored imgui is the docking branch). A fixed top-bar window, a transparent
     dock-space host and one dockable window per panel (`###studio_outliner/inspector/timeline/viewport`); each panel function
     still draws in screen coordinates and gets its window's content rect. The viewport window is transparent and its content
@@ -174,6 +187,11 @@ progress.md is the session log. Read its latest entry first.
   falls back to the default PSOs on errors (`[E]` + toast). `surface.hlsl` runs in the lit raster / RT camera view; PT and offline GI use the pack's
   `pt_surface.hlsl` when it has one (see below), else the default; unlit / wire / ortho views always use the default. A negative normal-target reflectivity (`nt.z < 0`) = "no AO" (composite). Choice is saved per
   character (`characterShader=` ini) / per studio model (`.mmdxproj` "shader"); `--shader-pack <id|none>` overrides a run.
+  Per-material overrides (`ShaderChoice::materials`, material name -> PackClass 0..5 or -1 = default shading; ini
+  `characterShaderMaterial=<cls>|<character id>|<material>` (name last: names may hold '|'), `.mmdxproj` "shader"."materials"): `GpuModel::SetShaderPack`
+  writes the class, or `kPackClassOff` (0xFF) = that material takes the no-pack path everywhere (raster PSO / edge,
+  RT, PT, offline GI; pack code never sees 0xFF). UI: `App::DrawMaterialShaderList` (studio inspector "재질" popup,
+  play bar shader popup, library shader tab via `LoadCharacterModelOnly`).
   API v2 (`kPackApiVersion` 2; apiVersion 1 packs still load): a pack may declare `"textures"` in pack.json (at most 16:
   `{ "file": "textures/x.png", "address": "wrap"|"clamp", "srgb": true }`, png/jpg/jpeg, paths inside the pack), uploaded
   once per pack (DEFAULT heap, `ScenePass::EnsurePackTextures`) and shared by every model using it; sampled with

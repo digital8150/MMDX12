@@ -1,6 +1,7 @@
 // Format dispatch and the ImpScene -> PmxModel conversion (see ModelImport.h).
 #include "asset/ModelImport.h"
 #include "asset/ImportScene.h"
+#include "asset/RestPose.h"
 #include "core/Log.h"
 #include "core/TextUtil.h"
 
@@ -20,7 +21,6 @@ namespace {
 
 constexpr float kPi = 3.14159265358979f;
 constexpr float kUnitsPerMeter = 12.5f;      // MMD: 1 unit = 8 cm
-constexpr float kMmdArmAngleDeg = 38.0f;     // upper arm below horizontal: 36..42 deg in common MMD rigs (median 38)
 
 // ---------------------------------------------------------------- humanoid name dictionary
 
@@ -795,8 +795,14 @@ const char* ModelFormatName(ModelFormat f) {
 
 bool LoadModelFile(const std::filesystem::path& path, ModelRole role, PmxModel& out, std::string* error) {
     switch (ModelFormatFromPath(path)) {
-    case ModelFormat::Pmx: return LoadPmx(path, out, error);
-    case ModelFormat::Pmd: return LoadPmd(path, out, error);
+    case ModelFormat::Pmx:
+    case ModelFormat::Pmd: {
+        const bool pmx = ModelFormatFromPath(path) == ModelFormat::Pmx;
+        if (!(pmx ? LoadPmx(path, out, error) : LoadPmd(path, out, error))) return false;
+        // Motions assume MMD's A-pose rig: a model resting in a T-pose would dance with raised arms.
+        if (role == ModelRole::Character) NormalizeArmRestPose(out);
+        return true;
+    }
     case ModelFormat::X:
         if (!LoadXFile(path, out, error)) return false;
         LOG_INFO("loaded %s: %zu vertices, %zu materials", PathToUtf8(path.filename()).c_str(), out.vertices.size(),

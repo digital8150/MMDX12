@@ -24,7 +24,8 @@ inline bool IsModelFile(const std::filesystem::path& p) { return ModelFormatFrom
 // Prop: baked like a stage but kept where the file puts it (no move onto a floor): accessories in the Studio.
 enum class ModelRole { Character, Stage, Prop };
 
-// Full load. For PMX and PMD the role is ignored. DirectX .x (MMD accessories) loads as a static
+// Full load. PMX and PMD are read natively; as a Character they also get their T-pose arms turned to the A-pose
+// (asset/RestPose.h), otherwise the role is ignored. DirectX .x (MMD accessories) loads as a static
 // model with one root bone, placed where the file puts it, whatever the role.
 bool LoadModelFile(const std::filesystem::path& path, ModelRole role, PmxModel& out, std::string* error = nullptr);
 

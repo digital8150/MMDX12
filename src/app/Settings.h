@@ -14,6 +14,7 @@ namespace mmdx {
 struct AppSettings {
     std::string libraryPath;   // empty => auto: first existing of <exe>/library, then FindUpward(exe, "library")
     std::string nickname;
+    int theme = 0;             // colour theme: 0 auto (follow Windows), 1 light, 2 dark
     int language = 0;          // Language (core/I18n.h): 0 auto (system), 1 Korean, 2 English, 3 Japanese, 4 Chinese
     bool vsync = true;
     int msaa = 4;              // 1, 2, 4, 8

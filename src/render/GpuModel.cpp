@@ -461,23 +461,43 @@ void GpuModel::UpdateMaterials(uint64_t frame, const std::vector<PmxMorph::Mater
 }
 
 void GpuModel::SetShaderPack(const ShaderPack* pack, const PackParamValues& params,
-                             const std::filesystem::path& textureFolder) {
+                             const std::filesystem::path& textureFolder,
+                             const MaterialClassOverrides& materials) {
     if (role_ == ModelRole::Stage) pack = nullptr;   // packs shade characters only
     const std::string id = pack ? pack->id : std::string();
     const uint32_t generation = ShaderPacks().Generation();
     if (id == packId_ && (!pack || (generation == packGeneration_ && params == packParams_ &&
-                                    textureFolder == packTextureFolder_)))
+                                    textureFolder == packTextureFolder_ &&
+                                    packOverrides_ == materials)))
         return;
     packId_ = id;
     packGeneration_ = generation;
     packTextureFolder_ = pack ? textureFolder : std::filesystem::path();
     packParams_ = params;
-    if (!pack) return;   // the default PSOs ignore the pack fields
+    packOverrides_ = pack ? materials : MaterialClassOverrides{};
+    if (!pack) {
+        for (auto& m : materials_) m.packOff = false;
+        return;   // the default PSOs ignore the pack fields
+    }
     for (size_t i = 0; i < baseConsts_.size(); ++i) {
         const auto& names = materialNames_[i];
-        const PackClass cls = pack->Classify(names.first, names.second, materialTextures_[i]);
+        uint32_t clsVal = 0;
+        bool isOff = false;
+        if (const auto it = packOverrides_.find(names.first); it != packOverrides_.end()) {
+            if (it->second == kMaterialPackOff) {
+                isOff = true;
+                clsVal = kPackClassOff;
+            } else if (it->second >= 0 && it->second <= 5) {
+                clsVal = static_cast<uint32_t>(it->second);
+            } else {
+                clsVal = static_cast<uint32_t>(pack->Classify(names.first, names.second, materialTextures_[i]));
+            }
+        } else {
+            clsVal = static_cast<uint32_t>(pack->Classify(names.first, names.second, materialTextures_[i]));
+        }
+        if (i < materials_.size()) materials_[i].packOff = isOff;
         for (MaterialConstants* c : {&baseConsts_[i], &materialConsts_[i]}) {
-            c->packClass = (uint32_t)cls;
+            c->packClass = clsVal;
             c->packHeadBone = headBone_ >= 0 ? (uint32_t)headBone_ : 0u;
             c->packHead = {headPos_.x, headPos_.y, headPos_.z, headBone_ >= 0 ? 1.0f : 0.0f};
             for (uint32_t k = 0; k < kPackMaxParams; ++k) (&c->packParams[0].x)[k] = params[k];
@@ -485,6 +505,13 @@ void GpuModel::SetShaderPack(const ShaderPack* pack, const PackParamValues& para
     }
     // every ring entry is rewritten by the next UpdateMaterials calls
     for (uint64_t& v : materialEntryVersion_) v = ~0ull;
+}
+
+bool GpuModel::PackActive() const {
+    if (packId_.empty()) return false;
+    for (const Material& m : materials_)
+        if (!m.packOff) return true;
+    return false;
 }
 
 D3D12_GPU_VIRTUAL_ADDRESS GpuModel::BoneBuffer(uint64_t frame) const {

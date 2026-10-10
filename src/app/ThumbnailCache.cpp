@@ -11,7 +11,7 @@ namespace mmdx {
 
 namespace {
 
-constexpr uint32_t kThumbVersion = 5;   // bump to invalidate every cached PNG
+constexpr uint32_t kThumbVersion = 6;   // bump to invalidate every cached PNG
 constexpr int kMaxUploadsPerPump = 4;
 
 uint64_t Fnv1a64(const std::string& s) {

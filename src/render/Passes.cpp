@@ -659,7 +659,8 @@ void ScenePass::DrawPtEdges(PassContext& pc) {
             BindModelBuffers(cmd, *model, pc.frame);
             cmd->SetGraphicsRootShaderResourceView(2, model->BoneBuffer(pc.frame));
             cmd->SetGraphicsRootShaderResourceView(4, model->PrevBoneBuffer(pc.frame));
-            ID3D12PipelineState* edge = psoEdge_.Get();
+            ID3D12PipelineState* defaultEdge = psoEdge_.Get();
+            ID3D12PipelineState* packEdge = defaultEdge;
             if (p == 1 && !model->ShaderPackId().empty() && pc.settings.shading == ViewShading::Lit) {
                 // the pack's outlines, as the raster lit view draws them
                 const PackPipelines* pack = PackPsos(ctx, model->ShaderPackId(), model->ShaderTextureFolder(), false);
@@ -667,17 +668,26 @@ void ScenePass::DrawPtEdges(PassContext& pc) {
                     const auto it = pack->sets.find(PackSetKey(model->ShaderTextureFolder()));
                     if (it != pack->sets.end() && it->second.srv != DescriptorHeap::kInvalid)   // pack_api.hlsli gPackTex
                         cmd->SetGraphicsRootDescriptorTable(12, ctx.SrvHeap().Gpu(it->second.srv));
-                    edge = pack->edge.Get();
+                    packEdge = pack->edge.Get();
                 }
             }
-            if (p == 1) cmd->SetPipelineState(edge);
+            ID3D12PipelineState* curPso = nullptr;
             for (const GpuModel::Material& m : model->Materials()) {
                 if (m.indexCount == 0) continue;
                 if (p == 0) {
                     if (!m.visible) continue;
-                    cmd->SetPipelineState(m.doubleSided ? psoDepthNoCull_.Get() : psoDepthBack_.Get());
-                } else if (!m.drawEdge) {
-                    continue;
+                    ID3D12PipelineState* want = m.doubleSided ? psoDepthNoCull_.Get() : psoDepthBack_.Get();
+                    if (want != curPso) {
+                        cmd->SetPipelineState(want);
+                        curPso = want;
+                    }
+                } else {
+                    if (!m.drawEdge) continue;
+                    ID3D12PipelineState* want = m.packOff ? defaultEdge : packEdge;
+                    if (want != curPso) {
+                        cmd->SetPipelineState(want);
+                        curPso = want;
+                    }
                 }
                 cmd->SetGraphicsRootConstantBufferView(1, m.constants);
                 cmd->SetGraphicsRootDescriptorTable(3, ctx.SrvHeap().Gpu(m.srvTable));
@@ -781,18 +791,22 @@ void ScenePass::Execute(PassContext& pc) {
                 if (it != pack->sets.end() && it->second.srv != DescriptorHeap::kInvalid)   // pack_api.hlsli gPackTex
                     cmd->SetGraphicsRootDescriptorTable(12, ctx.SrvHeap().Gpu(it->second.srv));
             }
+            ID3D12PipelineState* curPso = nullptr;
             for (const GpuModel::Material& m : model->Materials()) {
                 if (m.indexCount == 0 || !m.visible) continue;   // MMD skips materials with alpha 0
                 ID3D12PipelineState* want;
                 if (wire)
                     want = m.doubleSided ? psoWireNoCull_.Get() : psoWireBack_.Get();
-                else if (pack)
+                else if (pack && !m.packOff)
                     want = m.doubleSided ? (packRt ? pack->noCullRt.Get() : pack->noCull.Get())
                                          : (packRt ? pack->backRt.Get() : pack->back.Get());
                 else
                     want = m.doubleSided ? (rt ? psoNoCullRt_.Get() : psoNoCull_.Get())
                                          : (rt ? psoCullBackRt_.Get() : psoCullBack_.Get());
-                cmd->SetPipelineState(want);
+                if (want != curPso) {
+                    cmd->SetPipelineState(want);
+                    curPso = want;
+                }
                 cmd->SetGraphicsRootConstantBufferView(1, m.constants);
                 cmd->SetGraphicsRootDescriptorTable(3, ctx.SrvHeap().Gpu(m.srvTable));
                 cmd->DrawIndexedInstanced(m.indexCount, 1, m.indexStart, 0, 0);
@@ -801,9 +815,16 @@ void ScenePass::Execute(PassContext& pc) {
             }
 
             if (pc.settings.drawEdges && !wire) {   // wireframe: the model is drawn as edges already
-                cmd->SetPipelineState(pack && pack->edge ? pack->edge.Get() : psoEdge_.Get());
+                ID3D12PipelineState* curEdgePso = nullptr;
+                ID3D12PipelineState* defaultEdge = psoEdge_.Get();
+                ID3D12PipelineState* packEdge = (pack && pack->edge) ? pack->edge.Get() : defaultEdge;
                 for (const GpuModel::Material& m : model->Materials()) {
                     if (!m.drawEdge || m.indexCount == 0) continue;
+                    ID3D12PipelineState* want = m.packOff ? defaultEdge : packEdge;
+                    if (want != curEdgePso) {
+                        cmd->SetPipelineState(want);
+                        curEdgePso = want;
+                    }
                     cmd->SetGraphicsRootConstantBufferView(1, m.constants);
                     cmd->SetGraphicsRootDescriptorTable(3, ctx.SrvHeap().Gpu(m.srvTable));
                     cmd->DrawIndexedInstanced(m.indexCount, 1, m.indexStart, 0, 0);

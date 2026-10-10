@@ -46,6 +46,9 @@ struct LoadProgress {
 void DecodeModelTextures(LoadedModelCpu& m, LoadProgress* progress, float fracBegin, float fracEnd,
                          const char* label);
 
+// The character's model without textures (material names for the library's per-material shader list); null on failure.
+std::shared_ptr<PmxModel> LoadCharacterModelOnly(const std::filesystem::path& path);
+
 // `stage` may be null. Returns false with *error on failure of the character or motion;
 // a stage part or texture that fails to load only logs a warning.
 // Textures are decoded in parallel (std::for_each with std::execution::par).

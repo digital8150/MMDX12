@@ -150,7 +150,7 @@ bool SeekBar(const char* id, float width, float height, double* t, double durati
         const ImVec2 kc(bb.Min.x + width * frac, cy);
         const float kr = Dp(7.0f) * hv;
         dl->AddCircleFilled(ImVec2(kc.x, kc.y + Dp(1.0f)), kr + Dp(1.0f), WithAlpha(IM_COL32(10, 40, 40, 255), 0.2f * hv), 24);
-        dl->AddCircleFilled(kc, kr, p.surface, 24);
+        dl->AddCircleFilled(kc, kr, p.knob, 24);
         dl->AddCircle(kc, kr, p.accent, 24, Dp(2.0f));
     }
     if (hovered && !held) {
@@ -435,6 +435,16 @@ void App::DrawPlayOverlay() {
             bool changed = DrawShaderSelector("##playshader", choice, ImGui::GetContentRegionAvail().x);
             Gap(8.0f);
             changed |= DrawShaderPackParams(choice);
+            if (!choice.pack.empty() && s->character) {   // per-material classes, folded away until asked for
+                Gap(8.0f);
+                const int n = MaterialOverrideCount(choice);
+                const std::string label = std::string(Tr("재질별 셰이딩")) + (n ? "  ·  " + std::to_string(n) + Tr("개 지정") : std::string());
+                if (Button("##playmats", label.c_str(), playMaterialsOpen_ ? icon::CaretDown : icon::CaretRight, ButtonKind::Ghost))
+                    playMaterialsOpen_ = !playMaterialsOpen_;
+                if (playMaterialsOpen_)
+                    changed |= DrawMaterialShaderList("##playmats_list", choice, s->character->Model(),
+                                                      ImGui::GetContentRegionAvail().x, Dp(260.0f));
+            }
             if (changed) {
                 settings_.SetCharacterShader(s->characterId, choice);
                 settings_.Save(settingsPath_);

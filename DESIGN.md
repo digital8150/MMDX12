@@ -5,7 +5,7 @@ every widget is drawn by hand from these tokens, never with stock ImGui styling.
 
 ## Direction
 
-A light, quiet app shell around a loud subject. The dance (and the character portraits) carry
+A light (or dark: see below), quiet app shell around a loud subject. The dance (and the character portraits) carry
 the colour; the chrome is cool off-white, near-black ink and one accent: Hatsune Miku's teal.
 Modes: the library and benchmark are Operate surfaces (scan, pick, compare); playback is
 Experience (the UI slides away and the scene owns the screen).
@@ -29,6 +29,24 @@ Experience (the UI slides away and the scene owns the screen).
 Shadows are tinted toward teal-grey (`rgb(18,52,58)`), layered (7 steps) and offset downward.
 The single accent is never decorative: it marks the primary action, the current selection
 and progress.
+
+## Dark theme
+
+Same hue family, surfaces and ink swapped (`MakeDarkPalette` in UiKit.cpp; `P()` is the live palette, `ui::SetTheme`).
+
+| Token | Dark |
+|---|---|
+| bg / surface / sunken | #0F1316 / #181D22 / #0C0F12 (sunken stays the recessed tone) |
+| line / lineStrong | #262D34 / #3A444E |
+| ink / ink2 / ink3 | #E8ECEF / #A9B3BC / #78838E |
+| accent / accentInk / accentSoft | #39C5BB / #5ED8CE (text) / #143331 |
+| danger / warn | #F06A71 / #E3AB45 |
+
+Shadows turn plain black and denser, the frosted veil's white hairline drops to 9 %, tooltips become a raised
+surface (not an inverted bubble). `AppSettings::theme` (0 system, 1 light, 2 dark; `--theme auto|light|dark`
+overrides one run); system = Windows' app mode, re-read on `WM_SETTINGCHANGE`. The title bar follows
+(`DWMWA_USE_IMMERSIVE_DARK_MODE`), the splash is themed. The theme button (sun / moon) sits in the library app bar and
+the studio top bar. Scene-like drawings (stage placeholders, viewport overlays, gizmos) are not themed.
 
 ## Type
 

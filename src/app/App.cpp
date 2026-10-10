@@ -75,6 +75,12 @@ AppOptions ParseCommandLine(int argc, wchar_t** argv) {
         } else if (arg == L"--project") {
             opt.project = next();
             opt.startScreen = "studio";
+        } else if (arg == L"--theme") {
+            const std::string v = ToLowerAscii(WideToUtf8(next()));
+            if (v == "auto" || v == "system") opt.theme = 0;
+            else if (v == "light") opt.theme = 1;
+            else if (v == "dark") opt.theme = 2;
+            else LOG_WARN("unknown --theme value: %s (want auto|light|dark)", v.c_str());
         } else if (arg == L"--lang") {
             const std::string v = ToLowerAscii(WideToUtf8(next()));
             opt.language = v == "ko" ? 1 : v == "en" ? 2 : v == "ja" ? 3 : v == "zh" ? 4 : 0;
@@ -232,6 +238,7 @@ int App::Run(HINSTANCE instance, const AppOptions& options) {
     for (const auto& [id, dir] : settings_.packTextureFolders)   // shader packs' user texture folders
         ShaderPacks().SetTextureFolder(id, Utf8ToPath(dir));
     SetLanguage((Language)(options_.language >= 0 ? options_.language : settings_.language));
+    ApplyTheme();   // palette first: the splash and every screen read it
     const AppSettings persisted = settings_;  // CLI overrides below are for this run only
     if (options_.lighting >= 0) settings_.lighting = std::clamp(options_.lighting, 0, kLightingPresetCount - 1);
     if (options_.quality >= 0) ApplyGraphicsPreset(std::clamp(options_.quality, 0, 3));
@@ -253,6 +260,7 @@ int App::Run(HINSTANCE instance, const AppOptions& options) {
     int h = options_.height > 0 ? options_.height : settings_.windowHeight;
     loading_ = true;  // splash painting from the first message on
     if (!InitWindow(instance, w, h)) return 1;
+    ApplyTheme();   // title bar (the window did not exist for the first call)
     UpdateWindow(hwnd_);
     startupPhase("window");
 
@@ -397,6 +405,9 @@ LRESULT App::HandleMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
             if (ctx_.Device() && !loading_) ctx_.Resize(LOWORD(lParam), HIWORD(lParam));
         }
         return 0;
+    case WM_SETTINGCHANGE:   // the user flipped Windows' light / dark mode ("ImmersiveColorSet")
+        if (lParam && wcscmp(reinterpret_cast<const wchar_t*>(lParam), L"ImmersiveColorSet") == 0) themeDirty_ = true;
+        return DefWindowProcW(hwnd, msg, wParam, lParam);
     case WM_ERASEBKGND:
     case WM_PAINT:
         if (loading_) {  // splash while the renderer initialises (GDI: nothing else is ready yet)
@@ -404,7 +415,8 @@ LRESULT App::HandleMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
             HDC dc = BeginPaint(hwnd, &ps);
             RECT r;
             GetClientRect(hwnd, &r);
-            HBRUSH bg = CreateSolidBrush(RGB(243, 245, 248));
+            const bool dark = ui::IsDark();
+            HBRUSH bg = CreateSolidBrush(dark ? RGB(15, 19, 22) : RGB(243, 245, 248));
             FillRect(dc, &r, bg);
             DeleteObject(bg);
             HFONT font = CreateFontW(-56, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE, DEFAULT_CHARSET, 0, 0, CLEARTYPE_QUALITY, 0,
@@ -415,9 +427,9 @@ LRESULT App::HandleMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
             GetTextExtentPoint32W(dc, L"MMDX", 4, &a);
             GetTextExtentPoint32W(dc, L"12", 2, &b);
             const int x = (r.right - (a.cx + b.cx)) / 2, y = r.bottom / 2 - a.cy;
-            SetTextColor(dc, RGB(17, 24, 32));
+            SetTextColor(dc, dark ? RGB(232, 236, 239) : RGB(17, 24, 32));
             TextOutW(dc, x, y, L"MMDX", 4);
-            SetTextColor(dc, RGB(0, 128, 110));
+            SetTextColor(dc, dark ? RGB(94, 216, 206) : RGB(0, 128, 110));
             TextOutW(dc, x + a.cx, y, L"12", 2);
             SelectObject(dc, old);
             DeleteObject(font);
@@ -497,6 +509,8 @@ bool App::InitImGui() {
     ImGuiIO& io = ImGui::GetIO();
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard | ImGuiConfigFlags_DockingEnable;
     io.ConfigDockingTransparentPayload = true;
+    // Drag fields (bone / camera / light values): a click without dragging types a number, as in DCC tools.
+    io.ConfigDragClickToInputText = true;
     // The studio's panel arrangement persists next to the exe. Scripted / captured runs start from the default layout.
     if (options_.uiScript.empty() && options_.quitAfterFrames == 0) {
         iniPath_ = PathToUtf8(ExecutableDir() / L"mmdx12_layout.ini");
@@ -588,6 +602,10 @@ void App::RenderFrame() {
         thumbs_.Pump();
 
     ImGui_ImplDX12_NewFrame();
+    if (themeDirty_) {
+        themeDirty_ = false;
+        ApplyTheme();
+    }
     ImGui_ImplWin32_NewFrame();
     PumpUiScript();
     PumpMcp(false);
@@ -949,6 +967,41 @@ void App::ApplyCommandLinePreselection() {
             }
         }
     }
+}
+
+namespace {
+// Windows' "choose your default app mode" (HKCU ...\Themes\Personalize\AppsUseLightTheme); light when unreadable.
+bool SystemPrefersDark() {
+    DWORD v = 1, size = sizeof(v);
+    if (RegGetValueW(HKEY_CURRENT_USER, L"Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize",
+                     L"AppsUseLightTheme", RRF_RT_REG_DWORD, nullptr, &v, &size) != ERROR_SUCCESS)
+        return false;
+    return v == 0;
+}
+} // namespace
+
+void App::ApplyTheme() {
+    const int mode = options_.theme >= 0 ? options_.theme : settings_.theme;
+    const bool dark = mode == 2 || (mode == 0 && SystemPrefersDark());
+    ui::SetTheme(dark ? ui::Theme::Dark : ui::Theme::Light);
+    if (ImGui::GetCurrentContext()) ui::ApplyStyle(ui::Dpi());
+    if (hwnd_) {
+        // Dark title bar / caption buttons (Windows 10 20H1+; older builds ignore the attribute).
+        const BOOL useDark = dark ? TRUE : FALSE;
+        if (HMODULE dwm = LoadLibraryW(L"dwmapi.dll")) {
+            using SetAttr = HRESULT(WINAPI*)(HWND, DWORD, LPCVOID, DWORD);
+            if (auto fn = reinterpret_cast<SetAttr>(GetProcAddress(dwm, "DwmSetWindowAttribute")))
+                fn(hwnd_, 20 /* DWMWA_USE_IMMERSIVE_DARK_MODE */, &useDark, sizeof(useDark));
+            FreeLibrary(dwm);
+        }
+        InvalidateRect(hwnd_, nullptr, FALSE);
+    }
+}
+
+void App::SetThemeSetting(int theme) {
+    settings_.theme = std::clamp(theme, 0, 2);
+    settings_.Save(settingsPath_);
+    themeDirty_ = true;
 }
 
 void App::ApplyGraphicsPreset(int preset) {
