@@ -3,6 +3,9 @@
 #include <algorithm>
 #include <cmath>
 #include <chrono>
+#include <cstdio>
+#include <cstring>
+#include <filesystem>
 
 #include "app/Icons.h"
 #include "app/Lighting.h"
@@ -14,6 +17,7 @@
 #include "imgui.h"
 #include "studio/SceneLight.h"
 #include "studio/StudioDoc.h"
+#include "ui_probe/UiProbe.h"
 
 namespace mmdx {
 
@@ -44,6 +48,7 @@ void App::StartMcpServer() {
     if (mcpServer_) return;
     mcpServer_ = std::make_unique<McpServer>();
     if (!mcpServer_->Start()) mcpServer_.reset();
+    uiprobe::SetEnabled(mcpServer_ != nullptr);   // ui_items / ui_click read the widget registry
 }
 
 void App::ShutdownMcp() {
@@ -51,6 +56,7 @@ void App::ShutdownMcp() {
         mcpServer_->Stop();
         mcpServer_.reset();
     }
+    uiprobe::SetEnabled(false);
     for (auto& w : pendingMcpWaits_) w.promise->Reject("MCP server stopped");
     for (auto& l : pendingMcpLoads_) l.promise->Reject("MCP server stopped");
     for (auto& i : pendingMcpInputs_) i.promise->Reject("MCP server stopped");
@@ -201,7 +207,7 @@ void App::PumpMcp(bool minimized) {
     }
     for (auto it = pendingMcpInputs_.begin(); it != pendingMcpInputs_.end();) {
         if (mcpFrame_ >= it->targetFrame) {
-            it->promise->Resolve({{"status", "completed"}});
+            it->promise->Resolve(it->result.is_null() ? nlohmann::json{{"status", "completed"}} : it->result);
             it = pendingMcpInputs_.erase(it);
         } else {
             ++it;
@@ -311,23 +317,168 @@ void App::ExecuteMcp(const std::string& tool, const nlohmann::json& args, std::s
     }
 
     if (tool == "screenshot") {
-        uint32_t maxWidth = (uint32_t)args.value("max_width", 1280);
-        ctx_.RequestCaptureMemory([this, promise, maxWidth](uint32_t w, uint32_t h, std::vector<uint8_t> rgba) {
+        const std::string path = args.value("path", "");
+        const bool returnImage = path.empty() || args.value("return_image", false);
+        // inline images default to 1280 wide; a saved file keeps the full size unless max_width says otherwise
+        const uint32_t maxWidth = (uint32_t)std::max(0, args.value("max_width", path.empty() ? 1280 : 0));
+        float region[4] = {0, 0, 0, 0};
+        if (args.contains("region")) {
+            if (!args["region"].is_array() || args["region"].size() != 4) {
+                promise->Reject("region must be [x, y, width, height]");
+                return;
+            }
+            for (int k = 0; k < 4; ++k) region[k] = args["region"][k].get<float>();
+        }
+        ctx_.RequestCaptureMemory([this, promise, maxWidth, path, returnImage, region](uint32_t w, uint32_t h,
+                                                                                         std::vector<uint8_t> rgba) {
+            if (region[2] > 0 && region[3] > 0) {   // crop (clamped to the image)
+                const uint32_t x0 = (uint32_t)std::clamp(region[0], 0.0f, (float)w - 1);
+                const uint32_t y0 = (uint32_t)std::clamp(region[1], 0.0f, (float)h - 1);
+                const uint32_t cw = std::min((uint32_t)region[2], w - x0), ch = std::min((uint32_t)region[3], h - y0);
+                std::vector<uint8_t> crop((size_t)cw * ch * 4);
+                for (uint32_t y = 0; y < ch; ++y)
+                    std::memcpy(&crop[(size_t)y * cw * 4], &rgba[((size_t)(y0 + y) * w + x0) * 4], (size_t)cw * 4);
+                rgba.swap(crop);
+                w = cw;
+                h = ch;
+            }
             uint32_t outW = w, outH = h;
-            std::vector<uint8_t> downscaled = DownscaleRgba8(w, h, rgba.data(), maxWidth, outW, outH);
+            std::vector<uint8_t> scaled;
+            const uint8_t* px = rgba.data();
+            if (maxWidth > 0 && w > maxWidth) {
+                scaled = DownscaleRgba8(w, h, rgba.data(), maxWidth, outW, outH);
+                px = scaled.data();
+            }
             std::vector<uint8_t> pngBytes;
-            if (!EncodePngRGBA8(outW, outH, downscaled.data(), outW * 4, pngBytes)) {
+            if (!EncodePngRGBA8(outW, outH, px, outW * 4, pngBytes)) {
                 promise->Reject("Failed to encode PNG");
                 return;
             }
-            std::string b64 = Base64Encode(pngBytes.data(), pngBytes.size());
             nlohmann::json res;
-            res["image_base64"] = std::move(b64);
+            if (!path.empty()) {
+                const std::filesystem::path file = std::filesystem::absolute(Utf8ToPath(path));
+                std::error_code ec;
+                if (file.has_parent_path()) std::filesystem::create_directories(file.parent_path(), ec);
+                FILE* f = _wfopen(file.c_str(), L"wb");
+                const bool ok = f && std::fwrite(pngBytes.data(), 1, pngBytes.size(), f) == pngBytes.size();
+                if (f) std::fclose(f);
+                if (!ok) {
+                    promise->Reject("Could not write " + PathToUtf8(file));
+                    return;
+                }
+                res["path"] = PathToUtf8(file);
+            }
+            if (returnImage) res["image_base64"] = Base64Encode(pngBytes.data(), pngBytes.size());
             res["width"] = outW;
             res["height"] = outH;
             res["screen"] = ScreenName(screen_);
             promise->Resolve(res);
         });
+        return;
+    }
+
+    if (tool == "ui_items" || tool == "ui_click") {
+        if (!uiprobe::Enabled()) {
+            promise->Reject("The widget registry is off (the MCP server is not running)");
+            return;
+        }
+        const bool click = tool == "ui_click";
+        const std::string query = args.value(click ? "target" : "query", "");
+        const std::string windowQ = ToLowerAscii(args.value("window", ""));
+        const bool includeHidden = !click && args.value("include_hidden", false);
+        if (click && query.empty()) {
+            promise->Reject("ui_click needs a target");
+            return;
+        }
+        // Korean source text also matches its translation in the current UI language
+        const std::string q = ToLowerAscii(query), qTr = ToLowerAscii(Tr(query.c_str()));
+        struct Hit {
+            const uiprobe::Item* item;
+            bool exact;
+        };
+        std::vector<Hit> hits;
+        for (const uiprobe::Item& it : uiprobe::LastFrame()) {
+            if (it.window.rfind("Debug##", 0) == 0) continue;   // imgui's implicit fallback window
+            const bool covered = !it.isWindow && uiprobe::Covered(it);
+            if (!includeHidden && (!it.visible || covered)) continue;
+            if (click && it.isWindow) continue;
+            if (it.max.x - it.min.x < 1.0f || it.max.y - it.min.y < 1.0f) continue;
+            if (!windowQ.empty() && ToLowerAscii(it.window).find(windowQ) == std::string::npos) continue;
+            const std::string label = ToLowerAscii(it.label), id = ToLowerAscii(it.idStr);
+            bool exact = false, match = q.empty();
+            for (const std::string* n : {&q, &qTr}) {
+                if (n->empty()) continue;
+                if (label == *n || id == *n || id == "##" + *n) exact = match = true;
+                else if (label.find(*n) != std::string::npos || id.find(*n) != std::string::npos) match = true;
+            }
+            if (match) hits.push_back({&it, exact});
+        }
+        if (std::any_of(hits.begin(), hits.end(), [](const Hit& h) { return h.exact; }))
+            hits.erase(std::remove_if(hits.begin(), hits.end(), [](const Hit& h) { return !h.exact; }), hits.end());
+        std::stable_sort(hits.begin(), hits.end(), [](const Hit& a, const Hit& b) {
+            if (std::abs(a.item->min.y - b.item->min.y) > 2.0f) return a.item->min.y < b.item->min.y;
+            return a.item->min.x < b.item->min.x;
+        });
+        const auto toJson = [](const uiprobe::Item& it) {
+            nlohmann::json j{{"label", it.label},
+                             {"id", it.idStr},
+                             {"window", it.window},
+                             {"rect", {std::round(it.min.x), std::round(it.min.y), std::round(it.max.x - it.min.x),
+                                       std::round(it.max.y - it.min.y)}}};
+            if (it.disabled) j["disabled"] = true;
+            if (!it.visible) j["hidden"] = true;
+            else if (!it.isWindow && uiprobe::Covered(it)) j["covered"] = true;
+            if (it.isWindow) j["kind"] = "window";
+            return j;
+        };
+        if (!click) {
+            const size_t limit = (size_t)std::max(1, args.value("limit", 200));
+            nlohmann::json arr = nlohmann::json::array();
+            for (const Hit& h : hits) {
+                if (arr.size() >= limit) break;
+                arr.push_back(toJson(*h.item));
+            }
+            promise->Resolve({{"items", arr}, {"total", hits.size()}, {"screen", ScreenName(screen_)}});
+            return;
+        }
+        const int index = args.value("index", -1);
+        if (hits.empty() || (hits.size() > 1 && index < 0) || index >= (int)hits.size()) {
+            nlohmann::json cands = nlohmann::json::array();
+            for (size_t k = 0; k < hits.size() && k < 12; ++k) cands.push_back(toJson(*hits[k].item));
+            promise->Reject(hits.empty() ? "No visible widget matches '" + query + "' (list them with ui_items)"
+                                         : std::to_string(hits.size()) + " widgets match '" + query +
+                                               "': pass index (or window). Candidates: " + cands.dump());
+            return;
+        }
+        const uiprobe::Item& it = *hits[hits.size() == 1 ? 0 : (size_t)index].item;
+        float fx = 0.5f, fy = 0.5f;
+        if (args.contains("offset") && args["offset"].is_array() && args["offset"].size() == 2) {
+            fx = args["offset"][0].get<float>();
+            fy = args["offset"][1].get<float>();
+        }
+        const std::string x = std::to_string(it.min.x + (it.max.x - it.min.x) * fx);
+        const std::string y = std::to_string(it.min.y + (it.max.y - it.min.y) * fy);
+        const std::string action = args.value("action", "click");
+        const int f = mcpFrame_ + 1;
+        int last = f + 1;
+        if (action == "hover") {
+            McpScheduleInput(f, "move", {x, y});
+        } else if (action == "right") {
+            McpScheduleInput(f, "move", {x, y});
+            McpScheduleInput(f + 1, "down", {"r"});
+            McpScheduleInput(f + 2, "up", {"r"});
+            last = f + 3;
+        } else if (action == "click" || action == "dblclick") {
+            McpScheduleInput(f, action, {x, y});   // schedules its own press / release
+            last = f + (action == "dblclick" ? 5 : 3);
+        } else {
+            promise->Reject("Unknown action: " + action + " (click, dblclick, right, hover)");
+            return;
+        }
+        mcpInputActive_ = true;
+        nlohmann::json res = toJson(it);
+        res["action"] = action;
+        pendingMcpInputs_.push_back({last, promise, res});
         return;
     }
 

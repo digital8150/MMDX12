@@ -432,7 +432,7 @@ void App::DrawSelect() {
                 if (!ImGui::IsRectVisible(ImVec2(ca.x, ca.y - Dp(20)), ImVec2(cb.x, cb.y + Dp(20)))) continue;
                 ImGui::PushID((int)i);
                 bool hovered = false;
-                if (CardItem("##card", ca, cb, &hovered)) {
+                if (CardItem("##card", ca, cb, &hovered, a.displayName.c_str())) {
                     selCharacter_ = (int)i;
                     settings_.lastCharacter = a.id;
                 }
@@ -473,7 +473,17 @@ void App::DrawSelect() {
                 const ImVec2 ms = TextSize(Font::Semibold, size::Title, msg);
                 Text(dl, Font::Semibold, size::Title, ImVec2(origin.x + (availW - ms.x) * 0.5f, origin.y + Dp(80.0f)),
                      p.ink2, msg);
-                contentH = Dp(160.0f);
+                if (library_.characters.empty() && !library_.root.empty()) {
+                    // a new library: open the folder the message talks about (Explorer), then press rescan
+                    const float bw = Dp(200.0f);
+                    ImGui::SetCursorScreenPos(ImVec2(origin.x + (availW - bw) * 0.5f, origin.y + Dp(124.0f)));
+                    if (Button("##openlib", Tr("라이브러리 폴더 열기"), icon::FolderOpen, ButtonKind::Secondary, ImVec2(200.0f, 0.0f))) {
+                        std::error_code ec;
+                        std::filesystem::create_directories(library_.root / L"characters", ec);
+                        ShellExecuteW(nullptr, L"open", (library_.root / L"characters").c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+                    }
+                }
+                contentH = Dp(190.0f);
             }
         } else if (libraryTab_ == 1) {
             const std::string needle = ToLowerAscii(filterStage_);
@@ -493,7 +503,7 @@ void App::DrawSelect() {
                 if (!ImGui::IsRectVisible(ImVec2(ca.x, ca.y - Dp(20)), ImVec2(cb.x, cb.y + Dp(20)))) continue;
                 ImGui::PushID(i);
                 bool hovered = false;
-                if (CardItem("##card", ca, cb, &hovered)) {
+                if (CardItem("##card", ca, cb, &hovered, a ? a->displayName.c_str() : Tr("스튜디오"))) {
                     selStage_ = i;
                     settings_.lastStage = a ? a->id : std::string();
                 }
@@ -554,7 +564,7 @@ void App::DrawSelect() {
                 if (!ImGui::IsRectVisible(ra, rb)) continue;
                 ImGui::PushID((int)i);
                 bool hovered = false;
-                if (CardItem("##row", ra, rb, &hovered)) {
+                if (CardItem("##row", ra, rb, &hovered, a.displayName.c_str())) {
                     selSong_ = (int)i;
                     settings_.lastSong = a.id;
                 }
@@ -603,7 +613,17 @@ void App::DrawSelect() {
                 const ImVec2 ms = TextSize(Font::Semibold, size::Title, msg);
                 Text(dl, Font::Semibold, size::Title, ImVec2(origin.x + (availW - ms.x) * 0.5f, origin.y + Dp(80.0f)),
                      p.ink2, msg);
-                contentH = Dp(160.0f);
+                if (library_.songs.empty() && !library_.root.empty()) {
+                    // a new library: open the folder the message talks about (Explorer), then press rescan
+                    const float bw = Dp(200.0f);
+                    ImGui::SetCursorScreenPos(ImVec2(origin.x + (availW - bw) * 0.5f, origin.y + Dp(124.0f)));
+                    if (Button("##openlib", Tr("라이브러리 폴더 열기"), icon::FolderOpen, ButtonKind::Secondary, ImVec2(200.0f, 0.0f))) {
+                        std::error_code ec;
+                        std::filesystem::create_directories(library_.root / L"songs", ec);
+                        ShellExecuteW(nullptr, L"open", (library_.root / L"songs").c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+                    }
+                }
+                contentH = Dp(190.0f);
             }
         }
         ImGui::SetCursorScreenPos(origin);

@@ -21,6 +21,7 @@
 #include "imgui.h"
 #include "imgui_impl_dx12.h"
 #include "imgui_impl_win32.h"
+#include "ui_probe/UiProbe.h"
 
 extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
 
@@ -335,6 +336,7 @@ int App::Run(HINSTANCE instance, const AppOptions& options) {
     StartScan();
     startupPhase("scan start");
     MainLoop();
+    scanProgress_.cancel = true;   // a library scan still running (quit while scanning) stops instead of finishing
 
     // Studio work is never lost by closing the window: unsaved edits go to the recovery file, offered at the next
     // start (automated runs skip this, they would leave prompts behind for the next test).
@@ -607,6 +609,7 @@ void App::RenderFrame() {
         ApplyTheme();
     }
     ImGui_ImplWin32_NewFrame();
+    uiprobe::BeginFrame();   // the widgets of the frame just drawn become ui_items / ui_click targets
     PumpUiScript();
     PumpMcp(false);
     ImGui::NewFrame();
@@ -806,6 +809,7 @@ void App::StartScan() {
     thumbsClearPending_ = true;
     scanProgress_.filesVisited.store(0, std::memory_order_relaxed);
     scanProgress_.filesTotal.store(0, std::memory_order_relaxed);
+    scanProgress_.cancel.store(false, std::memory_order_relaxed);
     const std::filesystem::path path = ResolveLibraryPath();
     const std::filesystem::path templateDir = ExecutableDir() / L"assets" / L"library_template";
     const LibraryOverrides overrides = LoadLibraryOverrides();

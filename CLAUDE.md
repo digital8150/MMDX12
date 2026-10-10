@@ -64,6 +64,7 @@ progress.md is the session log. Read its latest entry first.
   - `studio_focus_test`: DoF focus track evaluation, automatic focus (score, hysteresis, rack), focus keys in projects
   - `mmdx12_mcp [--pipe <name>] [--pid <pid>] [--launch] [--timeout <ms>]`: Model Context Protocol stdio bridge
   - `mcp_smoke.py [--handshake-only] [--scenario]`: MCP test client (protocol handshake & end-to-end scenario)
+  - `mcp_pipe.py` / `mcp_x.py`: talk to a running app's pipe without the bridge (`python tools/mcp_x.py "click 플레이" "wait 30" "shot out.png" "items 셰이더"`)
 - The play bar auto-hides while playing with no mouse movement, so captures usually don't show it.
 
 ## Architecture (src/)
@@ -242,7 +243,16 @@ progress.md is the session log. Read its latest entry first.
   `App::PumpMcp` / `ExecuteMcp` (app/AppMcp.cpp) before ImGui::NewFrame. Tool schemas + timeouts live in app/McpTools.h
   (shared by both sides). Navigation goes through `McpLeaveScreen` (the UI's own leave paths); multi-frame calls
   (loads, wait_frames, ui_input) resolve later from PumpMcp; `ui_input` / `studio_command` reuse `ExecuteUiCommand`
-  (UiScript.cpp) with their own queue counted in `mcpFrame_`. Renders use `mcpOfflineOutput_`, never `options_.offline*`
+  (UiScript.cpp) with their own queue counted in `mcpFrame_`.
+  Widget registry (`src/ui_probe/UiProbe.*`, compiled into the imgui target with `IMGUI_ENABLE_TEST_ENGINE`, on while the
+  MCP server runs): imgui's test-engine hooks record every item of the last frame (rect, window, label = text before
+  "##", id string); UiKit widgets report their id + visible text (`uiprobe::Info`), `CardItem(..., label)` names cards,
+  drawn-only elements register with `uiprobe::Add` (timeline `##tlrow` / `##tlkey:<row>:<frame>`). MCP `ui_items` /
+  `ui_click` match label or id (Korean source text also through `Tr()`, so one script serves every UI language) and skip
+  clipped / covered items (`uiprobe::Covered`: topmost window under the centre). `screenshot` takes `path` / `region`.
+  The website's user guide screenshots come from `MMDX12_Web/scripts/guide` (capture.py drives a packaged copy outside
+  the repo, e.g. `E:\MMDX12`, per language; annotate.py -> public/guide/<lang>/*.webp). New UI: give clickable widgets
+  stable ids so the guide script keeps working. Renders use `mcpOfflineOutput_`, never `options_.offline*`
   paths (those make a CLI job that quits). On by default (`mcp=` ini, lobby detail switch), headless runs need `--mcp`.
 - `OfflineRenderer` (render/OfflineRenderer.h) is independent of `RenderSettings`: `Renderer::BeginOffline` builds the TLAS,
   then `Renderer::RenderOffline` replaces `Render` each frame (GPU-time-budgeted iterations, preview present) until Done.

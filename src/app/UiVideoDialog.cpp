@@ -1,5 +1,6 @@
 // The lobby's video render dialog (opened from the select screen's "영상 렌더" button).
 #include "app/App.h"
+#include "ui_probe/UiProbe.h"
 
 #include <algorithm>
 #include <cmath>
@@ -131,6 +132,7 @@ void App::DrawVideoRenderDialog() {
 
                 ImGui::ItemSize(bb);
                 if (!ImGui::ItemAdd(bb, gid)) continue;
+                uiprobe::Info(gid, idBuf, Tr(kVideoRenderers[i].label));
 
                 bool hovered = false, held = false;
                 const bool pressed = ImGui::ButtonBehavior(bb, gid, &hovered, &held);
@@ -314,7 +316,10 @@ void App::DrawVideoRenderDialog() {
                                      p.surface, p.surface);
         Icon(cdl, icon::CaretDown, 16.0f, ImVec2(wp.x + ws.x * 0.5f, wp.y + ws.y - Dp(10.0f)), p.ink3);
     }
+    const bool settingsScrolled = ImGui::GetScrollY() > 0.5f;
     ImGui::EndChild();
+    // scrolled content slides under the header: a hairline marks the edge (like the line above the summary)
+    if (settingsScrolled) dl->AddLine(ImVec2(x0, top - 0.5f), ImVec2(x1, top - 0.5f), p.line, 1.0f);
 
     // Pinned footer (always visible, separated by a hairline from the scrolling area)
     cfg.Clamp();

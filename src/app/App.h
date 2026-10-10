@@ -881,6 +881,7 @@ private:
     struct PendingMcpInput {
         int targetFrame = 0;
         std::shared_ptr<McpPromise> promise;
+        nlohmann::json result;   // resolved with this (null: {"status": "completed"})
     };
     std::vector<PendingMcpInput> pendingMcpInputs_;
 };

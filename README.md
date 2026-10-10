@@ -124,6 +124,8 @@ Other layouts work too: folder names like `models` or `motions` count, and witho
 
 ## Getting started
 
+> 📖 The **[user guide](https://mmdx.codingbot.kr/en/docs/)** walks through everything from install to the Studio with real app screenshots.
+
 1. Download `MMDX12-<version>-win64.zip` from [Releases](https://github.com/digital8150/MMDX12/releases/latest) and unzip it anywhere.
 2. Add your MMD files to the `library` folder.
 3. Run `MMDX12.exe`. Windows may show a SmartScreen warning the first time because the exe isn't signed: click "More info", then "Run anyway".

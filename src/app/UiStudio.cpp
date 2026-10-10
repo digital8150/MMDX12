@@ -1,6 +1,7 @@
 // Studio screen: a keyframe editor for a multi-model scene (outliner, viewport, inspector, timeline).
 // Document model and undo live in src/studio; this file wires them to the App (loading, renderer, audio, input).
 #include "app/App.h"
+#include "ui_probe/UiProbe.h"
 
 #include <algorithm>
 #include <chrono>
@@ -1739,6 +1740,7 @@ void App::DrawStudioOutliner(float x0, float y0, float x1, float y1) {
         const ImVec2 b(a.x + w, a.y + rowH);
         const bool selected = index == -1 ? (d.selectedModel == -1 && d.selectedLightUid == 0) : (d.selectedModel == index);
         ImGui::InvisibleButton("##row", ImVec2(w - Dp(index >= 0 ? 72.0f : 40.0f), rowH));
+        uiprobe::Info(ImGui::GetItemID(), "##row", label);   // MCP ui_click by name
         const bool hovered = ImGui::IsItemHovered();
         if (index >= 0 && hovered) Tooltip(PathToUtf8(d.models[index]->path).c_str());
         if (ImGui::IsItemClicked() && index > -2) StudioSelectModel(index);

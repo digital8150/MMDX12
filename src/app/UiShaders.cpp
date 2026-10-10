@@ -1,6 +1,7 @@
 // Shader pack manager (Screen::Shaders, the "셰이더" tab): installed packs and the online gallery, pack details,
 // installing (zip / folder / drop / download), removing, creating a pack from the template.
 #include "app/App.h"
+#include "ui_probe/UiProbe.h"
 
 #include <Windows.h>
 #include <ShlObj.h>
@@ -266,7 +267,8 @@ void App::DrawShaders() {
             contentH = std::max(contentH, cb.y - origin.y);
             if (!ImGui::IsRectVisible(ImVec2(ca.x, ca.y - Dp(20)), ImVec2(cb.x, cb.y + Dp(20)))) return false;
             bool hovered = false;
-            const bool clicked = CardItem(id, ca, cb, &hovered);
+            const bool clicked = CardItem(id, ca, cb, &hovered, name.c_str());
+            uiprobe::Info(ImGui::GetItemID(), key.c_str(), nullptr);   // "p:<id>:..." / "r:<id>:<version>": by pack id
             const float hv = Anim(ImGui::GetID(id), hovered);
             const float sv = Anim(ImGui::GetID((std::string(id) + "s").c_str()), selected, 14.0f);
             const float lift = -Dp(3.0f) * hv;
@@ -538,8 +540,21 @@ void App::DrawShaderPackDetail(float x0, float y0, float x1, float y1) {
             Para(Tr("조절할 수 있는 항목이 없습니다"), p.ink3, size::Caption);
         }
         if (pk->type == PackType::Effect) {
+            // installing an effect does not turn it on: add / remove it from the user's stack right here
             Gap(12.0f);
-            Para(Tr("화면 효과는 로비의 셰이더 섹션(\"화면 효과\")과 재생 바의 ✦ 버튼에서 켜고 순서를 바꿀 수 있습니다."), p.ink3, size::Caption);
+            auto& stack = settings_.effectStack;
+            const auto it = std::find_if(stack.begin(), stack.end(), [&](const EffectStackEntry& e) { return e.pack == pk->id; });
+            const bool inStack = it != stack.end();
+            if (!inStack ? Button("##fxstackadd", Tr("화면 효과에 추가"), icon::Plus, ButtonKind::Primary)
+                         : Button("##fxstackremove", Tr("화면 효과에서 빼기"), icon::X, ButtonKind::Secondary)) {
+                if (inStack) stack.erase(it);
+                else stack.push_back({pk->id, true, {}, {}});
+                settings_.Save(settingsPath_);
+                ApplyRenderSettings();
+            }
+            Gap(8.0f);
+            Para(Tr("켠 효과는 로비의 셰이더 탭(\"화면 효과\")과 재생 바의 화면 효과 버튼에서 끄거나 순서를 바꿀 수 있습니다."), p.ink3,
+                 size::Caption);
         }
     } else if (shaderDetailTab_ == 2) {
         Gap(12.0f);
@@ -671,7 +686,20 @@ bool App::DrawEffectStackEditor(std::vector<EffectStackEntry>& stack, bool heade
         }
         ImGui::PopStyleVar();
     }
-    if (stack.empty()) Para(Tr("효과가 없습니다. 효과 팩을 추가하면 위에서 아래로 차례로 적용됩니다."), p.ink3, size::Caption);
+    if (stack.empty()) {
+        Para(Tr("효과가 없습니다. 효과 팩을 추가하면 위에서 아래로 차례로 적용됩니다."), p.ink3, size::Caption);
+        if (addable.empty()) {   // nothing installed yet: say where effects come from
+            Gap(6.0f);
+            if (screen_ == Screen::Select) {   // the lobby can switch screens; play / studio would lose the scene
+                if (Button("##fxgetonline", Tr("온라인에서 효과 받기"), icon::Globe, ButtonKind::Secondary)) {
+                    shaderTab_ = 1;
+                    screen_ = Screen::Shaders;
+                }
+            } else {
+                Para(Tr("효과 팩은 라이브러리 화면의 셰이더 탭 > 온라인에서 받을 수 있습니다."), p.ink3, size::Caption);
+            }
+        }
+    }
     return changed;
 }
 

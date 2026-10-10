@@ -105,7 +105,7 @@ Add to your project or user MCP settings:
 
 ---
 
-## 5. Tool Catalog (33 Tools)
+## 5. Tool Catalog (35 Tools)
 
 ### Bridge & Connection Management
 1. `list_instances`: Enumerates active MMDX12 named pipes on `\\.\pipe\mmdx12_mcp*`.
@@ -118,7 +118,7 @@ Add to your project or user MCP settings:
 6. `list_library`: Lists available characters, stages, and songs with filtering (`kind`: `all|character|stage|song`, optional search `query`).
 
 ### Screen Control & Capture
-7. `screenshot`: Reads back the Direct3D 12 backbuffer into CPU memory, optionally downscaling to `max_width`, compresses to PNG via in-memory `stb_image_write`, and returns an MCP image block plus a short text block (size, screen). Default `max_width` is 1280.
+7. `screenshot`: Reads back the Direct3D 12 backbuffer (scene + UI, no mouse cursor). Inline: downscaled to `max_width` (default 1280, 0 = full size) and returned as an MCP image block plus a short text block (size, screen). With `path`: written there as a full-size PNG (folders are created; `max_width` still applies when given) and returned inline only with `return_image: true`. `region: [x, y, w, h]` crops first (window pixels).
 8. `wait_frames`: Advances the simulation by $N$ frames before completing.
 9. `set_screen`: Changes the active screen (`select`, `studio` = a new empty project, `shaders`, `bench`).
 
@@ -158,6 +158,8 @@ While the window is minimized, read-only queries answer as they are; every other
 
 ### Input Simulation & Lifetime
 32. `ui_input`: Injects virtual UI mouse and keyboard events (`move`, `click`, `dblclick`, `down`, `up`, `wheel`, `key`, `text`, `mod`) the same commands as `--ui-script`. Events run one per frame unless they give `frame` (offset from now); clicks add their own press / release. Real mouse / keyboard input is ignored only while injected steps are pending.
+34. `ui_items`: The widgets of the last frame: `label` (visible text), `id` (the language-independent ImGui id string, e.g. `##play`), `window`, `rect` `[x, y, w, h]`. `query` matches label or id (case-insensitive substring); Korean source text also matches its translation in the current UI language, so one script drives every language. Clipped widgets and widgets covered by another window (a modal, a popup) are left out unless `include_hidden`. Besides ImGui items it lists drawn-only elements: timeline row headers (`##tlrow`) and visible keys (`##tlkey:<row>:<frame>`); shader pack cards carry `p:<id>:...` / `r:<id>:<version>`.
+35. `ui_click`: Clicks (or `dblclick`, `right`, `hover`) the widget `target` found like `ui_items`' query (exact matches win over substrings; several matches need `index` or `window`). Answers once the click is delivered, with the widget's rect. `offset: [fx, fy]` picks a point inside the rect.
 33. `quit_app`: Requests clean application shutdown.
 
 ---
@@ -169,6 +171,9 @@ Run the included standalone Python test script (requires only Python standard li
 ```powershell
 # Validate protocol handshake, capabilities, and all 33 tool schemas without running MMDX12:
 python tools/mcp_smoke.py --handshake-only
+
+# Drive the app over its named pipe without the bridge (tools/mcp_pipe.py; mcp_x.py runs short command lists):
+python tools/mcp_x.py "click 플레이" "wait 30" "shot out.png" "items 셰이더"
 
 # Run full end-to-end scenario (launches app, inspects state, loads scene, captures PNG, tests studio, exits cleanly):
 python tools/mcp_smoke.py --scenario

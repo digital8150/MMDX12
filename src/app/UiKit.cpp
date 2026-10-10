@@ -2,6 +2,7 @@
 #include "app/Icons.h"
 #include "core/I18n.h"
 #include "imgui_internal.h"
+#include "ui_probe/UiProbe.h"
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
@@ -385,6 +386,7 @@ bool Button(const char* id, const char* label, const char* icon, ButtonKind kind
     const ImRect bb(w->DC.CursorPos, ImVec2(w->DC.CursorPos.x + sz.x, w->DC.CursorPos.y + sz.y));
     ImGui::ItemSize(bb);
     if (!ImGui::ItemAdd(bb, gid)) return false;
+    uiprobe::Info(gid, id, label);
     bool hovered = false, held = false;
     const bool pressed = ImGui::ButtonBehavior(bb, gid, &hovered, &held);
     const bool disabled = IsDisabled();
@@ -443,6 +445,7 @@ bool IconButton(const char* id, const char* icon, const char* tooltip, bool acti
     const ImRect bb(w->DC.CursorPos, ImVec2(w->DC.CursorPos.x + s, w->DC.CursorPos.y + s));
     ImGui::ItemSize(bb);
     if (!ImGui::ItemAdd(bb, gid)) return false;
+    uiprobe::Info(gid, id, tooltip);
     bool hovered = false, held = false;
     const bool pressed = ImGui::ButtonBehavior(bb, gid, &hovered, &held);
     const bool disabled = IsDisabled();
@@ -518,6 +521,7 @@ bool Segmented(const char* id, const char* const* labels, int count, int* curren
         const ImGuiID sid = ImGui::GetID("seg");
         const ImRect sb(ImVec2(x, origin.y), ImVec2(x + segW[i], origin.y + h));
         ImGui::ItemAdd(sb, sid);
+        uiprobe::Info(sid, id, labels[i]);
         bool hovered = false, held = false;
         if (ImGui::ButtonBehavior(sb, sid, &hovered, &held) && *current != i) {
             *current = i;
@@ -549,6 +553,7 @@ bool Switch(const char* id, const char* label, bool* v, const char* hint) {
     const ImRect bb(w->DC.CursorPos, ImVec2(w->DC.CursorPos.x + width, w->DC.CursorPos.y + h));
     ImGui::ItemSize(bb);
     if (!ImGui::ItemAdd(bb, gid)) return false;
+    uiprobe::Info(gid, id, label);
     bool hovered = false, held = false;
     bool pressed = ImGui::ButtonBehavior(bb, gid, &hovered, &held);
     const bool disabled = IsDisabled();
@@ -598,6 +603,7 @@ bool SliderRow(const char* id, const char* label, float* v, float vmin, float vm
     const ImRect bb(w->DC.CursorPos, ImVec2(w->DC.CursorPos.x + width, w->DC.CursorPos.y + h));
     ImGui::ItemSize(bb);
     if (!ImGui::ItemAdd(bb, gid)) return false;
+    uiprobe::Info(gid, id, label);
     bool hovered = false, held = false;
     ImGui::ButtonBehavior(bb, gid, &hovered, &held, ImGuiButtonFlags_PressedOnClick);
     bool changed = false;
@@ -710,6 +716,7 @@ bool Chip(const char* id, const char* label, const char* icon, bool selected, fl
     const ImRect bb(w->DC.CursorPos, ImVec2(w->DC.CursorPos.x + width, w->DC.CursorPos.y + h));
     ImGui::ItemSize(bb);
     if (!ImGui::ItemAdd(bb, gid)) return false;
+    uiprobe::Info(gid, id, label);
     bool hovered = false, held = false;
     const bool pressed = ImGui::ButtonBehavior(bb, gid, &hovered, &held);
     if (hovered) ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
@@ -747,6 +754,7 @@ bool MenuItem(const char* id, const char* label, const char* icon, const char* h
     const ImRect bb(w->DC.CursorPos, ImVec2(w->DC.CursorPos.x + width, w->DC.CursorPos.y + h));
     ImGui::ItemSize(bb);
     if (!ImGui::ItemAdd(bb, gid)) return false;
+    uiprobe::Info(gid, id, label);
     bool hovered = false, held = false;
     const bool pressed = ImGui::ButtonBehavior(bb, gid, &hovered, &held);
     if (hovered) ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
@@ -809,9 +817,10 @@ void BeginScreen(const char* id) {
 
 void EndScreen() { ImGui::End(); }
 
-bool CardItem(const char* id, ImVec2 a, ImVec2 b, bool* hovered) {
+bool CardItem(const char* id, ImVec2 a, ImVec2 b, bool* hovered, const char* label) {
     ImGui::SetCursorScreenPos(a);
     const bool pressed = ImGui::InvisibleButton(id, ImVec2(b.x - a.x, b.y - a.y));
+    if (label) uiprobe::Info(ImGui::GetItemID(), id, label);
     *hovered = ImGui::IsItemHovered();
     if (*hovered) ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
     return pressed;

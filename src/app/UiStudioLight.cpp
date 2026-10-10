@@ -1,6 +1,7 @@
 // Studio scene light UI: outliner group and rows, preset confirmation modal, and the light inspector.
 // Keyed edits follow the keyed edit rule (playhead key -> auto-key insert -> base values).
 #include "app/App.h"
+#include "ui_probe/UiProbe.h"
 
 #include <algorithm>
 #include <cmath>
@@ -264,6 +265,7 @@ void App::DrawStudioLightOutliner() {
         const bool selected = (d.selectedModel == -1 && d.selectedLightUid == l.uid);
 
         ImGui::InvisibleButton("##row", ImVec2(w - Dp(40.0f), rowH));
+        uiprobe::Info(ImGui::GetItemID(), "##row", l.name.c_str());   // MCP ui_click by name
         const bool hovered = ImGui::IsItemHovered();
         if (ImGui::IsItemClicked()) {
             StudioSelectLight(l.uid);

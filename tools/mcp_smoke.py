@@ -45,6 +45,8 @@ EXPECTED_TOOLS = [
     "render_status",
     "render_cancel",
     "ui_input",
+    "ui_items",
+    "ui_click",
     "quit_app"
 ]
 

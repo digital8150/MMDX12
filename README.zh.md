@@ -113,6 +113,8 @@
 
 ## 开始使用
 
+> 📖 从安装到工作室，配有真实应用截图的 **[使用指南](https://mmdx.codingbot.kr/zh/docs/)**。
+
 1. 从 [Releases](https://github.com/digital8150/MMDX12/releases/latest) 下载 `MMDX12-<版本>-win64.zip`,解压到任意位置。
 2. 把 MMD 文件放进 `library` 文件夹。
 3. 运行 `MMDX12.exe`。由于是未签名的可执行文件,第一次运行时可能会弹出 SmartScreen 警告,点击"更多信息"→"仍要运行"即可。

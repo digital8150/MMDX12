@@ -1255,3 +1255,40 @@ smoke review); Claude did the review, publish, the engine fixes and both outline
 ### Verified
 - Full build (except the locked `mmdx12_mcp.exe`), `rest_pose_test`, `shader_choice_test`, `studio_project_test`,
   `studio_edit_test`, `studio_focus_test` pass.
+
+## 2026-10-11 — User guide on the website (captured over MCP), MCP widget automation, UX fixes, release 1.8.0
+
+### Done
+- MCP widget automation: `src/ui_probe/UiProbe.*` (compiled into the imgui target, `IMGUI_ENABLE_TEST_ENGINE`; external/
+  untouched) records every widget of the last frame through imgui's test-engine hooks; UiKit widgets report id + text,
+  `CardItem(..., label)` names library / pack cards (pack cards also carry `p:<id>` / `r:<id>` ids), outliner and light rows
+  are named, renderer cards in the video dialog too, the timeline registers drawn-only rows (`##tlrow`) and visible keys
+  (`##tlkey:<row>:<frame>`). New MCP tools `ui_items` / `ui_click` (Korean source text is matched through `Tr()`, so one
+  script drives all four UI languages; clipped and covered items are skipped via `uiprobe::Covered`); `screenshot` gained
+  `path` (full-size PNG), `region` and `return_image`. `tools/mcp_pipe.py` (pipe client without the bridge) and
+  `tools/mcp_x.py` (short command lists). docs/mcp.md: 35 tools; mcp_smoke expects them.
+- UX fixes found by walking the user paths for the guide: effect pack details get **화면 효과에 추가 / 빼기** (installing
+  an effect never turned it on and nothing said where to go); an empty effect stack points to the online gallery (lobby)
+  or says where it is; the `✦` glyph in the effect hint rendered as `?` (text no longer embeds it); the empty library
+  shows **라이브러리 폴더 열기**; the video dialog draws a divider when its settings are scrolled (scrolled cards looked
+  like they overlapped the subtitle; the clip itself was right); quitting during a library scan cancels the remaining
+  probes (`ScanProgress::cancel`; 34 s -> about 17 s, bounded by in-flight probes).
+- Website (MMDX12_Web): header Guide / Shader Packs / Releases (the gallery was only reachable from inside the docs);
+  docs are one catch-all route with sections (시작하기 / 사용 가이드 / 스튜디오 / 고급 / 셰이더 팩 만들기); 14 new guide
+  pages per language (install, quick start, library, playback, quality, video, shaders, benchmark, studio x4, MCP) with
+  44 screenshots per language, all taken by `scripts/guide/capture.py` driving a packaged copy over MCP (fresh install
+  state, Sour Miku / Theater / Catch the Wave, lobby 1600x900, studio 1920x1080; the save path line with the Windows
+  user name is pixelated by annotate.py). Click-to-zoom screenshots, foldable doc nav on phones, header fits at 500 px.
+  en / ja / zh pages translated by agents with UI labels taken from I18nEn/Ja/Zh.cpp.
+- Version 1.8.0; release notes in dist/notes_1.8.0.md.
+
+### Verified
+- All 8 studio/unit tests pass; packaged 1.8.0 exe starts with no `[E]`; MCP handshake lists 35 tools.
+- Four full capture runs (ko/en/ja/zh) unattended; spot-checked shots per language show the localized UI.
+- Site builds; docs checked in headless Edge at 1400 / 600 / 500 px.
+
+### Not verified / notes
+- The studio inspector puts the model transform + shader above the Key / Bone / Morph tabs, so the curve editor sits
+  below the fold even at 1080p (the guide scrolls the inspector). Worth a layout pass.
+- Headless Edge can't go below ~500 px wide, so 390 px phones were not seen.
+- `capture.py` needs one app instance at a time (it waits for the shared pipe name to free) and clears `recovery/`.

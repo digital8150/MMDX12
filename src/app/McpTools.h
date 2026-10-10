@@ -103,15 +103,69 @@ inline nlohmann::json GetMcpToolDefinitions() {
     // 7. screenshot
     tools.push_back({
         {"name", "screenshot"},
-        {"description", "Capture a screenshot of the current back buffer and return as inline PNG base64 image"},
+        {"description", "Capture the window (scene + UI, no mouse cursor) as a PNG: returned inline, or saved to 'path' "
+                        "at full resolution (then only returned inline when return_image is true)"},
         {"inputSchema", {
             {"type", "object"},
             {"properties", {
                 {"max_width", {
                     {"type", "integer"},
-                    {"description", "Maximum width in pixels for downscaling (default 1280)"}
+                    {"description", "Maximum width in pixels for downscaling (default 1280 inline, 0 = no downscale; "
+                                    "a saved file is never downscaled unless max_width is given)"}
+                }},
+                {"path", {
+                    {"type", "string"},
+                    {"description", "Save the PNG to this file (folders are created)"}
+                }},
+                {"region", {
+                    {"type", "array"},
+                    {"items", {{"type", "number"}}},
+                    {"description", "Crop [x, y, width, height] in window pixels before scaling"}
+                }},
+                {"return_image", {
+                    {"type", "boolean"},
+                    {"description", "With 'path': also return the image inline (default false)"}
                 }}
             }}
+        }}
+    });
+
+    // 7b. ui_items
+    tools.push_back({
+        {"name", "ui_items"},
+        {"description", "List the UI widgets of the last frame: label (visible text), id (language-independent id "
+                        "string), window, rect [x, y, w, h] in window pixels. 'query' matches label or id "
+                        "(case-insensitive substring); Korean source text also matches its translation in the "
+                        "current UI language. Use ui_click to press one."},
+        {"inputSchema", {
+            {"type", "object"},
+            {"properties", {
+                {"query", {{"type", "string"}, {"description", "Substring of the label or id (optional)"}}},
+                {"window", {{"type", "string"}, {"description", "Substring of the window name (optional)"}}},
+                {"include_hidden", {{"type", "boolean"}, {"description", "Also list clipped / hidden items (default false)"}}},
+                {"limit", {{"type", "integer"}, {"description", "Maximum items (default 200)"}}}
+            }}
+        }}
+    });
+
+    // 7c. ui_click
+    tools.push_back({
+        {"name", "ui_click"},
+        {"description", "Click (or hover) a UI widget found by label or id, like ui_items' query. Exact matches win "
+                        "over substrings; several matches need 'index'. Returns the widget's rect once the click "
+                        "has been delivered (the UI reacts on the following frames)."},
+        {"inputSchema", {
+            {"type", "object"},
+            {"properties", {
+                {"target", {{"type", "string"}, {"description", "Label or id (Korean source text works in every UI language)"}}},
+                {"window", {{"type", "string"}, {"description", "Substring of the window name (optional)"}}},
+                {"index", {{"type", "integer"}, {"description", "Which match when several remain (0-based, top-left first)"}}},
+                {"action", {{"type", "string"}, {"enum", {"click", "dblclick", "right", "hover"}},
+                            {"description", "Default click"}}},
+                {"offset", {{"type", "array"}, {"items", {{"type", "number"}}},
+                            {"description", "Point inside the rect as fractions [fx, fy] (default [0.5, 0.5])"}}}
+            }},
+            {"required", {"target"}}
         }}
     });
 
@@ -649,7 +703,7 @@ inline unsigned McpToolTimeoutMs(const std::string& tool) {
     if (tool == "load_scene" || tool == "open_studio" || tool == "studio_open" || tool == "studio_add_model" ||
         tool == "studio_command")
         return 180000;
-    if (tool == "wait_frames" || tool == "ui_input") return 120000;
+    if (tool == "wait_frames" || tool == "ui_input" || tool == "ui_click") return 120000;
     return 30000;
 }
 

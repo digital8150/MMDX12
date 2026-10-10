@@ -113,6 +113,8 @@ MMDX12의 영상 모드로 노래 한 곡을 통째로 렌더해서 그대로 �
 
 ## 시작하기
 
+> 📖 설치부터 스튜디오까지 실제 앱 화면으로 설명한 **[사용 가이드](https://mmdx.codingbot.kr/ko/docs/)** 가 있어요.
+
 1. [Releases](https://github.com/digital8150/MMDX12/releases/latest)에서 `MMDX12-<버전>-win64.zip`을 받아 아무 데나 압축을 풉니다.
 2. `library` 폴더에 MMD 파일을 넣습니다.
 3. `MMDX12.exe` 실행. 서명 안 된 실행 파일이라 처음에 SmartScreen 경고가 뜰 수 있는데, "추가 정보" → "실행"을 누르면 됩니다.

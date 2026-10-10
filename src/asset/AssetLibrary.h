@@ -58,6 +58,7 @@ struct LibraryScanResult {
 struct ScanProgress {
     std::atomic<int> filesVisited{0};
     std::atomic<int> filesTotal{0};   // 0 until the directory walk finishes
+    std::atomic<bool> cancel{false};  // set by the owner to stop early (app exit): the result is then incomplete
 };
 
 // Per-file decisions made in the app, keyed by library-relative path ('/' separated).

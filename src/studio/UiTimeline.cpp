@@ -2,6 +2,7 @@
 #include "app/UiKit.h"
 #include "app/Icons.h"
 #include "imgui_internal.h"
+#include "ui_probe/UiProbe.h"
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
@@ -362,6 +363,7 @@ bool Timeline(const char* id, ImVec2 size, const std::vector<TimelineRow>& rows,
                      ImVec2(labelX, rowY + (rowHeight - Dp(size::Small * 1.25f)) * 0.5f), keyAreaX - Dp(4.0f), textCol, r.label.c_str());
 
         dl->AddLine(ImVec2(rmin.x, rmax.y), ImVec2(rmax.x, rmax.y), p.line);
+        if (uiprobe::Enabled()) uiprobe::Add("##tlrow", r.label.c_str(), rmin, ImVec2(keyAreaX, rmax.y));   // MCP ui_click
     }
     
     // Ruler
@@ -446,6 +448,10 @@ bool Timeline(const char* id, ImVec2 size, const std::vector<TimelineRow>& rows,
             
             const bool dragged = k.selected && r.keysEditable && view.dragMode == 2 && view.dragDelta != 0;
             if (!dragged) drawDiamond(std::round(kx), std::round(rowY), col, radius);
+            if (uiprobe::Enabled() && !r.isGroup) {   // MCP: "##tlkey:<row>:<frame>"
+                const std::string kid = "##tlkey:" + r.label + ":" + std::to_string(k.frame);
+                uiprobe::Add(kid.c_str(), r.label.c_str(), ImVec2(kx - radius, rowY - radius), ImVec2(kx + radius, rowY + radius));
+            }
 
             if (dragged) {
                 float gx = originX + (k.frame + view.dragDelta - view.scrollFrame) * view.pxPerFrame * Dpi();

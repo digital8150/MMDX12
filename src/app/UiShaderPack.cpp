@@ -363,7 +363,7 @@ bool App::DrawShaderSelector(const char* id, ShaderChoice& choice, float width) 
             const ImVec2 ra = ImGui::GetCursorScreenPos(), rb(ra.x + lw, ra.y + Dp(56.0f));
             bool h = false;
             const bool selectable = !pk || pk->Selectable();
-            const bool clicked = CardItem(rid, ra, rb, &h);
+            const bool clicked = CardItem(rid, ra, rb, &h, pk ? pk->name.Get(lang).c_str() : Tr("MMD 기본"));
             const float t = Anim(ImGui::GetID(rid), h && selectable);
             if (selected) ldl->AddRectFilled(ra, rb, p.accentSoft, Dp(10.0f));
             else if (t > 0.01f) ldl->AddRectFilled(ra, rb, WithAlpha(p.sunken, t), Dp(10.0f));

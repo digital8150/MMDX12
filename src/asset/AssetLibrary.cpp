@@ -357,7 +357,9 @@ LibraryScanResult ScanLibrary(const std::filesystem::path& rootIn, ScanProgress*
     if (progress) progress->filesTotal = (int)(models.size() + vmdFiles.size() + audioFiles.size());
 
     // ---- 3. probe models, vmds and audio in parallel ----
+    const auto cancelled = [progress] { return progress && progress->cancel.load(); };
     std::for_each(std::execution::par, models.begin(), models.end(), [&](ModelEntry& m) {
+        if (cancelled()) return;   // app exit: skip the remaining (slow) probes
         std::string err;
         if (IsMmdModelFormat(m.format)) {
             PmxProbe probe;
@@ -391,6 +393,7 @@ LibraryScanResult ScanLibrary(const std::filesystem::path& rootIn, ScanProgress*
         std::vector<size_t> idx(vmdFiles.size());
         for (size_t i = 0; i < idx.size(); ++i) idx[i] = i;
         std::for_each(std::execution::par, idx.begin(), idx.end(), [&](size_t i) {
+            if (cancelled()) return;
             VmdProbe probe;
             if (ProbeVmd(vmdFiles[i], probe, &vmdErrors[i])) vmdProbes[i] = std::move(probe);
             if (progress) ++progress->filesVisited;
@@ -402,6 +405,7 @@ LibraryScanResult ScanLibrary(const std::filesystem::path& rootIn, ScanProgress*
         for (size_t i = 0; i < idx.size(); ++i) idx[i] = i;
         std::for_each(std::execution::par, idx.begin(), idx.end(), [&](size_t i) {
             audios[i].path = audioFiles[i];
+            if (cancelled()) return;
             audios[i].sec = AudioDurationSec(audioFiles[i]);
             if (progress) ++progress->filesVisited;
         });

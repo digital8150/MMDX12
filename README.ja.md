@@ -113,6 +113,8 @@ MMDX12 の動画モードで 1 曲まるごとレンダリングして、その�
 
 ## はじめかた
 
+> 📖 インストールからスタジオまで、実際のアプリ画面で説明した **[使い方ガイド](https://mmdx.codingbot.kr/ja/docs/)** があります。
+
 1. [Releases](https://github.com/digital8150/MMDX12/releases/latest) から `MMDX12-<バージョン>-win64.zip` をダウンロードして、好きな場所に展開します。
 2. `library` フォルダに MMD のファイルを入れます。
 3. `MMDX12.exe` を起動します。署名のない実行ファイルなので、最初は SmartScreen の警告が出ることがあります。「詳細情報」→「実行」を押してください。

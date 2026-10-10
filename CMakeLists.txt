@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.24)
-project(MMDX12 VERSION 1.7.0 LANGUAGES C CXX)
+project(MMDX12 VERSION 1.8.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -35,6 +35,11 @@ add_library(imgui STATIC
   ${EXT}/imgui/backends/imgui_impl_win32.cpp
   ${EXT}/imgui/backends/imgui_impl_dx12.cpp)
 target_include_directories(imgui PUBLIC ${EXT}/imgui ${EXT}/imgui/backends)
+# Widget registry for automation (MCP ui_items / ui_click) through imgui's test-engine hooks; the hook
+# implementation lives in src/ui_probe so external/ stays untouched.
+target_sources(imgui PRIVATE src/ui_probe/UiProbe.cpp)
+target_compile_definitions(imgui PUBLIC IMGUI_ENABLE_TEST_ENGINE)
+target_include_directories(imgui PRIVATE src)
 target_link_libraries(imgui PUBLIC d3d12 dxgi)
 
 # Bullet Physics (LinearMath + Collision + Dynamics only). Not built from its *All.cpp unity
