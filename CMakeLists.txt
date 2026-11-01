@@ -333,3 +333,8 @@ if(Python3_Interpreter_FOUND)
 else()
   message(STATUS "Python 3 not found: i18n_check skipped")
 endif()
+
+if(EXISTS ${CMAKE_SOURCE_DIR}/tools/mvd_test.cpp)
+  add_executable(mvd_test tools/mvd_test.cpp)
+  target_link_libraries(mvd_test PRIVATE mmdx_core)
+endif()

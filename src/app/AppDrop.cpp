@@ -110,7 +110,7 @@ void App::ApplyStudioDrop(std::vector<std::filesystem::path> files) {
                  }())
             effects.push_back(std::move(f));
         else if (IsModelExt(e)) models.push_back(std::move(f));
-        else if (e == ".vmd") vmds.push_back(std::move(f));
+        else if ((e == ".vmd" || e == ".mvd")) vmds.push_back(std::move(f));
         else if (e == ".vpd") vpds.push_back(std::move(f));
         else if (e == ".fx") effects.push_back(std::move(f));
         else if (IsAudioExt(e)) audios.push_back(std::move(f));
@@ -263,7 +263,7 @@ void App::ApplyQueuedDrops(int modelIndex, const std::vector<std::filesystem::pa
     d.selectedModel = modelIndex;
     for (const auto& f : files) {
         const std::string e = LowerExt(f);
-        if (e == ".vmd") StudioImportVmdFrom(f);
+        if ((e == ".vmd" || e == ".mvd")) StudioImportVmdFrom(f);
         else if (e == ".vpd") StudioImportVpdFrom(f);
     }
 }

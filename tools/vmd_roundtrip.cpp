@@ -109,7 +109,10 @@ void CollectVmdFiles(const std::filesystem::path& dir, std::vector<std::filesyst
             ec.clear();
             continue;
         }
-        if (mmdx::ToLowerAscii(entry.path().extension().string()) == ".vmd") {
+        // u8string: string() throws for names outside the ANSI code page (library/stage has such files).
+        const std::u8string u8 = entry.path().extension().u8string();
+        const std::string ext = mmdx::ToLowerAscii(std::string(u8.begin(), u8.end()));
+        if (ext == ".vmd" || ext == ".mvd") {
             out.push_back(entry.path());
         }
     }

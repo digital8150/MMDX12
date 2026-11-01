@@ -38,6 +38,9 @@ bool LoadVmd(const std::filesystem::path& path, VmdMotion& out, std::string* err
             return false;
         }
 
+        if (fileData.size() >= 30 && std::memcmp(fileData.data(), "Motion Vector Data file", 23) == 0)
+            return LoadMvd(path, out, error);
+
         BinaryReader r(fileData.data(), fileData.size());
 
         // ---- header ----
@@ -223,6 +226,9 @@ bool ProbeVmd(const std::filesystem::path& path, VmdProbe& out, std::string* err
             if (error) *error = "empty file";
             return false;
         }
+
+        if (fileData.size() >= 30 && std::memcmp(fileData.data(), "Motion Vector Data file", 23) == 0)
+            return ProbeMvd(path, out, error);
 
         BinaryReader r(fileData.data(), fileData.size());
 

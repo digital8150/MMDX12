@@ -40,6 +40,7 @@ struct VmdCameraKey {
     uint8_t interp[24] = {};
     uint32_t fovDeg = 30;
     bool perspective = true;  // file stores 0 = perspective ON
+    float fovExact = -1;      // degrees; negative means use fovDeg
 };
 
 struct VmdLightKey {
@@ -72,6 +73,7 @@ struct VmdMotion {
     uint32_t maxFrame = 0;  // largest frame number over all key types
 };
 
+bool LoadMvd(const std::filesystem::path& path, VmdMotion& out, std::string* error = nullptr);
 bool LoadVmd(const std::filesystem::path& path, VmdMotion& out, std::string* error = nullptr);
 bool SaveVmd(const std::filesystem::path& path, const VmdMotion& motion, std::string* error = nullptr);
 
@@ -88,6 +90,7 @@ struct VmdProbe {
     std::vector<float> stageX;
     uint32_t stageStep = 0;
 };
+bool ProbeMvd(const std::filesystem::path& path, VmdProbe& out, std::string* error = nullptr);
 bool ProbeVmd(const std::filesystem::path& path, VmdProbe& out, std::string* error = nullptr);
 
 } // namespace mmdx

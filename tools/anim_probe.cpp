@@ -25,10 +25,39 @@ int wmain(int argc, wchar_t** argv) {
     if (!LoadModelFile(argv[1], ModelRole::Character, *pmx, &err)) { printf("pmx: %s\n", err.c_str()); return 1; }
     VmdMotion vmd;
     if (!LoadVmd(argv[2], vmd, &err)) { printf("vmd: %s\n", err.c_str()); return 1; }
-    auto motion = BoundMotion::Bind(*pmx, {&vmd});
+    VmdMotion explicitIk;
+    if (getenv("IK_PROBE_EXPLICIT")) {
+        VmdIkKey key;
+        for (const auto& bone : pmx->bones)
+            if (bone.flags & PmxBone_IK) key.ikStates.emplace_back(bone.name, true);
+        explicitIk.ikKeys.push_back(std::move(key));
+    }
+    auto motion = BoundMotion::Bind(*pmx, {&vmd, &explicitIk});
     printf("model '%s' bones=%zu morphs=%zu | motion keys=%zu bound tracks bones=%d morphs=%d end=%.0f\n",
            pmx->name.c_str(), pmx->bones.size(), pmx->morphs.size(), vmd.boneKeys.size(),
            motion->BoundBoneCount(), motion->BoundMorphCount(), motion->EndFrame());
+
+    if (getenv("IK_PROBE")) {
+        for (float frame : {0.0f, 300.0f, 900.0f, 1800.0f}) {
+            ModelInstance animated(pmx), fk(pmx);
+            motion->Evaluate(frame, animated);
+            motion->Evaluate(frame, fk);
+            for (size_t i = 0; i < pmx->bones.size(); ++i)
+                if (pmx->bones[i].flags & PmxBone_IK) fk.SetIkEnabled((int)i, false);
+            animated.UpdatePose();
+            fk.UpdatePose();
+            for (const char* name : {"\u5de6\u8db3\u9996", "\u53f3\u8db3\u9996"}) {
+                const int bone = pmx->FindBone(name);
+                if (bone < 0) continue;
+                const auto a = animated.BoneWorldPosition(bone);
+                const auto b = fk.BoneWorldPosition(bone);
+                const float d = std::sqrt((a.x-b.x)*(a.x-b.x) + (a.y-b.y)*(a.y-b.y) + (a.z-b.z)*(a.z-b.z));
+                printf("IK_PROBE frame=%.0f %s animated=(%.3f %.3f %.3f) fk=(%.3f %.3f %.3f) delta=%.4f\n",
+                       frame, name, a.x, a.y, a.z, b.x, b.y, b.z, d);
+            }
+        }
+        return 0;
+    }
 
     if (const char* swingEnv = getenv("PHYS_SWING"); swingEnv && *swingEnv) {
         // PHYS_SWING=<seconds>: simulate from frame 0 at 60 fps with physics, then report how far

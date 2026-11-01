@@ -746,7 +746,7 @@ LibraryScanResult ScanLibrary(const std::filesystem::path& rootIn, ScanProgress*
                 const std::filesystem::path& p = it->path();
                 const std::string ext = LowerExt(p);
                 const ModelFormat fmt = ModelFormatFromPath(p);
-                const bool keep = fmt != ModelFormat::Unknown || ext == ".vmd" || ext == ".fx" ||
+                const bool keep = fmt != ModelFormat::Unknown || (ext == ".vmd" || ext == ".mvd") || ext == ".fx" ||
                                   ext == ".wav" || ext == ".mp3" || ext == ".flac" || ext == ".ogg" ||
                                   ext == ".mp4" || ext == ".mov" || ext == ".wmv" || ext == ".avi" || ext == ".mkv";
                 if (keep) {
@@ -769,7 +769,7 @@ LibraryScanResult ScanLibrary(const std::filesystem::path& rootIn, ScanProgress*
                     m.rel = RelKey(p, root);
                     m.format = fmt;
                     models.push_back(std::move(m));
-                } else if (ext == ".vmd") vmdFiles.push_back(p);
+                } else if ((ext == ".vmd" || ext == ".mvd")) vmdFiles.push_back(p);
                 else if (ext == ".fx") fxFiles.push_back(p.lexically_normal());
                 else if (ext == ".wav" || ext == ".mp3" || ext == ".flac" || ext == ".ogg") audioFiles.push_back(p);
                 else if (ext == ".mp4" || ext == ".mov" || ext == ".wmv" || ext == ".avi" || ext == ".mkv")

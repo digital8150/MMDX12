@@ -4220,7 +4220,7 @@ void App::StudioRebuildRows() {
 }
 
 void App::StudioImportVmd() {
-    const std::filesystem::path path = OpenFileDialog(hwnd_, {{L"VMD", L"*.vmd"}});
+    const std::filesystem::path path = OpenFileDialog(hwnd_, {{L"VMD / MVD", L"*.vmd;*.mvd"}});
     if (!path.empty()) StudioImportVmdFrom(path);
 }
 

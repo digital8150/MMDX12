@@ -130,6 +130,42 @@ std::shared_ptr<BoundMotion> BoundMotion::Bind(const PmxModel& model, const std:
         }
     }
 
+    // FK-only imports often leave the model's IK targets at rest. Preserve explicit IK
+    // state and any animated target, and disable only chains whose links carry FK rotation.
+    std::vector<std::string> disabledChains;
+    for (size_t i = 0; i < model.bones.size(); ++i) {
+        const PmxBone& ik = model.bones[i];
+        if (!(ik.flags & PmxBone_IK) || ikTrack.count((int)i)) continue;
+        const auto target = boneTrack.find((int)i);
+        if (target != boneTrack.end()) {
+            const auto& keys = m->boneTracks_[target->second].keys;
+            const bool animated = std::any_of(keys.begin(), keys.end(), [](const BoneKey& k) {
+                return k.t.x != 0 || k.t.y != 0 || k.t.z != 0 || k.r.x != 0 || k.r.y != 0 || k.r.z != 0 ||
+                       std::fabs(k.r.w) < 0.99999f;
+            });
+            if (animated) continue;
+        }
+        const bool fkAnimated = std::any_of(ik.ikLinks.begin(), ik.ikLinks.end(), [&](const PmxIkLink& link) {
+            const auto it = boneTrack.find(link.boneIndex);
+            if (it == boneTrack.end()) return false;
+            const auto& keys = m->boneTracks_[it->second].keys;
+            return std::any_of(keys.begin(), keys.end(), [](const BoneKey& k) { return std::fabs(k.r.w) < 0.99999f; });
+        });
+        if (fkAnimated) {
+            m->ikTracks_.push_back({(int)i, {{0.0f, false}}});
+            disabledChains.push_back(ik.name);
+        }
+    }
+    if (!disabledChains.empty()) {
+        std::string names;
+        for (const auto& name : disabledChains) {
+            if (!names.empty()) names += ", ";
+            names += name;
+        }
+        LOG_INFO("motion bind: IK off for %zu chain(s) with FK-only keys in '%s' (%s)",
+                 disabledChains.size(), model.name.c_str(), names.c_str());
+    }
+
     float endFrame = 0;
     for (auto& t : m->boneTracks_) { SortAndDedupe(t.keys); endFrame = std::max(endFrame, t.keys.back().frame); }
     for (auto& t : m->morphTracks_) { SortAndDedupe(t.keys); endFrame = std::max(endFrame, t.keys.back().frame); }
@@ -205,7 +241,7 @@ std::shared_ptr<CameraMotion> CameraMotion::Create(const VmdMotion& vmd) {
         key.pose.target = k.target;
         key.pose.rotation = k.rotation;
         key.pose.distance = k.distance;
-        key.pose.fovDeg = (float)k.fovDeg;
+        key.pose.fovDeg = k.fovExact >= 0 ? k.fovExact : (float)k.fovDeg;
         const uint8_t* ip = k.interp;  // per parameter: x1, x2, y1, y2
         auto bz = [&](int p) { return Bezier::FromBytes(ip[p * 4 + 0], ip[p * 4 + 2], ip[p * 4 + 1], ip[p * 4 + 3]); };
         key.bx = bz(0); key.by = bz(1); key.bz = bz(2); key.br = bz(3); key.bd = bz(4); key.bf = bz(5);

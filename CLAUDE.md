@@ -260,7 +260,8 @@ Agents keep misusing the CLI and then blaming the app. These rules are verified 
 
 ## Architecture (src/)
 - `core`: logging, text encodings (Shift-JIS/UTF-16/UTF-8).
-- `asset`: PMX/VMD parsers, image loading (stb with a WIC fallback, also from memory), `AssetLibrary`, `ModelImport`.
+- `anim`: BoundMotion disables unkeyed IK targets when their links have FK-only rotation keys; explicit IK states win.
+- `asset`: MVD import via LoadVmd magic sniffing (layer 0 only; `tools/mvd_test`); PMX/VMD parsers, image loading (stb with a WIC fallback, also from memory), `AssetLibrary`, `ModelImport`.
   - DDS (M5a / S11): `DdsLoader` decodes level 0 of any 2D DDS to RGBA8 (`LoadDdsLevel0`, the fallback path) and, for
     BC1/BC2/BC3/BC4/BC5/BC6H/BC7 (DX10 formats and the DXT1/DXT3/DXT5/ATI1/ATI2/BC4U/BC5U FourCCs),
     `LoadDdsCompressed` keeps the file's blocks and all its mips in a `CompressedImage` instead. `IsDdsCube` /

@@ -115,6 +115,7 @@ Full songs rendered with MMDX12's video mode, uploaded as-is.
 - **DLSS, FSR and XeSS** if you want more frames.
 - **Photo mode**: press P for a 4K picture.
 - **Video mode**: render a whole song to MP4, with the music, up to 4K. The app tells you how long it will take before you start.
+- **MVD import.** Load MikuMikuMoving motion and camera files alongside VMD; layer 0 is imported.
 - **Studio**: edit dances yourself with an MMD-style keyframe editor, saving standard VMD/VPD files that MMD opens.
 - **Any DirectX 12 graphics card.** The default renderer (soft shadows, ambient occlusion, reflections, bloom) needs no ray-tracing GPU; ray tracing, path tracing and offline GI switch on where the card supports them.
 - **Drag and drop.** Drop a model, a VMD and a song onto the window and they open in the Studio, posed and with music. MMD `.pmm` projects open too (read-only import).
