@@ -253,7 +253,7 @@ bool App::McpWriteCameraKeys(const nlohmann::json& keysJson, const std::string& 
             k.rotation.z = DirectX::XMConvertToRadians(roll);
         }
         if (nk.hasDist) k.distance = -nk.dist;
-        if (nk.hasFov) k.fovDeg = (uint32_t)std::clamp((int)std::lround(nk.fov), 1, 125);
+        if (nk.hasFov) k.fovDeg = std::clamp(nk.fov, 1.0f, 125.0f);
         if (nk.hasPerspective) k.perspective = nk.perspective;
         if (!ApplyCameraCurve(nk.curve, k.interp, error)) return false;
         UpsertKey(d.SelectedCameraTrack().camera, k);
@@ -307,7 +307,7 @@ bool App::ExecuteMcpKeys(const std::string& tool, const nlohmann::json& args, st
             o["pitch_deg"] = -DirectX::XMConvertToDegrees(k.rotation.x);
             o["roll_deg"] = DirectX::XMConvertToDegrees(k.rotation.z);
             o["dist"] = -k.distance;
-            o["fov_deg"] = (int)k.fovDeg;
+            o["fov_deg"] = k.fovDeg;
             o["perspective"] = k.perspective;
             o["curve"] = CameraCurveToJson(k.interp);
             o["eye"] = Vec3Json(eye);

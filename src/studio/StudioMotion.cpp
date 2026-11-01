@@ -145,7 +145,7 @@ MotionData MotionData::FromVmd(const VmdMotion& vmd) {
         CameraKf kf;
         kf.frame = (int)k.frame; kf.distance = k.distance; kf.target = k.target; kf.rotation = k.rotation;
         std::memcpy(kf.interp, k.interp, 24);
-        kf.fovDeg = k.fovDeg; kf.perspective = k.perspective;
+        kf.fovDeg = k.fovExact >= 0.0f ? k.fovExact : (float)k.fovDeg; kf.perspective = k.perspective;
         UpsertKey(d.camera, kf);
     }
     for (const VmdLightKey& k : vmd.lightKeys) UpsertKey(d.light, LightKf{(int)k.frame, k.color, k.direction});
@@ -268,7 +268,7 @@ CameraKf SampleCamera(const std::vector<CameraKf>& keys, int frame) {
     out.rotation.y = lerp(3, a.rotation.y, b.rotation.y);
     out.rotation.z = lerp(3, a.rotation.z, b.rotation.z);
     out.distance = lerp(4, a.distance, b.distance);
-    out.fovDeg = (uint32_t)std::lround(lerp(5, (float)a.fovDeg, (float)b.fovDeg));
+    out.fovDeg = lerp(5, a.fovDeg, b.fovDeg);
     return out;
 }
 
@@ -370,7 +370,7 @@ VmdMotion MotionData::ToVmd() const {
         VmdCameraKey o;
         o.frame = (uint32_t)k.frame; o.distance = k.distance; o.target = k.target; o.rotation = k.rotation;
         std::memcpy(o.interp, k.interp, 24);
-        o.fovDeg = k.fovDeg; o.perspective = k.perspective;
+        o.fovExact = k.fovDeg; o.fovDeg = (uint32_t)std::clamp(std::lround(k.fovDeg), 1L, 125L); o.perspective = k.perspective;
         v.cameraKeys.push_back(o);
     }
     for (const LightKf& k : light) v.lightKeys.push_back({(uint32_t)k.frame, k.color, k.direction});

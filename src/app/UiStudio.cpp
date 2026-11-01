@@ -59,7 +59,7 @@ void PoseFromFree(const DirectX::XMFLOAT3& target, float yaw, float pitch, float
     k.target = target;
     k.rotation = {-pitch, yaw, 0.0f};
     k.distance = -distance;
-    k.fovDeg = (uint32_t)std::lround(fov);
+    k.fovDeg = std::clamp(fov, 1.0f, 125.0f);
     k.perspective = true;
 }
 

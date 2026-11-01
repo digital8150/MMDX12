@@ -1705,6 +1705,7 @@ static void TestCameraEntities() {
         k.frame = 0;
         k.target = {0.0f, 10.0f, 0.0f};
         k.distance = -45.0f;
+        k.fovDeg = 17.7258f;
         data.camera.camera = {k};
         LightKf l;
         l.frame = 0;
@@ -1721,7 +1722,7 @@ static void TestCameraEntities() {
         k.frame = 0;
         k.target = {0.0f, 12.0f, 0.0f};
         k.distance = -70.0f;
-        k.fovDeg = 40;
+        k.fovDeg = 17.7258f;
         a.track.camera = {k};
         data.cameras.push_back(a);
 
@@ -1752,6 +1753,10 @@ static void TestCameraEntities() {
                   j["cameras"][1]["visible"] == false,
               "cameras are written as uid / name / visible / stageUid / motion");
         Check(j["camera"].is_string(), "the main camera keeps its own VMD");
+        Check(j.contains("fovExact") && j["fovExact"].size() == 1 && j["fovExact"][0][0] == 0,
+              "main camera fractional FOV is saved");
+        Check(j["cameras"][0].contains("fovExact") && !j["cameras"][1].contains("fovExact"),
+              "extra camera fractional FOV is saved and integer FOV is omitted");
     }
     ProjectData loaded;
     std::vector<std::string> warnings;
@@ -1764,6 +1769,11 @@ static void TestCameraEntities() {
         Check(loaded.cameras[1].stageUid == 4 && !loaded.cameras[1].visible, "stageUid / visible survive");
     }
     Check(loaded.camera.camera.size() == 1 && loaded.camera.light.size() == 1, "the main camera keeps its tracks");
+
+    if (!loaded.camera.camera.empty())
+        Check(std::fabs(loaded.camera.camera[0].fovDeg - 17.7258f) < 1e-4f, "main camera fractional FOV round-trips");
+    if (!loaded.cameras.empty() && !loaded.cameras[0].track.camera.empty())
+        Check(std::fabs(loaded.cameras[0].track.camera[0].fovDeg - 17.7258f) < 1e-4f, "extra camera fractional FOV round-trips");
 
     // a version 4 file has the main camera only
     {

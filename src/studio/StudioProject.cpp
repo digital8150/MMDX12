@@ -7,11 +7,30 @@
 #include <Windows.h>
 #include <algorithm>
 #include <cstring>
+#include <cmath>
 #include <fstream>
 #include <map>
 #include <set>
 
 namespace mmdx::studio {
+
+static void WriteFovExact(nlohmann::json& object, const std::vector<CameraKf>& keys) {
+    nlohmann::json values = nlohmann::json::array();
+    for (const CameraKf& k : keys)
+        if (std::fabs(k.fovDeg - std::round(k.fovDeg)) > 1e-4f)
+            values.push_back({k.frame, k.fovDeg});
+    if (!values.empty()) object["fovExact"] = std::move(values);
+}
+
+static void ReadFovExact(const nlohmann::json& object, std::vector<CameraKf>& keys) {
+    if (!object.contains("fovExact") || !object["fovExact"].is_array()) return;
+    for (const auto& entry : object["fovExact"]) {
+        if (!entry.is_array() || entry.size() != 2 || !entry[0].is_number_unsigned() || !entry[1].is_number()) continue;
+        const auto frame = entry[0].get<uint32_t>();
+        const auto it = std::find_if(keys.begin(), keys.end(), [frame](const CameraKf& k) { return k.frame == frame; });
+        if (it != keys.end()) it->fovDeg = entry[1].get<float>();
+    }
+}
 
 const char* ModelKindName(ModelKind k) {
     switch (k) {
@@ -611,6 +630,7 @@ bool SaveProject(const std::filesystem::path& file, const ProjectData& data, std
         }
         j["models"] = std::move(models);
         j["camera"] = camName.empty() ? nlohmann::json(nullptr) : nlohmann::json(WideToUtf8(camName));
+        WriteFovExact(j, data.camera.camera);
         // Version 5: the extra cameras (uid / name / visible / stageUid + their camera VMD) and the switch track.
         {
             nlohmann::json cams = nlohmann::json::array();
@@ -623,6 +643,7 @@ bool SaveProject(const std::filesystem::path& file, const ProjectData& data, std
                 if (c.stageUid != 0) jc["stageUid"] = c.stageUid;
                 jc["motion"] = cameraVmdNames[i].empty() ? nlohmann::json(nullptr)
                                                          : nlohmann::json(WideToUtf8(cameraVmdNames[i]));
+                WriteFovExact(jc, c.track.camera);
                 cams.push_back(std::move(jc));
             }
             j["cameras"] = std::move(cams);
@@ -999,6 +1020,8 @@ bool LoadProject(const std::filesystem::path& file, ProjectData& out, std::strin
             }
         }
 
+        ReadFovExact(j, out.camera.camera);
+
         // Version 5: the extra cameras (their camera keys come from their own VMD) and the switch track.
         if (version >= 5 && j.contains("cameras") && j["cameras"].is_array()) {
             for (const nlohmann::json& jc : j["cameras"]) {
@@ -1016,6 +1039,7 @@ bool LoadProject(const std::filesystem::path& file, ProjectData& out, std::strin
                     if (LoadVmd(vmdPath, vmd)) c.track.camera = MotionData::FromVmd(vmd).camera;
                     else if (warnings) warnings->push_back("camera missing: " + PathToUtf8(vmdPath));
                 }
+                ReadFovExact(jc, c.track.camera);
                 out.cameras.push_back(std::move(c));
             }
         }

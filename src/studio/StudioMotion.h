@@ -30,7 +30,7 @@ struct CameraKf {
     DirectX::XMFLOAT3 target{0, 10, 0};
     DirectX::XMFLOAT3 rotation{};
     uint8_t interp[24] = {};
-    uint32_t fovDeg = 30;
+    float fovDeg = 30.0f;   // degrees (fractional; VMD files store it rounded)
     bool perspective = true;
 };
 struct LightKf { int frame = 0; DirectX::XMFLOAT3 color{0.6f, 0.6f, 0.6f}; DirectX::XMFLOAT3 direction{-0.5f, -1.0f, 0.5f}; };

@@ -38,7 +38,7 @@ CameraKf KeyFromStageCamera(const StageCamera& c) {
     const float yaw = std::atan2(-dx, -dz);
     const float pitch = std::atan2(dy, std::sqrt(dx * dx + dz * dz));
     k.rotation = {-pitch, yaw, 0.0f};
-    k.fovDeg = (uint32_t)std::lround(std::clamp(c.fov, 1.0f, 125.0f));
+    k.fovDeg = std::clamp(c.fov, 1.0f, 125.0f);
     k.perspective = true;
     return k;
 }

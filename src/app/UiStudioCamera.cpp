@@ -414,11 +414,11 @@ bool App::DrawStudioCameraKeyFields(float w, RowKind kind, int frame, bool live)
         float rot[3] = {DirectX::XMConvertToDegrees(cur.rotation.x), DirectX::XMConvertToDegrees(cur.rotation.y),
                         DirectX::XMConvertToDegrees(cur.rotation.z)};
         float dist = cur.distance;
-        int fov = (int)cur.fovDeg;
+        float fov = cur.fovDeg;
         row(Tr("중심"), [&] { return ImGui::DragFloat3("##camtarget", target, 0.05f, 0.0f, 0.0f, "%.2f"); });
         row(Tr("회전"), [&] { return ImGui::DragFloat3("##camrot", rot, 0.25f, 0.0f, 0.0f, "%.1f°"); });
         row(Tr("거리"), [&] { return ImGui::DragFloat("##camdist", &dist, 0.1f, -5000.0f, 5000.0f, "%.2f"); });
-        row(Tr("시야각"), [&] { return ImGui::DragInt("##camfov", &fov, 0.25f, 1, 125, "%d°"); });
+        row(Tr("시야각"), [&] { return ImGui::DragFloat("##camfov", &fov, 0.25f, 1.0f, 125.0f, "%.2f"); });
         bool persp = cur.perspective;
         {
             const bool before = persp;
@@ -433,7 +433,7 @@ bool App::DrawStudioCameraKeyFields(float w, RowKind kind, int frame, bool live)
             cur.target = {target[0], target[1], target[2]};
             cur.rotation = {DirectX::XMConvertToRadians(rot[0]), DirectX::XMConvertToRadians(rot[1]), DirectX::XMConvertToRadians(rot[2])};
             cur.distance = dist;
-            cur.fovDeg = (uint32_t)std::clamp(fov, 1, 125);
+            cur.fovDeg = std::clamp(fov, 1.0f, 125.0f);
             cur.perspective = persp;
             if (k) {
                 // keep the key's interpolation curves: only the values change
@@ -609,7 +609,7 @@ void App::StudioWriteCamera(const FreeCamera& cam, const CameraKf* base, bool ta
     k.rotation.x = -cam.pitch;  // rotation = (-pitch, yaw, roll): the roll of the key stays
     k.rotation.y = cam.yaw;
     k.distance = -cam.distance;
-    k.fovDeg = (uint32_t)std::clamp((int)std::lround(cam.fovDeg), 1, 125);
+    k.fovDeg = std::clamp(cam.fovDeg, 1.0f, 125.0f);
     if (key) {
         key->target = k.target;
         key->rotation = k.rotation;

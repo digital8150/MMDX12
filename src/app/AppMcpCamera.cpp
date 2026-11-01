@@ -639,7 +639,7 @@ bool App::ExecuteMcpCamera(const std::string& tool, const nlohmann::json& args, 
                 } else {
                     // the camera stays put, only the lens changes
                     const float newFov = s.hasEndFov ? endFov : s.fov * (s.move == "zoom_in" ? 0.6f : 1.6f);
-                    endPose.fovDeg = std::clamp(std::round(newFov), 1.0f, 125.0f);
+                    endPose.fovDeg = std::clamp(newFov, 1.0f, 125.0f);
                 }
             } else if (isCrane) {
                 const float amount = s.hasAmount ? s.amount : 25.0f;
@@ -757,7 +757,7 @@ bool App::ExecuteMcpCamera(const std::string& tool, const nlohmann::json& args, 
                     it = keys.erase(it);  // the baked keys under the accent
                 const CameraPose base = poseAt(a);
                 CameraPose peak = base;
-                if (kind == "zoom") peak.fovDeg = std::clamp(std::round(base.fovDeg - amount), 1.0f, 125.0f);
+                if (kind == "zoom") peak.fovDeg = std::clamp(base.fovDeg - amount, 1.0f, 125.0f);
                 else if (kind == "roll") peak.rotation.z = base.rotation.z + DirectX::XMConvertToRadians(amount);
                 else peak.distance = -std::max(1.0f, -base.distance * (1.0f - amount));
                 putPose(a - attack, poseAt(a - attack), linear);
