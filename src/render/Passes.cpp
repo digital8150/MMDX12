@@ -2481,7 +2481,8 @@ void ResolvePass::Execute(PassContext& pc) {
 bool SsaoPass::CreatePipelines(Dx12Context& ctx, const std::filesystem::path& shaderDir, uint32_t) {
     const bool ok = ao_.Create(ctx, shaderDir / L"ssao.hlsl", "PSAo", {DXGI_FORMAT_R8_UNORM}) &&
                     blur_.Create(ctx, shaderDir / L"ssao.hlsl", "PSBlur", {DXGI_FORMAT_R8_UNORM}) &&
-                    temporal_.Create(ctx, shaderDir / L"ssao.hlsl", "PSTemporal", {DXGI_FORMAT_R8_UNORM});
+                    blurRt_.Create(ctx, shaderDir / L"ssao.hlsl", "PSBlurRt", {DXGI_FORMAT_R8_UNORM}) &&
+                    temporal_.Create(ctx, shaderDir / L"ssao.hlsl", "PSTemporal", {DXGI_FORMAT_R16G16_FLOAT, DXGI_FORMAT_R32_FLOAT});
     if (!ok) return false;
     if (RtPipelinesSupported(ctx) && !rtao_.Create(ctx, shaderDir / L"rtao.hlsl", "CSRtao"))
         LOG_WARN("SSAO: ray-traced AO unavailable");  // never fails the pass
@@ -2496,9 +2497,13 @@ void SsaoPass::OnResize(Dx12Context& ctx, RenderTargets& targets) {
     raw_.Create(ctx, w, h, DXGI_FORMAT_R8_UNORM, rtUav, kSrv, L"ssao.raw", 1, 1, one);
     temp_.Create(ctx, w, h, DXGI_FORMAT_R8_UNORM, D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET, kSrv, L"ssao.temp", 1, 1, one);
     out_.Create(ctx, w, h, DXGI_FORMAT_R8_UNORM, D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET, kSrv, L"ssao.out", 1, 1, one);
-    for (uint32_t i = 0; i < 2; ++i)
-        hist_[i].Create(ctx, w, h, DXGI_FORMAT_R8_UNORM, D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET, kSrv,
+    const float zero[4] = {};
+    for (uint32_t i = 0; i < 2; ++i) {
+        hist_[i].Create(ctx, w, h, DXGI_FORMAT_R16G16_FLOAT, D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET, kSrv,
                         i ? L"ssao.hist1" : L"ssao.hist0", 1, 1, one);
+        histZ_[i].Create(ctx, w, h, DXGI_FORMAT_R32_FLOAT, D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET, kSrv,
+                         i ? L"ssao.histZ1" : L"ssao.histZ0", 1, 1, zero);
+    }
     histValid_ = false;
 }
 
@@ -2507,6 +2512,7 @@ void SsaoPass::ReleaseTargets(Dx12Context& ctx) {
     temp_.Release(ctx);
     out_.Release(ctx);
     for (Texture& hist : hist_) hist.Release(ctx);
+    for (Texture& hist : histZ_) hist.Release(ctx);
     histValid_ = false;
 }
 
@@ -2525,7 +2531,7 @@ void SsaoPass::Execute(PassContext& pc) {
         raw_.Transition(cmd, kUav);
         t.depth.Transition(cmd, kSrvAll);
         t.normal.Transition(cmd, kSrvAll);
-        const float c0[4] = {pc.settings.ssaoRadius * 2.5f, 1.0f / raw_.width, 1.0f / raw_.height, 4.0f};
+        const float c0[4] = {pc.settings.ssaoRadius * 2.5f, 1.0f / raw_.width, 1.0f / raw_.height, (float)std::clamp(pc.settings.rtaoRays, 1u, 64u)};
         rtao_.Dispatch(pc, pc.transient.SrvTable(pc.ctx, {&t.depth, &t.normal}),
                        pc.transient.UavTable(pc.ctx, {&raw_}), c0, 4, Groups(raw_.width), Groups(raw_.height));
         raw_.Transition(cmd, kSrv);
@@ -2548,10 +2554,14 @@ void SsaoPass::Execute(PassContext& pc) {
 
         Texture& acc = hist_[histCur_];
         Texture& prev = hist_[histCur_ ^ 1];
-        const float tc[4] = {histOk ? 1.0f : 0.0f, 0, 0, 0};
+        Texture& accZ = histZ_[histCur_];
+        Texture& prevZ = histZ_[histCur_ ^ 1];
+        const float tc[4] = {histOk ? 1.0f : 0.0f, pc.settings.rtaoHistoryMax, 0, 0};
         acc.Transition(cmd, kRt);
-        temporal_.Draw(pc, {&acc}, pc.transient.SrvTable(pc.ctx, {&t.depth, nullptr, &raw_, &prev, &t.velocity}), tc, 4);
+        accZ.Transition(cmd, kRt);
+        temporal_.Draw(pc, {&acc, &accZ}, pc.transient.SrvTable(pc.ctx, {&t.depth, nullptr, &raw_, &prev, &t.velocity, &prevZ}), tc, 4);
         acc.Transition(cmd, kSrv);
+        accZ.Transition(cmd, kSrv);
         histCur_ ^= 1;
         histValid_ = true;
         src = &acc;
@@ -2565,12 +2575,14 @@ void SsaoPass::Execute(PassContext& pc) {
 
     const float h[4] = {1.0f / raw_.width, 0, 0, 0};
     temp_.Transition(cmd, kRt);
-    blur_.Draw(pc, {&temp_}, pc.transient.SrvTable(pc.ctx, {&t.depth, nullptr, src}), h, 4);
+    if (rtAo) blurRt_.Draw(pc, {&temp_}, pc.transient.SrvTable(pc.ctx, {&t.depth, &t.normal, src, src}), h, 4);
+    else blur_.Draw(pc, {&temp_}, pc.transient.SrvTable(pc.ctx, {&t.depth, nullptr, src}), h, 4);
     temp_.Transition(cmd, kSrv);
 
     const float v[4] = {0, 1.0f / raw_.height, 0, 0};
     out_.Transition(cmd, kRt);
-    blur_.Draw(pc, {&out_}, pc.transient.SrvTable(pc.ctx, {&t.depth, nullptr, &temp_}), v, 4);
+    if (rtAo) blurRt_.Draw(pc, {&out_}, pc.transient.SrvTable(pc.ctx, {&t.depth, &t.normal, &temp_, src}), v, 4);
+    else blur_.Draw(pc, {&out_}, pc.transient.SrvTable(pc.ctx, {&t.depth, nullptr, &temp_}), v, 4);
     out_.Transition(cmd, kSrv);
     t.ao = &out_;
 }

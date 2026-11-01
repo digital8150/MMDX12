@@ -117,6 +117,7 @@ namespace mmdx {
 //   --auto-luminous <0|1>  そぼろ AutoLuminous glow convention for this run
 //   --volumetric-density <0.25..4>  volumetric medium density for this run
 //   --volumetric-mode <froxel|march>  S9d real-time haze: the froxel grid (default) or the per-pixel march (A/B)
+//   --rtao-rays <n>       RTAO rays per half-res pixel (1..64)
 //   --volumetric-ms <0|1>  S9d froxel multiple-scatter approximation (0 = single scattering only)
 //   --lut <substr|none>    colour LUT for this run (first LUT whose id or name contains substr)
 //   --offline-still <file.png>   with --autoplay: render the --seek frame with the offline GI renderer,
@@ -234,6 +235,7 @@ struct AppOptions {
     int motionLighting = -1;   // --motion-lighting <0|1>: camera VMD light/self-shadow tracks in play mode, this run
     float volumetricDensity = -1.0f;                 // --volumetric-density (< 0 = settings)
     int volumetricMode = -1;                         // --volumetric-mode froxel|march (-1 = settings)
+    int rtaoRays = -1;                               // --rtao-rays (-1 = settings)
     int volumetricMs = -1;                           // --volumetric-ms 0|1 (-1 = settings)
     int offlineVolumetric = -1;                      // --offline-volumetric single|full (-1 = settings)
     std::string lut;           // --lut <substr|none>: override for this run (resolved against the LUT list)

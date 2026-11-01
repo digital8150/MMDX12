@@ -1285,6 +1285,8 @@ RenderSettings App::VideoRealtimeSettings(const VideoRenderConfig& cfg) const {
     rs.shadowMapSize = q.shadowMapSize;
     rs.ssao = true;
     rs.ssr = true;
+    rs.rtaoRays = q.rtaoRays;
+    rs.rtaoHistoryMax = 48.0f;
     rs.ptSamples = q.ptSamples;
     rs.ptBounces = q.ptBounces;
     rs.ptHistoryMax = q.historyMax;

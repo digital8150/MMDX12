@@ -59,6 +59,7 @@ struct AppSettings {
     int dlssFrameGen = 0;
     int dlssModel = 0;         // DlssModel: 0 auto (driver default), 1 cnn (preset E), 2 transformer (K), 3 transformer2 (M / L)
     bool dlssRayReconstruction = false;  // DLSS-RR: replaces the ray-traced denoising/filtering and the upscaler (RT/PT + DLSS only)
+    int rtaoRays = 4;   // 4, 8, 16
     int ptSamples = 1;         // 1, 2, 4
     int ptBounces = 3;         // 1..6
     // Post effects (independent of graphicsPreset; the benchmark turns them all off).

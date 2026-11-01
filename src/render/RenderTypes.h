@@ -152,6 +152,8 @@ struct RenderSettings {
     float shadowDistance = 160.0f;   // MMD units covered by the cascades
     bool ssao = true;
     float ssaoRadius = 2.2f;         // MMD units (1 unit ~ 8 cm)
+    uint32_t rtaoRays = 4;   // RTAO rays per half-res pixel per frame (1..64)
+    float rtaoHistoryMax = 32.0f;   // RTAO temporal history length cap (frames)
     float ssaoIntensity = 0.85f;     // 0..1 blend toward the occluded value
     bool ssr = true;
     float floorGloss = 0.35f;        // reflectivity of upward-facing stage surfaces

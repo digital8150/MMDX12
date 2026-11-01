@@ -23,7 +23,7 @@ progress.md is the session log. Read its latest entry first.
   for that, `BeginOffline` and `Shutdown` block on it (`EnsureOffline`). Re-creating the pipelines for another MSAA
   count (`Render`) stays serial: a pass may then release resources through the context (`WaitForGpu`, `DeferRelease`).
 - Upscaler runtime DLLs are git-ignored: run `tools/fetch_sdks.ps1` once (DLSS 310.9.16, XeSS 3.0.2, FidelityFX 2.3.0), then rebuild. Missing DLLs only disable that upscaler.
-- Render path / upscaler from the CLI: `--render raster|rt|pt`, `--studio-renderer raster|rt|pt|gi` (studio viewport: lit single view), `--upscaler none|dlss|fsr|xess`, `--upscale-quality native|quality|balanced|performance|ultra`,
+- Render path / upscaler from the CLI: `--render raster|rt|pt`, `--rtao-rays <n>` (1..64), `--studio-renderer raster|rt|pt|gi` (studio viewport: lit single view), `--upscaler none|dlss|fsr|xess`, `--upscale-quality native|quality|balanced|performance|ultra`,
   `--dlss-model auto|cnn|transformer|transformer2`, `--dlss-rr 0|1` (DLSS Ray Reconstruction on the RayTraced / PathTraced
   paths with DLSS; it replaces the RT AO / reflection filtering and the PT denoiser, and runs instead of TAA),
   `--frame-gen off|2|3|4` (DLSS Frame Generation; 3x / 4x need RTX 50).

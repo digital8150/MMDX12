@@ -197,12 +197,13 @@ public:
     void Execute(PassContext& pc) override;
 
 private:
-    FullscreenPipeline ao_, blur_, temporal_;
+    FullscreenPipeline ao_, blur_, blurRt_, temporal_;
     ComputePipeline rtao_;   // rtao.hlsl, writes raw_ as a UAV
     Texture raw_, temp_, out_;
     // RTAO temporal accumulation (ssao.hlsl PSTemporal): hist_[histCur_] receives this frame,
     // hist_[histCur_ ^ 1] holds last frame when histValid_.
     Texture hist_[2];
+    Texture histZ_[2];
     uint32_t histCur_ = 0;
     bool histValid_ = false;
     DirectX::XMFLOAT3 histEye_{};   // eye of the last accumulated frame (jump detection)

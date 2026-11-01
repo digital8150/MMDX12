@@ -233,6 +233,7 @@ const Entry kEnglish[] = {
     {"텍스처 디코딩: ", "Decoding texture: "},
     {"파트 ", "Parts "},
     {"패스 트레이싱 · ", "Path tracing · "},
+    {"RTAO 광선 수", "RTAO rays"},
     {"패스 트레이싱 샘플", "Path tracing samples"},
     {"패스 트레이싱", "Path tracing"},
     {"평균 FPS", "Average FPS"},

@@ -1529,6 +1529,17 @@ void App::DrawSelect() {
                     settings_.msaa = mi == 0 ? 1 : mi == 1 ? 2 : mi == 2 ? 4 : 8;
                     changed = true;
                 }
+                if (settings_.renderPath == 1) {
+                    Gap(14.0f);
+                    SectionLabel(Tr("RTAO 광선 수"));
+                    const char* rays[] = {"4", "8", "16"};
+                    int ri = settings_.rtaoRays == 4 ? 0 : settings_.rtaoRays == 8 ? 1 : 2;
+                    if (Segmented("##rtaorays", rays, 3, &ri, colW / Dpi(), 34.0f)) {
+                        settings_.rtaoRays = ri == 0 ? 4 : ri == 1 ? 8 : 16;
+                        ApplyRenderSettings();
+                        settings_.Save(settingsPath_);
+                    }
+                }
                 if (settings_.renderPath == 2) {
                     Gap(14.0f);
                     SectionLabel(Tr("패스 트레이싱 샘플"));

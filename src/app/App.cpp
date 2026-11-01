@@ -206,6 +206,8 @@ AppOptions ParseCommandLine(int argc, wchar_t** argv) {
             if (v == "froxel" || v == "0") opt.volumetricMode = 0;
             else if (v == "march" || v == "1") opt.volumetricMode = 1;
             else LOG_WARN("unknown --volumetric-mode value: %s (want froxel|march)", v.c_str());
+        } else if (arg == L"--rtao-rays") {
+            opt.rtaoRays = _wtoi(next().c_str());
         } else if (arg == L"--volumetric-ms") {
             opt.volumetricMs = _wtoi(next().c_str()) != 0 ? 1 : 0;
         } else if (arg == L"--bloom-conv") {
@@ -535,6 +537,7 @@ int App::Run(HINSTANCE instance, const AppOptions& options) {
     if (options_.volumetric >= 0) settings_.volumetric = options_.volumetric != 0;
     if (options_.volumetricDensity > 0.0f) settings_.volumetricDensity = std::clamp(options_.volumetricDensity, 0.25f, 4.0f);
     if (options_.volumetricMode >= 0) settings_.volumetricMode = std::clamp(options_.volumetricMode, 0, 1);
+    if (options_.rtaoRays >= 0) settings_.rtaoRays = std::clamp(options_.rtaoRays, 1, 64);
     if (options_.volumetricMs >= 0) settings_.volumetricMultiScatter = options_.volumetricMs != 0;
     if (options_.bloomConv >= 0) settings_.bloomConvolution = options_.bloomConv != 0;
     if (options_.bloomKernel >= 0) {
@@ -757,6 +760,7 @@ int App::Run(HINSTANCE instance, const AppOptions& options) {
     if (options_.volumetric >= 0) settings_.volumetric = persisted.volumetric;
     if (options_.volumetricDensity > 0.0f) settings_.volumetricDensity = persisted.volumetricDensity;
     if (options_.volumetricMode >= 0) settings_.volumetricMode = persisted.volumetricMode;
+    if (options_.rtaoRays >= 0) settings_.rtaoRays = persisted.rtaoRays;
     if (options_.volumetricMs >= 0) settings_.volumetricMultiScatter = persisted.volumetricMultiScatter;
     if (options_.bloomConv >= 0) settings_.bloomConvolution = persisted.bloomConvolution;
     if (options_.bloomKernel >= 0) {
@@ -1732,6 +1736,7 @@ void App::ApplyRenderSettings() {
     rs.frameGen = settings_.dlssFrameGen;
     rs.dlssModel = (DlssModel)settings_.dlssModel;
     rs.dlssRayReconstruction = settings_.dlssRayReconstruction;
+    rs.rtaoRays = (uint32_t)settings_.rtaoRays;
     rs.ptSamples = (uint32_t)settings_.ptSamples;
     rs.ptBounces = (uint32_t)settings_.ptBounces;
     rs.dof = settings_.dof;

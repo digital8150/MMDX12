@@ -79,12 +79,13 @@ struct VideoRealtimeQuality {
     float historyMinAlpha;    // temporal blend floor
     float historyCarry;       // history length kept across a video frame boundary
     float relativeCost;       // relative to "고품질"
+    uint32_t rtaoRays;         // RTAO rays per half-res pixel
 };
 inline constexpr VideoRealtimeQuality kVideoRealtimeQualities[] = {
-    {"초안", 2, 1024, 1, 2, 4, 1, 24.0f, 0.08f, 12.0f, 0.5f},
-    {"표준", 4, 2048, 4, 3, 4, 1, 32.0f, 0.05f, 12.0f, 0.75f},
-    {"고품질", 8, 4096, 4, 4, 16, 4, 48.0f, 0.03f, 12.0f, 1.0f},
-    {"최고", 8, 4096, 4, 6, 24, 8, 64.0f, 0.02f, 12.0f, 2.0f}};
+    {"초안", 2, 1024, 1, 2, 4, 1, 24.0f, 0.08f, 12.0f, 0.5f, 8},
+    {"표준", 4, 2048, 4, 3, 4, 1, 32.0f, 0.05f, 12.0f, 0.75f, 16},
+    {"고품질", 8, 4096, 4, 4, 16, 4, 48.0f, 0.03f, 12.0f, 1.0f, 32},
+    {"최고", 8, 4096, 4, 6, 24, 8, 64.0f, 0.02f, 12.0f, 2.0f, 48}};
 
 inline bool IsGiRenderer(VideoRenderer r) { return r == VideoRenderer::OfflineGI; }
 

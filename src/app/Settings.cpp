@@ -219,6 +219,7 @@ bool AppSettings::Load(const std::filesystem::path& file) {
             else if (v == "transformer2") dlssModel = 3;
         }
         else if (key == "dlssRayReconstruction" && ParseBool(value, b)) dlssRayReconstruction = b;
+        else if (key == "rtaoRays" && ParseInt(value, i)) rtaoRays = i;
         else if (key == "ptSamples" && ParseInt(value, i)) ptSamples = i;
         else if (key == "ptBounces" && ParseInt(value, i)) ptBounces = i;
         else if (key == "dof" && ParseBool(value, b)) dof = b;
@@ -600,6 +601,7 @@ bool AppSettings::Load(const std::filesystem::path& file) {
     upscalerQuality = std::clamp(upscalerQuality, 0, 4);
     if (dlssFrameGen != 2 && dlssFrameGen != 3 && dlssFrameGen != 4) dlssFrameGen = 0;
     dlssModel = std::clamp(dlssModel, 0, 3);
+    rtaoRays = std::clamp(rtaoRays, 1, 64);
     ptSamples = std::clamp(ptSamples, 1, 4);
     ptBounces = std::clamp(ptBounces, 1, 6);
     dofAperture = std::clamp(dofAperture, 0.2f, 3.0f);
@@ -698,6 +700,7 @@ bool AppSettings::Save(const std::filesystem::path& file) const {
     static const char* const kDlssModels[] = {"auto", "cnn", "transformer", "transformer2"};
     std::fprintf(f, "dlssModel=%s\n", kDlssModels[std::clamp(dlssModel, 0, 3)]);
     std::fprintf(f, "dlssRayReconstruction=%d\n", dlssRayReconstruction ? 1 : 0);
+    std::fprintf(f, "rtaoRays=%d\n", rtaoRays);
     std::fprintf(f, "ptSamples=%d\n", ptSamples);
     std::fprintf(f, "ptBounces=%d\n", ptBounces);
     std::fprintf(f, "dof=%d\ndofAperture=%.3f\n", dof ? 1 : 0, dofAperture);

@@ -27,13 +27,17 @@ void CSRtao(uint3 id : SV_DispatchThreadID) {
     float3 wp = mul(float4(vp, 1.0), gInvView).xyz;
     float3 wn = normalize(mul(OctDecode(nt.xy), (float3x3)gInvView));
 
-    uint rng = RngSeed(p, (uint)gFrameIndex, 1u);
     float3 origin = OffsetRayOrigin(wp, wn);
-    uint n = max((uint)gP0.w, 1u);
+    uint n = clamp((uint)gP0.w, 1u, 64u);
+    uint k0 = ((uint)gFrameIndex & 0xFFFFu) * n;
+    float2 off = float2(Ign(float2(p)), RandValue(PcgHash(p.x ^ (p.y << 16))));
 
     float occ = 0;
     for (uint i = 0; i < n; ++i) {
-        float3 dir = CosineSampleHemisphere(float2(Rand(rng), Rand(rng)), wn);
+        uint k = k0 + i;
+        float2 r2 = float2((k * 3242174889u) >> 8, (k * 2447445414u) >> 8) * (1.0 / 16777216.0);
+        float2 u = frac(r2 + off);
+        float3 dir = CosineSampleHemisphere(u, wn);
         float t = TraceAnyHitDistance(origin, dir, gP0.x);
         if (t >= 0.0) {
             float f = saturate(t / gP0.x);
