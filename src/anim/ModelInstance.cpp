@@ -111,6 +111,10 @@ void ModelInstance::SetWind(const DirectX::XMFLOAT3& dir, float strength, float 
     if (physics_) physics_->SetWind(dir, strength, gust, gustFreq, jitter);
 }
 
+void ModelInstance::SetGravity(float acceleration, const DirectX::XMFLOAT3& direction) {
+    if (physics_) physics_->SetGravity(acceleration, direction);
+}
+
 void ModelInstance::ResetPose() {
     for (BoneState& b : bones_) {
         b.animT = {0, 0, 0};

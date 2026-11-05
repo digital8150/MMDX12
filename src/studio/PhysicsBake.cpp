@@ -72,6 +72,9 @@ bool BakePhysics(std::shared_ptr<const PmxModel> pmx, const BoundMotion& motion,
     inst.SetRootTransform(root);
     inst.EnablePhysics(true);
     if (!inst.PhysicsEnabled()) return true;  // no simulated bodies: nothing to bake
+    const PhysicsEnv& env = options.env;      // the same gravity / wind as StudioUpdateModel
+    inst.SetGravity(env.gravity, env.gravityDir);
+    inst.SetWind(env.windDir, env.windStrength, env.windGust, env.windGustFreq, env.windJitter);
     inst.ResetPhysics();
 
     const XMFLOAT4 rootRot = MatrixRotation(root);

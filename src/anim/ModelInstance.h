@@ -47,6 +47,8 @@ public:
     void EnablePhysics(bool enabled);
     // Applies a global wind to the internal physics world (harmless when physics is off / no dynamic bodies).
     void SetWind(const DirectX::XMFLOAT3& dir, float strength, float gust, float gustFreq, float jitter);
+    // The internal physics world's gravity (PhysicsWorld::SetGravity; a no-op until physics is enabled).
+    void SetGravity(float acceleration, const DirectX::XMFLOAT3& direction);
     bool PhysicsEnabled() const { return physicsEnabled_; }
     // Bullet substep cap per UpdatePose. A slow frame then drops simulated time instead of asking
     // for more substeps (spiral of death). Interactive play uses a low cap, offline renders 10.

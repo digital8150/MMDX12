@@ -24,7 +24,8 @@ public:
     bool HasDynamicBodies() const { return dynamicCount_ > 0; }
 
     // Teleports every body to the pose implied by boneWorld, clears velocities, then lets the
-    // simulated bodies settle for `settleSeconds` with that pose held.
+    // simulated bodies settle for `settleSeconds` with that pose held, in the gravity and the wind. The wind's gust
+    // clock restarts too: a render's gusts follow its own start, not how long the editor simulated before.
     void Reset(const std::vector<DirectX::XMFLOAT4X4>& boneWorld, float settleSeconds);
 
     // Moves kinematic bodies to boneWorld and advances the simulation by dt seconds
@@ -38,6 +39,11 @@ public:
     // gust term (amplitude `gust`, frequency `gustFreq` Hz) and a high-frequency jitter (0..1). Zero / empty
     // `strength` disables wind.
     void SetWind(const DirectX::XMFLOAT3& dir, float strength, float gust, float gustFreq, float jitter);
+
+    // Sets the gravity (MMD's gravity settings without noise): `acceleration` in m/s^2 (MMD's default 9.8; the world
+    // runs x 10, in MMD units) along `direction` (normalised here: only its heading counts; a zero vector = no
+    // gravity). Until called, 9.8 straight down.
+    void SetGravity(float acceleration, const DirectX::XMFLOAT3& direction);
 
     // Per simulated body attached to a bone: the bone's new world matrix.
     struct BoneResult { int bone; DirectX::XMFLOAT4X4 world; bool mode2 = false; };

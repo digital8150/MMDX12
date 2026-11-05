@@ -200,6 +200,7 @@ bool App::FinishStudioLoad() {
     doc->bgVideoPath = pkg.bgVideoPath;
     doc->bgVideoOffset = pkg.bgVideoOffset;
     doc->bgVideoAsBackground = pkg.bgVideoAsBackground;
+    doc->physicsEnv = pkg.physicsEnv;  // a project's gravity / wind (a new scene: the defaults)
     doc->audioPath = pkg.audioPath;
     doc->hasAudio = !doc->audioPath.empty() && audio_.Load(doc->audioPath);
     if (doc->hasAudio) {
@@ -717,9 +718,13 @@ void App::StudioUpdateModel(StudioModel& m, uint64_t slot, float frame, float ph
             inst.SetRootTransform(root);
         }
         inst.EnablePhysics(d.physics && !m.physicsOff);
-        // Always sync wind (including zero values) so turning it off explicitly clears the physics-world state.
-        if (d.physics && !m.physicsOff)
-            inst.SetWind(d.windDir, d.windStrength, d.windGust, d.windGustFreq, d.windJitter);
+        // Always sync gravity and wind (including zero values) so turning the wind off explicitly clears the
+        // physics-world state. The same values reach the viewport, renders and the bake (BakeOptions::env).
+        if (d.physics && !m.physicsOff) {
+            const PhysicsEnv& env = d.physicsEnv;
+            inst.SetGravity(env.gravity, env.gravityDir);
+            inst.SetWind(env.windDir, env.windStrength, env.windGust, env.windGustFreq, env.windJitter);
+        }
         // Interactive playback caps Bullet substeps (drops simulated time on a slow frame); offline renders keep full.
         inst.SetPhysicsMaxSubsteps(offline_.mode == OfflineMode::None ? 4 : 10);
         if (!(m.placeApplied == m.place)) {  // moved by hand: the bodies restart at the new place
@@ -5773,29 +5778,80 @@ void App::DrawStudioTimeline(float x0, float y0, float x1, float y1) {
     rx -= Dp(28.0f);
     const ImVec2 physAt(rx, cy - Dp(17.0f));
     ImGui::SetCursorScreenPos(physAt);
-    if (IconButton("##physmenu", icon::CaretDown, Tr("물리/바람 설정"), false, 24.0f)) ImGui::OpenPopup("##studiophysics");
+    if (IconButton("##physmenu", icon::CaretDown, Tr("물리/중력/바람 설정"), false, 24.0f)) ImGui::OpenPopup("##studiophysics");
     ImGui::SetNextWindowPos(ImVec2(physAt.x + Dp(24.0f), physAt.y - Dp(6.0f)), ImGuiCond_Always, ImVec2(1.0f, 1.0f));
     ImGui::SetNextWindowSize(ImVec2(Dp(300.0f), 0));
+    // as tall as its rows, but never past the window's top edge: in a short window the popup scrolls instead
+    ImGui::SetNextWindowSizeConstraints(ImVec2(Dp(300.0f), 0.0f),
+                                        ImVec2(Dp(300.0f), std::max(Dp(160.0f), physAt.y - Dp(6.0f + 8.0f))));
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(Dp(14.0f), Dp(12.0f)));
     // SliderRow's last item is the slider itself, so a drag shows up as IsItemActive() on the row. These track the
-    // gesture: bodies are re-seeded only when a drag that changed something ends (not on every slider tick).
-    static bool windActive = false;
-    static bool windChanged = false;
+    // gesture: it becomes one undo step when it ends (PhysicsEnvCommand, which also re-seeds the bodies), not one per
+    // slider tick, so sliding doesn't freeze or thrash physics.
+    static bool envActive = false;
+    static PhysicsEnv envBefore;
+    const auto pushEnv = [&](const PhysicsEnv& before) {
+        if (d.physicsEnv == before) return;
+        const char* name = d.physicsEnv.SameGravity(before) ? Tr("바람 변경") : Tr("중력 변경");
+        d.history.Push(std::make_unique<PhysicsEnvCommand>(d, name, before, d.physicsEnv));
+    };
     if (ImGui::BeginPopup("##studiophysics")) {
-        bool windEditEnded = false;
+        PhysicsEnv& env = d.physicsEnv;
+        const PhysicsEnv frameStart = env;  // a gesture's first frame already moves the value
+        bool anyActive = false;
         {
-            bool anyActive = false, anyChanged = false;
             const auto windRow = [&](const char* id, const char* label, float* v, float lo, float hi) {
-                if (SliderRow(id, label, v, lo, hi, "%.2f")) anyChanged = true;
+                SliderRow(id, label, v, lo, hi, "%.2f");
                 anyActive |= ImGui::IsItemActive();
+            };
+            // label + field rows, as the inspector's key fields (a plain click types a value); the label column fits
+            // the longer label (English "Acceleration")
+            const char* accelLabel = Tr("가속도");
+            const char* dirLabel = Tr("방향");
+            const float labelW = std::max(Dp(64.0f), std::max(TextSize(Font::Regular, size::Small, accelLabel).x,
+                                                              TextSize(Font::Regular, size::Small, dirLabel).x) + Dp(10.0f));
+            const auto fieldRow = [&](const char* label, const char* tip, auto&& widget) {
+                const ImVec2 c = ImGui::GetCursorScreenPos();
+                const float w = ImGui::GetContentRegionAvail().x;
+                Text(ImGui::GetWindowDrawList(), Font::Regular, size::Small, ImVec2(c.x, c.y + Dp(5.0f)), p.ink3, label);
+                ImGui::SetCursorScreenPos(ImVec2(c.x + labelW, c.y));
+                ImGui::SetNextItemWidth(w - labelW);
+                PushFont(Font::Regular, size::Small);
+                widget();
+                PopFont();
+                anyActive |= ImGui::IsItemActive();
+                ui::Tooltip(tip);
+                ImGui::Dummy(ImVec2(w, Dp(2.0f)));
             };
             Switch("##physalways", Tr("물리 항상 계산"), &d.physicsAlways);
             ui::Tooltip(Tr("재생 중이 아니어도 같은 프레임에 멈춰 있을 때 물리를 계속 계산해 (머리카락/치마가 계속 흔들림)"));
             Switch("##physbones", Tr("물리 꺼도 본 표시"), &d.showPhysicsBones);
             ui::Tooltip(Tr("물리를 꺼도 물리 뼈(머리카락/치마)를 뷰포트에 표시해 직접 키를 넣을 수 있게"));
+            // gravity: MMD's gravity settings (acceleration + direction) without their noise and keys
+            SectionLabel(Tr("중력"));
+            {   // MMD's default on the heading line's right end
+                const ImVec2 back = ImGui::GetCursorScreenPos();
+                const float headY = (ImGui::GetItemRectMin().y + ImGui::GetItemRectMax().y) * 0.5f;
+                ImGui::SetCursorScreenPos(ImVec2(back.x + ImGui::GetContentRegionAvail().x - Dp(24.0f), headY - Dp(12.0f)));
+                ImGui::BeginDisabled(env.DefaultGravity());
+                if (IconButton("##gravityreset", icon::ArrowCcw, Tr("중력을 기본값으로 (9.8, 아래쪽)"), false, 24.0f)) {
+                    PhysicsEnv after = env;
+                    after.gravity = PhysicsEnv::kDefaultGravity;
+                    after.gravityDir = {0, -1, 0};
+                    d.history.Push(std::make_unique<PhysicsEnvCommand>(d, Tr("중력 변경"), env, after));
+                }
+                ImGui::EndDisabled();
+                ImGui::SetCursorScreenPos(back);
+            }
+            fieldRow(accelLabel, Tr("MMD와 같은 값이에요 (기본 9.8). 0이면 무중력"), [&] {
+                ImGui::DragFloat("##gravity", &env.gravity, 0.05f, 0.0f, 200.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+            });
+            fieldRow(dirLabel, Tr("중력이 향하는 방향 (기본 0, -1, 0 = 아래쪽). 크기는 가속도가 정하고, 모두 0이면 무중력"), [&] {
+                ImGui::DragFloat3("##gravitydir", &env.gravityDir.x, 0.01f, -1.0f, 1.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+            });
             SectionLabel(Tr("바람"));
             Switch("##windvec", Tr("뷰포트에 바람 벡터 표시"), &d.showWindVector);
-            const bool hasWind = (d.windStrength > 0.0f || d.windGust > 0.0f || d.windJitter > 0.0f);
+            const bool hasWind = env.HasWind();
             // Direction visualizer (top-down: +X right, +Z up) with the two X/Z slider rows to its right. The pad is
             // drawn after the rows so it takes exactly their height and both columns line up.
             const float padW = Dp(84.0f);
@@ -5804,8 +5860,8 @@ void App::DrawStudioTimeline(float x0, float y0, float x1, float y1) {
             ImGui::SameLine(0, Dp(10.0f));
             ImGui::BeginDisabled(!hasWind);  // no wind: direction controls are greyed out
             ImGui::BeginGroup();
-            windRow("##windx", Tr("바람 방향 X"), &d.windDir.x, -1.0f, 1.0f);
-            windRow("##windz", Tr("바람 방향 Z"), &d.windDir.z, -1.0f, 1.0f);
+            windRow("##windx", Tr("바람 방향 X"), &env.windDir.x, -1.0f, 1.0f);
+            windRow("##windz", Tr("바람 방향 Z"), &env.windDir.z, -1.0f, 1.0f);
             ImGui::EndGroup();
             ImGui::EndDisabled();
             const float padH = std::max(ImGui::GetItemRectMax().y - rowStart.y, Dp(60.0f));
@@ -5818,7 +5874,7 @@ void App::DrawStudioTimeline(float x0, float y0, float x1, float y1) {
                 const ImVec2 cc(c0.x + side * 0.5f, c0.y + side * 0.5f);
                 wdl->AddLine(cc, ImVec2(c0.x + side - Dp(6.0f), cc.y), IM_COL32(235, 75, 75, 90));
                 wdl->AddLine(cc, ImVec2(cc.x, c0.y + Dp(6.0f)), IM_COL32(70, 130, 245, 90));
-                float nx = d.windDir.x, nz = d.windDir.z;
+                float nx = env.windDir.x, nz = env.windDir.z;
                 const float len = std::sqrt(nx * nx + nz * nz);
                 if (len > 1e-5f) { nx /= len; nz /= len; }
                 if (hasWind && len > 1e-5f) {
@@ -5834,20 +5890,18 @@ void App::DrawStudioTimeline(float x0, float y0, float x1, float y1) {
                 }
             }
             ImGui::SetCursorScreenPos(ImVec2(rowStart.x, rowStart.y + padH));
-            windRow("##wstrength", Tr("바람 세기"), &d.windStrength, 0.0f, 1.0f);
-            windRow("##wgust", Tr("돌풍 폭"), &d.windGust, 0.0f, 1.0f);
-            windRow("##wgustfreq", Tr("돌풍 주파수"), &d.windGustFreq, 0.1f, 20.0f);
-            windRow("##wjitter", Tr("바람 무작위성"), &d.windJitter, 0.0f, 1.0f);
-            windEditEnded = windActive && !anyActive && (anyChanged || windChanged);
-            windActive = anyActive;
-            windChanged = anyActive ? (anyChanged || windChanged) : false;
+            windRow("##wstrength", Tr("바람 세기"), &env.windStrength, 0.0f, 1.0f);
+            windRow("##wgust", Tr("돌풍 폭"), &env.windGust, 0.0f, 1.0f);
+            windRow("##wgustfreq", Tr("돌풍 주파수"), &env.windGustFreq, 0.1f, 20.0f);
+            windRow("##wjitter", Tr("바람 무작위성"), &env.windJitter, 0.0f, 1.0f);
         }
-        // Re-seed bodies only when a wind drag ends (not per tick) so sliding doesn't freeze or thrash physics.
-        if (windEditEnded) d.physicsFrame = -1.0f;
+        if (anyActive && !envActive) envBefore = frameStart;
+        if (!anyActive && envActive) pushEnv(envBefore);  // the gesture ended: one undo step, the bodies re-seed
+        envActive = anyActive;
         ImGui::EndPopup();
-    } else {
-        windActive = false;
-        windChanged = false;
+    } else if (envActive) {  // closed in the middle of a gesture: still one step
+        pushEnv(envBefore);
+        envActive = false;
     }
     ImGui::PopStyleVar();
     separator(rx - Dp(8.0f));
@@ -6420,8 +6474,8 @@ void App::DrawStudioWindOverlay(const float rr[4]) {
     StudioDoc& d = *studio_;
     (void)rr;
     if (!d.showWindVector) return;
-    if (!(d.windStrength > 0.0f || d.windGust > 0.0f || d.windJitter > 0.0f)) return;
-    float nx = d.windDir.x, nz = d.windDir.z;
+    if (!d.physicsEnv.HasWind()) return;
+    float nx = d.physicsEnv.windDir.x, nz = d.physicsEnv.windDir.z;
     const float len = std::sqrt(nx * nx + nz * nz);
     if (len < 1e-5f) return;
     nx /= len; nz /= len;

@@ -225,6 +225,14 @@ bool App::ExecuteUiCommand(const std::string& cmd, const std::vector<std::string
                 LOG_INFO("STUDIOCAM uid=%u name=%s keys=%zu visible=%d stageUid=%u%s", cam.uid, cam.name.c_str(),
                          cam.track.camera.size(), (int)cam.visible, cam.stageUid,
                          d.selectedCameraUid == cam.uid ? " selected" : "");
+            {   // the project's gravity / wind (+ the undo step on top, for edit checks)
+                const studio::PhysicsEnv& pe = d.physicsEnv;
+                LOG_INFO("STUDIOPHYSICS physics=%d gravity=%.3f dir=(%.3f,%.3f,%.3f) wind=%.3f gust=%.3f freq=%.3f "
+                         "jitter=%.3f windDir=(%.3f,%.3f) undo='%s'",
+                         (int)d.physics, pe.gravity, pe.gravityDir.x, pe.gravityDir.y, pe.gravityDir.z, pe.windStrength,
+                         pe.windGust, pe.windGustFreq, pe.windJitter, pe.windDir.x, pe.windDir.z,
+                         d.history.UndoName().c_str());
+            }
             // P2.2: the selected model's physics bake state (driven bones + baked key count + the off flag)
             if (m) {
                 size_t bakedKeys = 0;
@@ -833,6 +841,24 @@ bool App::ExecuteUiCommand(const std::string& cmd, const std::vector<std::string
                 if (outError) *outError = "Bake could not start";
                 return false;
             }
+        }
+    } else if (cmd == "studiogravity" || cmd == "studiowind") {
+        // studiogravity <acceleration> [x y z] / studiowind <strength> [gust frequency jitter [x z]]: the physics
+        // popup's undoable edit (studiostate logs STUDIOPHYSICS)
+        if (studio_ && !args.empty()) {
+            studio::PhysicsEnv after = studio_->physicsEnv;
+            if (cmd == "studiogravity") {
+                after.gravity = num(0);
+                if (args.size() >= 4) after.gravityDir = {num(1), num(2), num(3)};
+            } else {
+                after.windStrength = num(0);
+                if (args.size() >= 4) { after.windGust = num(1); after.windGustFreq = num(2); after.windJitter = num(3); }
+                if (args.size() >= 6) after.windDir = {num(4), 0.0f, num(5)};
+            }
+            after.Sanitize();
+            if (!(after == studio_->physicsEnv))
+                studio_->history.Push(std::make_unique<studio::PhysicsEnvCommand>(
+                    *studio_, cmd == "studiogravity" ? Tr("중력 변경") : Tr("바람 변경"), studio_->physicsEnv, after));
         }
     } else if (cmd == "studiorestpose") {  // studiorestpose <deg> [both|left|right]: selected model's arm keys
         if (studio_) {

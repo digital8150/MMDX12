@@ -313,12 +313,9 @@ struct StudioDoc {
     bool physics = true;              // physics toggle (initialised from the app settings on load)
     bool physicsAlways = false;       // keep simulating even when paused on the same frame (hair/skirts settle)
     bool showPhysicsBones = false;    // show physics-driven bones in the viewport overlay even when physics is off
-    // Wind (studio): horizontal direction (X,Z), constant strength, gust amplitude/frequency, jitter.
-    DirectX::XMFLOAT3 windDir{0, 0, 1};
-    float windStrength = 0.0f;
-    float windGust = 0.0f;
-    float windGustFreq = 2.0f;
-    float windJitter = 0.0f;
+    // The gravity and the wind, saved in the project ("physicsWorld"); edits go through PhysicsEnvCommand (one undo
+    // step per gesture).
+    PhysicsEnv physicsEnv;
     bool showWindVector = true;   // viewport 3D wind-direction arrow
     RowKind curveClipKind = RowKind::Group;  // copied interpolation block: Bone (64 bytes) or Camera (24); Group = empty
     uint8_t curveClip[64] = {};
@@ -659,6 +656,27 @@ private:
     bool before_, after_;
 };
 
+// A gravity / wind edit (StudioDoc::physicsEnv before and after). The bodies re-seed at the next pose, so a paused
+// viewport shows the new settings settled.
+class PhysicsEnvCommand : public Command {
+public:
+    PhysicsEnvCommand(StudioDoc& doc, std::string name, const PhysicsEnv& before, const PhysicsEnv& after)
+        : doc_(doc), name_(std::move(name)), before_(before), after_(after) {}
+    void Do() override { Apply(after_); }
+    void Undo() override { Apply(before_); }
+    std::string Name() const override { return name_; }
+    size_t Bytes() const override { return sizeof(*this) + name_.size(); }
+
+private:
+    void Apply(const PhysicsEnv& e) {
+        doc_.physicsEnv = e;
+        doc_.physicsFrame = -1.0f;
+    }
+    StudioDoc& doc_;
+    std::string name_;
+    PhysicsEnv before_, after_;
+};
+
 // The audio offset (the timeline's audio clip drag, the audio menu): seconds before / after. The host re-seeks the
 // sound after an undo / redo that changed it.
 class AudioOffsetCommand : public Command {
@@ -744,6 +762,7 @@ struct StudioPackage {
     std::filesystem::path bgVideoPath;
     double bgVideoOffset = 0;
     bool bgVideoAsBackground = false;
+    PhysicsEnv physicsEnv;                   // a project's gravity / wind (library scenes and imports: the defaults)
     // project loads only
     bool fromProject = false;
     bool fromPmm = false;                    // a .pmm import: a NEW unsaved project (no projectPath / recents)

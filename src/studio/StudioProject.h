@@ -8,6 +8,7 @@
 #include "asset/MaterialChoice.h"
 #include "asset/StageManifest.h"
 #include "render/ShaderPack.h"
+#include "studio/PhysicsEnv.h"
 #include "studio/SceneLight.h"
 #include "studio/StudioEffects.h"
 #include "studio/StudioMotion.h"
@@ -201,6 +202,9 @@ struct ProjectData {
     std::filesystem::path bgVideoPath;
     double bgVideoOffset = 0.0;
     bool bgVideoAsBackground = false;
+    // The gravity and the wind ("physicsWorld": {"gravity": {acceleration, direction}, "wind": {direction, strength,
+    // gust, gustFrequency, jitter}}). A file without it loads MMD's default gravity and no wind (as it was simulated).
+    PhysicsEnv physicsEnv;
     ProjectEditor editor;
     // M6b: the project's own MME post stack (docs/mme/mme_design.md §2.10/§2.13). While the studio is open this
     // replaces the play-mode stack (RenderSettings::mmeEffects); offline renders from the studio use it. Empty = none.

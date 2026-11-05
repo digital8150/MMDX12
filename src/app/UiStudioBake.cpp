@@ -43,6 +43,7 @@ bool App::StudioStartBake(int start, int end, int step, bool selectedOnly, bool 
     o.start = std::max(0, start);
     o.end = std::max(o.start, end);
     o.step = std::max(1, step);
+    o.env = d.physicsEnv;   // bake under the project's gravity / wind, as the viewport simulates
     if (selectedOnly) {
         for (int b : d.selectedBones)
             if (b >= 0 && b < (int)m->pmx->bones.size()) o.bones.push_back(b);

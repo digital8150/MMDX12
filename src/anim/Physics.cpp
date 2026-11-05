@@ -2,6 +2,7 @@
 #include "core/Log.h"
 #include <btBulletDynamicsCommon.h>
 #include <algorithm>
+#include <cmath>
 
 using namespace DirectX;
 
@@ -9,7 +10,8 @@ namespace mmdx {
 
 namespace {
 
-constexpr float kGravity = -9.8f * 10.0f;  // MMD units are roughly 10 cm
+constexpr float kGravityScale = 10.0f;  // m/s^2 -> MMD units (roughly 10 cm)
+constexpr float kGravity = -9.8f * kGravityScale;
 constexpr float kSubstep = 1.0f / 120.0f;
 constexpr int kMaxSubsteps = 10;
 // Some rigs hang 6e9-mass "anchor" weights off the head (e.g. pda_miku's skirt). In float Bullet
@@ -120,6 +122,19 @@ struct PhysicsWorld::Impl {
         XMFLOAT4X4 m;
         XMStoreFloat4x4(&m, w);
         return ToBt(m);
+    }
+
+    // The wind force for one stepSimulation call of `dt` seconds (Bullet keeps it for that call's substeps and clears
+    // it afterwards); the gust clock advances with the simulated time.
+    void ApplyWind(float dt) {
+        if (!windOn) return;
+        windTime += dt;
+        const float gust = windGust * std::sin(6.2831853f * windGustFreq * windTime)
+                         + windJitter * WindNoise(windGustFreq * 3.0f * windTime);
+        const btVector3 force = windDir * (windBase + gust);
+        for (const Body& b : bodies) {
+            if (b.mode != 0) b.rb->applyCentralForce(force);
+        }
     }
 };
 
@@ -247,7 +262,13 @@ void PhysicsWorld::Reset(const std::vector<XMFLOAT4X4>& boneWorld, float settleS
     }
     s.world.getBroadphase()->resetPool(&s.dispatcher);
     s.world.getConstraintSolver()->reset();
-    for (float t = 0; t < settleSeconds; t += 1.0f / 60.0f) s.world.stepSimulation(1.0f / 60.0f, kMaxSubsteps, kSubstep);
+    // The bodies settle in the wind as they do in the gravity (a paused editor shows a wind change; a render does not
+    // start windless), and the gusts restart with the simulation instead of carrying on from the editor's clock.
+    s.windTime = 0.0f;
+    for (float t = 0; t < settleSeconds; t += 1.0f / 60.0f) {
+        s.ApplyWind(1.0f / 60.0f);
+        s.world.stepSimulation(1.0f / 60.0f, kMaxSubsteps, kSubstep);
+    }
 }
 
 void PhysicsWorld::Step(const std::vector<XMFLOAT4X4>& boneWorld, float dt, int maxSubsteps) {
@@ -266,15 +287,7 @@ void PhysicsWorld::Step(const std::vector<XMFLOAT4X4>& boneWorld, float dt, int 
     }
     s.boneWorld = boneWorld;
     if (dt > 0) {
-        if (s.windOn) {
-            s.windTime += dt;
-            const float gust = s.windGust * std::sin(6.2831853f * s.windGustFreq * s.windTime)
-                             + s.windJitter * WindNoise(s.windGustFreq * 3.0f * s.windTime);
-            const btVector3 force = s.windDir * (s.windBase + gust);
-            for (const Impl::Body& b : s.bodies) {
-                if (b.mode != 0) b.rb->applyCentralForce(force);
-            }
-        }
+        s.ApplyWind(dt);
         s.world.stepSimulation(dt, maxSubsteps, kSubstep);
     }
 }
@@ -304,6 +317,16 @@ void PhysicsWorld::SetWind(const DirectX::XMFLOAT3& dir, float strength, float g
         s.windJitter = 0.0f;
         s.windTime = 0.0f;
     }
+}
+
+void PhysicsWorld::SetGravity(float acceleration, const DirectX::XMFLOAT3& direction) {
+    Impl& s = *impl_;
+    const float len = std::sqrt(direction.x * direction.x + direction.y * direction.y + direction.z * direction.z);
+    const float a = std::isfinite(acceleration) ? std::max(0.0f, acceleration) : 0.0f;
+    btVector3 g(0, 0, 0);
+    if (std::isfinite(len) && len > 1e-6f) g = btVector3(direction.x, direction.y, direction.z) * (a * kGravityScale / len);
+    if (g == s.world.getGravity()) return;  // the studio sets it every frame: only a change reaches the bodies
+    s.world.setGravity(g);                  // every simulated body (they never deactivate)
 }
 
 void PhysicsWorld::Results(std::vector<BoneResult>& out) const {

@@ -360,6 +360,7 @@ bool LoadStudioProjectPackage(const std::filesystem::path& file, bool recovery, 
         out.bgVideoPath = pd.bgVideoPath;
         out.bgVideoOffset = pd.bgVideoOffset;
         out.bgVideoAsBackground = pd.bgVideoAsBackground;
+        out.physicsEnv = pd.physicsEnv;
         out.warnings = warn;
         if (!out.bgVideoPath.empty()) {
             std::error_code ec;
