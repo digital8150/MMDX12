@@ -2619,3 +2619,24 @@ word to deploy. Workers: opencode deepseek 4.1 1017 #low; Claude designed, revie
   (digests = local zips), website deployed (`/latest.json` -> 3.2.0 with manifest).
 - NOT verified: the fix on the reporter's RX 6650 XT; ribbon at high DPI; Ja translations of the new keys by a
   native speaker.
+
+## 2026-11-05 - Issue #12 (studio renders follow the effects panel), release 3.3.0
+- Issue #12 (zhangyan453): a studio Raster video was darker than the raster viewport and had no DoF. Root cause (the
+  user's framing): the studio reused the play-mode render dialog, so effects lived in two places and the studio's
+  effects panel was ignored (dialog `VideoRenderConfig` effects; `VideoRealtimeSettings` forced shadows / SSAO / SSR on).
+  Fix (feccd95, Sonnet subagent worker from Claude's spec, reviewed): `ActiveVideoConfig` copies the panel's bloom /
+  volumetric / DoF for studio jobs (every renderer, CLI overrides still win), the real-time path keeps the panel's
+  shadows / SSAO / SSR in the studio, and the dialog opened from the studio shows a note + "효과 패널 열기"
+  (`studioFocusEffects_`) instead of effect switches. E2E: ini ssao=0 / videoDof=0 + panel DoF on -> the raster video
+  frame of `captures/mvd_e2e/vmd_test.mmdxproj` at 20 s has the viewport's DoF; dialog captured. Not measured: an
+  old-vs-new SSAO pixel A/B.
+- Worker policy changed by the user: workers are Haiku / Sonnet subagents by difficulty; opencode / antigravity rules
+  removed; Codex only when the user says "코덱스" (memory updated).
+- Release 3.3.0 (minor): MVD import (5b6f19a), RTAO in motion (cc01bf7), float studio camera FOV (fcf90cb), #12, and the
+  pending stage-screen no-AO line in mmd.hlsl (19be992). Notes `dist/notes_3.3.0.md` (4 languages, credits zhangyan453),
+  no cover image. Package 196.1 / 16.3 MB, packaged smoke (select, v3.3.0, 0 `[E]`/`[W]`, leftovers removed), delta
+  manifest = 6 changed files (3 exes, mmd / rtao / ssao .hlsl), 6 objects + manifest uploaded and fetched back over HTTPS
+  (hashes match), GitHub v3.3.0 (digests = local zips), website deployed (`/latest.json` -> 3.3.0 with manifest), #12
+  answered (left open for the reporter to confirm).
+- Pitfalls: a Python-written object list had CRLF line ends, so `tar -T` found no files (strip `\r`); the CDN returned
+  transient 522 / 525 on some object fetches during the check (files were fine on the origin; retries returned 200).
