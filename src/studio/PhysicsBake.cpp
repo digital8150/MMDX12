@@ -72,11 +72,14 @@ bool BakePhysics(std::shared_ptr<const PmxModel> pmx, const BoundMotion& motion,
     inst.SetRootTransform(root);
     inst.EnablePhysics(true);
     if (!inst.PhysicsEnabled()) return true;  // no simulated bodies: nothing to bake
-    inst.ResetPhysics();
+    const PhysicsEnv& env = options.env;      // the same gravity / wind as StudioUpdateModel
+    inst.SetGravity(env.gravity, env.gravityDir);
+    inst.SetWind(env.windDir, env.windStrength, env.windGust, env.windGustFreq, env.windJitter);
+    const int preFrom = std::max(0, start - preroll);
+    inst.ResetPhysics((float)preFrom / kMmdFps);  // the gusts follow the timeline, as in the viewport and renders
 
     const XMFLOAT4 rootRot = MatrixRotation(root);
     const XMFLOAT3 rootPos{root._41, root._42, root._43};
-    const int preFrom = std::max(0, start - preroll);
     const float span = (float)std::max(1, end - start);
 
     for (int f = preFrom; f <= end; ++f) {

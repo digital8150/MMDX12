@@ -212,6 +212,7 @@ ProjectData App::StudioProjectData() const {
     pd.bgVideoPath = d.bgVideoPath;
     pd.bgVideoOffset = d.bgVideoOffset;
     pd.bgVideoAsBackground = d.bgVideoAsBackground;
+    pd.physicsEnv = d.physicsEnv;  // the gravity and the wind
     pd.mmePost = d.mmePost;   // M6b: the project's own MME post stack
     pd.effects = d.effects;   // Version 3: the project's own effect stack
     pd.worlds = d.worlds;     // Version 3: the project's world entities

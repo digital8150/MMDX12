@@ -4,6 +4,7 @@
 // undoing and the UI live in the App); unit-tested by tools/bake_test.cpp.
 #include "anim/Motion.h"
 #include "asset/PmxModel.h"
+#include "studio/PhysicsEnv.h"
 #include "studio/StudioMotion.h"
 #include <atomic>
 #include <map>
@@ -19,6 +20,7 @@ struct BakeOptions {
     int step = 1;               // key every N frames (>= 1; `end` is always keyed)
     int preroll = 60;           // frames simulated before `start` so the first key is settled
     std::vector<int> bones;     // bone indices to bake; empty = every physics-driven bone
+    PhysicsEnv env;             // the project's gravity / wind (the viewport simulates with the same)
 };
 
 struct BakeResult {

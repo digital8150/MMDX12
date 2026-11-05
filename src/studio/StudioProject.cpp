@@ -756,6 +756,19 @@ bool SaveProject(const std::filesystem::path& file, const ProjectData& data, std
                                     {"offset", data.bgVideoOffset},
                                     {"asBackground", data.bgVideoAsBackground}};
         }
+        {   // the gravity and the wind, the defaults too (the file says what it was simulated with)
+            PhysicsEnv pe = data.physicsEnv;
+            pe.Sanitize();
+            j["physicsWorld"] = {
+                {"gravity", {{"acceleration", pe.gravity},
+                             {"direction", {pe.gravityDir.x, pe.gravityDir.y, pe.gravityDir.z}}}},
+                {"wind", {{"direction", {pe.windDir.x, pe.windDir.y, pe.windDir.z}},
+                          {"strength", pe.windStrength},
+                          {"gust", pe.windGust},
+                          {"gustFrequency", pe.windGustFreq},
+                          {"jitter", pe.windJitter}}},
+            };
+        }
         {
             nlohmann::json ed;
             ed["frame"] = data.editor.frame;
@@ -1053,6 +1066,23 @@ bool LoadProject(const std::filesystem::path& file, ProjectData& out, std::strin
             out.bgVideoPath = ResolvePath(ReadString(j["backgroundVideo"], "path", ""), dir);
             out.bgVideoOffset = ReadDouble(j["backgroundVideo"], "offset", out.bgVideoOffset);
             out.bgVideoAsBackground = ReadBool(j["backgroundVideo"], "asBackground", out.bgVideoAsBackground);
+        }
+
+        // The gravity and the wind (absent: MMD's default gravity and no wind, as older files were simulated).
+        if (const nlohmann::json* pw = ObjectAt(j, "physicsWorld")) {
+            PhysicsEnv& pe = out.physicsEnv;
+            if (const nlohmann::json* g = ObjectAt(*pw, "gravity")) {
+                pe.gravity = (float)ReadDouble(*g, "acceleration", pe.gravity);
+                pe.gravityDir = ReadVec3(*g, "direction", pe.gravityDir);
+            }
+            if (const nlohmann::json* w = ObjectAt(*pw, "wind")) {
+                pe.windDir = ReadVec3(*w, "direction", pe.windDir);
+                pe.windStrength = (float)ReadDouble(*w, "strength", pe.windStrength);
+                pe.windGust = (float)ReadDouble(*w, "gust", pe.windGust);
+                pe.windGustFreq = (float)ReadDouble(*w, "gustFrequency", pe.windGustFreq);
+                pe.windJitter = (float)ReadDouble(*w, "jitter", pe.windJitter);
+            }
+            pe.Sanitize();
         }
 
         // M6b: the project's own MME post stack.

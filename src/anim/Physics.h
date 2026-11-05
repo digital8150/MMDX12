@@ -24,8 +24,10 @@ public:
     bool HasDynamicBodies() const { return dynamicCount_ > 0; }
 
     // Teleports every body to the pose implied by boneWorld, clears velocities, then lets the
-    // simulated bodies settle for `settleSeconds` with that pose held.
-    void Reset(const std::vector<DirectX::XMFLOAT4X4>& boneWorld, float settleSeconds);
+    // simulated bodies settle for `settleSeconds` with that pose held, in the gravity and the wind (its gusts held at
+    // `windClock`). The wind's gust clock continues from `windClock` (seconds; the studio passes the timeline time, so
+    // the gusts follow the timeline wherever the simulation starts: viewport, renders, the bake's preroll).
+    void Reset(const std::vector<DirectX::XMFLOAT4X4>& boneWorld, float settleSeconds, float windClock = 0.0f);
 
     // Moves kinematic bodies to boneWorld and advances the simulation by dt seconds
     // (fixed 1/120 s substeps, at most maxSubsteps of them: simulated time beyond that is dropped
@@ -38,6 +40,11 @@ public:
     // gust term (amplitude `gust`, frequency `gustFreq` Hz) and a high-frequency jitter (0..1). Zero / empty
     // `strength` disables wind.
     void SetWind(const DirectX::XMFLOAT3& dir, float strength, float gust, float gustFreq, float jitter);
+
+    // Sets the gravity (MMD's gravity settings without noise): `acceleration` in m/s^2 (MMD's default 9.8; the world
+    // runs x 10, in MMD units) along `direction` (normalised here: only its heading counts; a zero vector = no
+    // gravity). Until called, 9.8 straight down.
+    void SetGravity(float acceleration, const DirectX::XMFLOAT3& direction);
 
     // Per simulated body attached to a bone: the bone's new world matrix.
     struct BoneResult { int bone; DirectX::XMFLOAT4X4 world; bool mode2 = false; };

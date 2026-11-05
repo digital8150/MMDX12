@@ -161,7 +161,9 @@ progress.md is the session log. Read its latest entry first.
     `studioselect`/`studioremove <index>`, `studioreplace <index> <file>` / `studioreplacelib <index> <substr>` (swap a model's file), `studiorename <text>`, `studiomaterial <default|ray> [emd path]` (PBR material source of the selected model), `studioattach <parent|-1> <bone|-> tx ty tz rx ry rz s`,
     `studioaspect <w:h>` (frame aspect preset, e.g. `9:16`, `16:9`, `2.39:1`), `studiorenderer <raster|rt|pt|gi>` (viewport renderer),
     `studioribbon <home|anim|camera|light|render|view>` / `studioribbon collapse 0|1` (ribbon tab / fold;
-    `studiostate` logs a `STUDIORIBBON tab=<id> collapsed=<0|1>` line).
+    `studiostate` logs a `STUDIORIBBON tab=<id> collapsed=<0|1>` line),
+    `studiogravity <acceleration> [x y z]` / `studiowind <strength> [gust frequency jitter [x z]]` (the physics popup's
+    undoable edits; `studiostate` logs a `STUDIOPHYSICS` line).
     Drag and drop: `drop <file>[|<file>...]` injects a drop path list (models → characters/props, `.vmd`/`.vpd` onto
     the selected / single new model, audio, `.mmdxproj`; `|` separates paths so they may contain spaces).
     Focus: `studiofocus <frame> <auto|target|manual> [model index|distance] [aperture] [transition] [head|upper|center]`
@@ -308,6 +310,8 @@ Agents keep misusing the CLI and then blaming the app. These rules are verified 
 - `anim`: `ModelInstance` (bones, append, IK, morphs) and `Motion` (VMD Bezier evaluation, camera).
   - `PhysicsWorld` (Bullet, `Physics.cpp` only) runs between the before- and after-physics bones in `UpdatePose(dt)`.
     Only the character enables it. `App::UpdateScene` derives dt from the motion clock and resets the bodies on seeks/loops.
+    `SetGravity` (m/s^2 along a direction; the world runs x 10) and `SetWind` set the environment (default 9.8 down,
+    no wind); `Reset` settles the bodies in both (gusts held) and sets the wind's gust clock (`ResetPhysics(windClock)`).
 - `render`: `Dx12Context` (device, frames, descriptors, `UploadBatch`, PNG capture) and `Renderer`.
   - The renderer runs an ordered `IRenderPass` list (see `Passes.h`): Shadow → Scene → Resolve → PathTrace → SSAO → SSR → Composite → Volumetric → TAA → Upscale → DoF → Bloom → Post → Backdrop → Present. `PassContext::path` decides which passes work (RayTraced: ray-query sun shadows in the scene PS, RTAO, RT reflections; PathTraced: compute path tracer + temporal/à-trous denoiser writing the G-buffer). Passes own their targets via `OnResize`; inputs are bound through per-frame `TransientDescriptors`.
     PT outlines: in PT mode `ScenePass::DrawPtEdges` rasterises a depth pre-pass (`PSDepthAlpha`) + the edges (default or the
@@ -563,6 +567,12 @@ Agents keep misusing the CLI and then blaming the app. These rules are verified 
     Dirty = `history.Version()` or `projectVersion` (add/remove/rename/visibility/audio) changed since the save. Autosave
     every 60 s on a worker thread to `<exe>/recovery/` (also on window close with unsaved work, not in `--frames`/script
     runs); the select screen offers it at the next start; saving or leaving the studio deletes it.
+  - Gravity and wind (`studio/PhysicsEnv.h`, `StudioDoc::physicsEnv`): the transport's physics popup (the caret left of
+    the atom icon) edits them, one undo step per gesture (`PhysicsEnvCommand`, which re-seeds the bodies); saved as the
+    project's "physicsWorld" (absent = MMD's 9.8 down, no wind; the format version is unchanged). `StudioUpdateModel`
+    applies them every frame (viewport and renders), the bake through `BakeOptions::env`; play mode keeps the defaults.
+    Every studio reset starts the gust clock at the timeline time (the bake at its preroll's first frame), so the gusts
+    of the viewport, a render and a bake line up.
   - Models are added inside the studio on worker threads (`StudioJob`, `LoadStudioModel/Stage/Song`), uploaded in
     `StudioPollJobs`. `StudioModel::uid` is stable; removal waits for the GPU and clears the undo history (commands hold
     model indices). Replacing a model's file (outliner menu "모델 바꾸기", the "+" popup in replace mode: `StudioJob::replaceUid`,
