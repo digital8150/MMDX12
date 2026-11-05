@@ -757,9 +757,10 @@ PSOut PSMain(VSOut i, bool front : SV_IsFrontFace) {
     if (alpha < 0.004) discard;
 
     // S5: a stage screen surface shows only its bound texture, as HDR emission (see ScreenEmission).
+    // nt.z = -1: emission takes no AO (RTAO's per-frame noise dimmed whole far screens in TAA-less video renders).
     if (gFlags & MAT_SCREEN) {
         float3 emission = ScreenEmission(gFlags, SrgbToLinear(saturate(tex.rgb)), gReflectivity);
-        return PackOutput(emission, alpha, n, 0.0, i.curClip, i.prevClip);
+        return PackOutput(emission, alpha, n, -1.0, i.curClip, i.prevClip);
     }
 
     if (gPbrActive != 0u && gShading < 0.5) {
