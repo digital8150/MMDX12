@@ -136,7 +136,9 @@ progress.md is the session log. Read its latest entry first.
     results in `videoProbe=` ini lines). `--offline-probe` runs the same measurement from a play scene.
     The dialog's effects are `VideoRenderConfig` (bloom, convolution bloom, volumetric, DoF for every renderer: GI's thin lens
     follows `OfflineJobDesc::dof` / `dofAperture`, the render benchmark keeps the defaults); stills use the effects chosen at
-    scene entry (`AppSettings`). Check `build_dev` builds when `build/` is locked by a running render.
+    scene entry (`AppSettings`). In the studio the render dialog has no effect switches: studio videos and stills take the
+    studio effects panel's settings (`ActiveVideoConfig` copies them; the real-time video path keeps the panel's shadows / SSAO / SSR
+    instead of forcing them on). Check `build_dev` builds when `build/` is locked by a running render.
   - Studio: `--character <s> [--stage <s>] [--song <s>] --screen studio --seek <sec> --frames N --capture out.png`.
     `--screen studio` without `--character` opens a new empty project; `--project <file.mmdxproj>` opens a project.
     Studio render (quits when done): `--project p.mmdxproj --offline-video out.mp4 [--offline-range a b]` (timeline

@@ -1243,6 +1243,16 @@ void App::DrawOfflineOverlay() {
 
 VideoRenderConfig App::ActiveVideoConfig() const {
     VideoRenderConfig c = settings_.video;
+    // Studio: the effects panel (settings_) is the one source of the render's effects (issue #12).
+    if ((screen_ == Screen::Studio || offline_.studio) && studio_) {
+        c.bloom = settings_.bloom;
+        c.bloomConvolution = settings_.bloomConvolution;
+        c.volumetric = settings_.volumetric;
+        c.volumetricDensity = settings_.volumetricDensity;
+        c.volumetricFull = settings_.volumetricFull;
+        c.dof = settings_.dof;
+        c.dofAperture = settings_.dofAperture;
+    }
     if (options_.offlineFps == 24 || options_.offlineFps == 30 || options_.offlineFps == 60) c.fps = options_.offlineFps;
     if (options_.offlineBitrate > 0) c.bitrateMbps = options_.offlineBitrate;
     if (options_.offlineQuality >= 0) c.quality = options_.offlineQuality;
@@ -1281,10 +1291,10 @@ RenderSettings App::VideoRealtimeSettings(const VideoRenderConfig& cfg) const {
                     : cfg.Renderer() == VideoRenderer::RayTraced ? RenderPath::RayTraced
                                                                   : RenderPath::Raster;
     rs.msaaSamples = q.msaa;
-    rs.shadows = true;
+    rs.shadows = studio ? settings_.shadows : true;
     rs.shadowMapSize = q.shadowMapSize;
-    rs.ssao = true;
-    rs.ssr = true;
+    rs.ssao = studio ? settings_.ssao : true;
+    rs.ssr = studio ? settings_.ssr : true;
     rs.rtaoRays = q.rtaoRays;
     rs.rtaoHistoryMax = 48.0f;
     rs.ptSamples = q.ptSamples;

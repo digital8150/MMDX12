@@ -370,6 +370,7 @@ void App::DrawVideoRenderDialog() {
         Gap(6.0f);
         SectionLabel(Tr("효과"));
 
+        if (!studio) {
         Switch("##bloom", Tr("블룸"), &cfg.bloom, Tr("밝은 부분이 부드럽게 번집니다"));
         if (cfg.bloom) {
             ImGui::Indent(Dp(16.0f));
@@ -391,6 +392,19 @@ void App::DrawVideoRenderDialog() {
             ImGui::Indent(Dp(16.0f));
             SliderRow("##dofaperture", Tr("조리개"), &cfg.dofAperture, 0.2f, 3.0f, "%.1f");
             ImGui::Unindent(Dp(16.0f));
+        }
+        } else {
+            PushFont(Font::Regular, size::Caption);
+            ImGui::PushStyleColor(ImGuiCol_Text, ImGui::ColorConvertU32ToFloat4(p.ink2));
+            ImGui::TextWrapped("%s", Tr("스튜디오 렌더는 효과 패널의 설정을 그대로 따릅니다"));
+            ImGui::PopStyleColor();
+            PopFont();
+            Gap(4.0f);
+            if (Button("##vfxpanel", Tr("효과 패널 열기"), icon::Sparkle, ButtonKind::Secondary, ImVec2(-1.0f, 0))) {
+                studioFocusEffects_ = true;
+                videoDialogOpen_ = false;
+            }
+            Gap(6.0f);
         }
 
         // 투명 배경 (PNG 시퀀스): straight-alpha RGBA8 frames instead of an MP4
