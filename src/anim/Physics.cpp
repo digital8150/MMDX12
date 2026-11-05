@@ -124,11 +124,11 @@ struct PhysicsWorld::Impl {
         return ToBt(m);
     }
 
-    // The wind force for one stepSimulation call of `dt` seconds (Bullet keeps it for that call's substeps and clears
-    // it afterwards); the gust clock advances with the simulated time.
-    void ApplyWind(float dt) {
+    // The wind force for one stepSimulation call (Bullet keeps it for that call's substeps and clears it afterwards),
+    // after the gust clock advanced by `advance` seconds (the simulated time; 0 holds the gusts).
+    void ApplyWind(float advance) {
         if (!windOn) return;
-        windTime += dt;
+        windTime += advance;
         const float gust = windGust * std::sin(6.2831853f * windGustFreq * windTime)
                          + windJitter * WindNoise(windGustFreq * 3.0f * windTime);
         const btVector3 force = windDir * (windBase + gust);
@@ -246,7 +246,7 @@ PhysicsWorld::PhysicsWorld(const PmxModel& model, const std::vector<XMFLOAT4X4>&
 
 PhysicsWorld::~PhysicsWorld() = default;
 
-void PhysicsWorld::Reset(const std::vector<XMFLOAT4X4>& boneWorld, float settleSeconds) {
+void PhysicsWorld::Reset(const std::vector<XMFLOAT4X4>& boneWorld, float settleSeconds, float windClock) {
     Impl& s = *impl_;
     s.boneWorld = boneWorld;
     for (Impl::Body& b : s.bodies) {
@@ -263,10 +263,10 @@ void PhysicsWorld::Reset(const std::vector<XMFLOAT4X4>& boneWorld, float settleS
     s.world.getBroadphase()->resetPool(&s.dispatcher);
     s.world.getConstraintSolver()->reset();
     // The bodies settle in the wind as they do in the gravity (a paused editor shows a wind change; a render does not
-    // start windless), and the gusts restart with the simulation instead of carrying on from the editor's clock.
-    s.windTime = 0.0f;
+    // start windless), its gusts held at the given clock, which then runs on from there.
+    s.windTime = std::isfinite(windClock) ? windClock : 0.0f;
     for (float t = 0; t < settleSeconds; t += 1.0f / 60.0f) {
-        s.ApplyWind(1.0f / 60.0f);
+        s.ApplyWind(0.0f);
         s.world.stepSimulation(1.0f / 60.0f, kMaxSubsteps, kSubstep);
     }
 }
@@ -281,7 +281,7 @@ void PhysicsWorld::Step(const std::vector<XMFLOAT4X4>& boneWorld, float dt, int 
         const XMFLOAT4X4& to = boneWorld[b.bone];
         const float dx = to._41 - from._41, dy = to._42 - from._42, dz = to._43 - from._43;
         if (dx * dx + dy * dy + dz * dz > kTeleportDistance * kTeleportDistance) {
-            Reset(boneWorld, kTeleportSettleSeconds);
+            Reset(boneWorld, kTeleportSettleSeconds, s.windTime + std::max(dt, 0.0f));  // the gust clock runs on
             return;
         }
     }

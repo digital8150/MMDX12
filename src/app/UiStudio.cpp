@@ -731,7 +731,7 @@ void App::StudioUpdateModel(StudioModel& m, uint64_t slot, float frame, float ph
             m.placeApplied = m.place;
             resetPhysics = true;
         }
-        if (resetPhysics) inst.ResetPhysics();
+        if (resetPhysics) inst.ResetPhysics(frame / kMmdFps);  // the wind's gusts follow the timeline
     }
     if (m.IsEffect()) {
         // M5c: an effect object's mesh keeps model-space vertices in MMD (the effect's WORLD places it), so the
@@ -5785,24 +5785,33 @@ void App::DrawStudioTimeline(float x0, float y0, float x1, float y1) {
     ImGui::SetNextWindowSizeConstraints(ImVec2(Dp(300.0f), 0.0f),
                                         ImVec2(Dp(300.0f), std::max(Dp(160.0f), physAt.y - Dp(6.0f + 8.0f))));
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(Dp(14.0f), Dp(12.0f)));
-    // SliderRow's last item is the slider itself, so a drag shows up as IsItemActive() on the row. These track the
-    // gesture: it becomes one undo step when it ends (PhysicsEnvCommand, which also re-seeds the bodies), not one per
-    // slider tick, so sliding doesn't freeze or thrash physics.
-    static bool envActive = false;
-    static PhysicsEnv envBefore;
-    const auto pushEnv = [&](const PhysicsEnv& before) {
-        if (d.physicsEnv == before) return;
-        const char* name = d.physicsEnv.SameGravity(before) ? Tr("바람 변경") : Tr("중력 변경");
-        d.history.Push(std::make_unique<PhysicsEnvCommand>(d, name, before, d.physicsEnv));
+    // SliderRow's last item is the slider itself, so a drag shows up as IsItemActive() on the row. The document tracks
+    // the gesture (StudioDoc::physicsEnvEditing): it becomes one undo step when it ends (PhysicsEnvCommand, which also
+    // re-seeds the bodies), not one per slider tick, so sliding doesn't freeze or thrash physics.
+    const auto pushEnv = [&](const PhysicsEnv& before, const PhysicsEnv& after) {
+        if (after == before) return;
+        const char* name = after.SameGravity(before) ? Tr("바람 변경") : Tr("중력 변경");
+        d.history.Push(std::make_unique<PhysicsEnvCommand>(d, name, before, after));
     };
     if (ImGui::BeginPopup("##studiophysics")) {
         PhysicsEnv& env = d.physicsEnv;
         const PhysicsEnv frameStart = env;  // a gesture's first frame already moves the value
         bool anyActive = false;
+        // The values right after the gesture's own control was drawn this frame: its step ends there when another
+        // control takes over in the same frame (a typed value commits as the click lands on a slider).
+        bool ownerSeen = false;
+        PhysicsEnv ownerAfter;
+        const auto noteItem = [&] {
+            anyActive |= ImGui::IsItemActive();
+            if (d.physicsEnvEditing && ImGui::GetItemID() == d.physicsEnvControl) {
+                ownerSeen = true;
+                ownerAfter = env;
+            }
+        };
         {
             const auto windRow = [&](const char* id, const char* label, float* v, float lo, float hi) {
                 SliderRow(id, label, v, lo, hi, "%.2f");
-                anyActive |= ImGui::IsItemActive();
+                noteItem();
             };
             // label + field rows, as the inspector's key fields (a plain click types a value); the label column fits
             // the longer label (English "Acceleration")
@@ -5810,18 +5819,21 @@ void App::DrawStudioTimeline(float x0, float y0, float x1, float y1) {
             const char* dirLabel = Tr("방향");
             const float labelW = std::max(Dp(64.0f), std::max(TextSize(Font::Regular, size::Small, accelLabel).x,
                                                               TextSize(Font::Regular, size::Small, dirLabel).x) + Dp(10.0f));
-            const auto fieldRow = [&](const char* label, const char* tip, auto&& widget) {
+            const auto fieldRow = [&](const char* label, auto&& widgets) {
                 const ImVec2 c = ImGui::GetCursorScreenPos();
                 const float w = ImGui::GetContentRegionAvail().x;
                 Text(ImGui::GetWindowDrawList(), Font::Regular, size::Small, ImVec2(c.x, c.y + Dp(5.0f)), p.ink3, label);
                 ImGui::SetCursorScreenPos(ImVec2(c.x + labelW, c.y));
-                ImGui::SetNextItemWidth(w - labelW);
                 PushFont(Font::Regular, size::Small);
-                widget();
+                widgets(w - labelW);
                 PopFont();
-                anyActive |= ImGui::IsItemActive();
-                ui::Tooltip(tip);
                 ImGui::Dummy(ImVec2(w, Dp(2.0f)));
+            };
+            const auto field = [&](const char* id, float* v, float speed, float lo, float hi, float width, const char* tip) {
+                ImGui::SetNextItemWidth(width);
+                ImGui::DragFloat(id, v, speed, lo, hi, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+                noteItem();
+                ui::Tooltip(tip);
             };
             Switch("##physalways", Tr("물리 항상 계산"), &d.physicsAlways);
             ui::Tooltip(Tr("재생 중이 아니어도 같은 프레임에 멈춰 있을 때 물리를 계속 계산해 (머리카락/치마가 계속 흔들림)"));
@@ -5843,11 +5855,19 @@ void App::DrawStudioTimeline(float x0, float y0, float x1, float y1) {
                 ImGui::EndDisabled();
                 ImGui::SetCursorScreenPos(back);
             }
-            fieldRow(accelLabel, Tr("MMD와 같은 값이에요 (기본 9.8). 0이면 무중력"), [&] {
-                ImGui::DragFloat("##gravity", &env.gravity, 0.05f, 0.0f, 200.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+            fieldRow(accelLabel, [&](float width) {
+                field("##gravity", &env.gravity, 0.05f, 0.0f, 200.0f, width, Tr("MMD와 같은 값이에요 (기본 9.8). 0이면 무중력"));
             });
-            fieldRow(dirLabel, Tr("중력이 향하는 방향 (기본 0, -1, 0 = 아래쪽). 크기는 가속도가 정하고, 모두 0이면 무중력"), [&] {
-                ImGui::DragFloat3("##gravitydir", &env.gravityDir.x, 0.01f, -1.0f, 1.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+            fieldRow(dirLabel, [&](float width) {  // X / Y / Z laid out as DragFloat3, one control (undo step) each
+                const char* tip = Tr("중력이 향하는 방향 (기본 0, -1, 0 = 아래쪽). 크기는 가속도가 정하고, 모두 0이면 무중력");
+                const float gap = ImGui::GetStyle().ItemInnerSpacing.x;
+                const float each = std::floor((width - gap * 2.0f) / 3.0f);
+                const char* ids[3] = {"##gravityx", "##gravityy", "##gravityz"};
+                float* axes[3] = {&env.gravityDir.x, &env.gravityDir.y, &env.gravityDir.z};
+                for (int i = 0; i < 3; ++i) {
+                    if (i) ImGui::SameLine(0, gap);
+                    field(ids[i], axes[i], 0.01f, -1.0f, 1.0f, i < 2 ? each : width - (each + gap) * 2.0f, tip);
+                }
             });
             SectionLabel(Tr("바람"));
             Switch("##windvec", Tr("뷰포트에 바람 벡터 표시"), &d.showWindVector);
@@ -5895,13 +5915,27 @@ void App::DrawStudioTimeline(float x0, float y0, float x1, float y1) {
             windRow("##wgustfreq", Tr("돌풍 주파수"), &env.windGustFreq, 0.1f, 20.0f);
             windRow("##wjitter", Tr("바람 무작위성"), &env.windJitter, 0.0f, 1.0f);
         }
-        if (anyActive && !envActive) envBefore = frameStart;
-        if (!anyActive && envActive) pushEnv(envBefore);  // the gesture ended: one undo step, the bodies re-seed
-        envActive = anyActive;
+        // One step per control: a gesture ends when its control lets go, or when another control takes over in the
+        // same frame; the next step then starts where the old control left the values.
+        const uint32_t control = anyActive ? ImGui::GetActiveID() : 0;
+        PhysicsEnv start = frameStart;
+        if (d.physicsEnvEditing && control != d.physicsEnvControl) {
+            const PhysicsEnv now = env;
+            const PhysicsEnv end = control == 0 ? now : ownerSeen ? ownerAfter : frameStart;
+            pushEnv(d.physicsEnvBefore, end);
+            env = now;  // the next control's change of this frame stays
+            start = end;
+            d.physicsEnvEditing = false;
+        }
+        if (control && !d.physicsEnvEditing) {
+            d.physicsEnvEditing = true;
+            d.physicsEnvControl = control;
+            d.physicsEnvBefore = start;
+        }
         ImGui::EndPopup();
-    } else if (envActive) {  // closed in the middle of a gesture: still one step
-        pushEnv(envBefore);
-        envActive = false;
+    } else if (d.physicsEnvEditing) {  // closed in the middle of a gesture: still one step
+        pushEnv(d.physicsEnvBefore, d.physicsEnv);
+        d.physicsEnvEditing = false;
     }
     ImGui::PopStyleVar();
     separator(rx - Dp(8.0f));

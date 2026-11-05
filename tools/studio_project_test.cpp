@@ -1923,21 +1923,23 @@ static void TestPhysicsWorld() {
                   loaded.physicsEnv.DefaultGravity() && !loaded.physicsEnv.HasWind(),
               "no physicsWorld: default gravity, no wind");
     }
-    // partial and out-of-range values: bounded, a direction keeps its heading, missing fields keep their defaults
+    // partial and out-of-range values: bounded, a direction keeps its heading, the wind stays horizontal, missing
+    // fields keep their defaults
     {
         {
             std::ofstream f(file, std::ios::binary);
             f << "{\"format\":\"mmdx12-studio-project\",\"version\":6,\"models\":[],\"camera\":null,\"audio\":null,"
                  "\"physicsWorld\":{\"gravity\":{\"acceleration\":-5,\"direction\":[0,4,2]},"
-                 "\"wind\":{\"strength\":50,\"jitter\":3}}}";
+                 "\"wind\":{\"direction\":[0.5,3,0],\"strength\":50,\"jitter\":3}}}";
         }
         ProjectData loaded;
         const PhysicsEnv& b = loaded.physicsEnv;
         Check(LoadProject(file, loaded, &err, nullptr) && b.gravity == 0.0f && Vec3Eq(b.gravityDir, {0, 1, 0.5f}, 1e-6f) &&
                   b.windStrength == 10.0f && b.windJitter == 1.0f && b.windGustFreq == 2.0f && b.windGust == 0.0f &&
-                  Vec3Eq(b.windDir, {0, 0, 1}, 0.0f),
-              "physics world bounded, missing fields default", "gravity %g dir (%g,%g,%g) wind %g jitter %g", b.gravity,
-              b.gravityDir.x, b.gravityDir.y, b.gravityDir.z, b.windStrength, b.windJitter);
+                  Vec3Eq(b.windDir, {0.5f, 0, 0}, 0.0f),
+              "physics world bounded, missing fields default", "gravity %g dir (%g,%g,%g) wind %g jitter %g dir (%g,%g,%g)",
+              b.gravity, b.gravityDir.x, b.gravityDir.y, b.gravityDir.z, b.windStrength, b.windJitter, b.windDir.x,
+              b.windDir.y, b.windDir.z);
     }
     PhysicsEnv bad;
     bad.gravity = std::nanf("");

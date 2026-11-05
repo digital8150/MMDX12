@@ -24,9 +24,10 @@ public:
     bool HasDynamicBodies() const { return dynamicCount_ > 0; }
 
     // Teleports every body to the pose implied by boneWorld, clears velocities, then lets the
-    // simulated bodies settle for `settleSeconds` with that pose held, in the gravity and the wind. The wind's gust
-    // clock restarts too: a render's gusts follow its own start, not how long the editor simulated before.
-    void Reset(const std::vector<DirectX::XMFLOAT4X4>& boneWorld, float settleSeconds);
+    // simulated bodies settle for `settleSeconds` with that pose held, in the gravity and the wind (its gusts held at
+    // `windClock`). The wind's gust clock continues from `windClock` (seconds; the studio passes the timeline time, so
+    // the gusts follow the timeline wherever the simulation starts: viewport, renders, the bake's preroll).
+    void Reset(const std::vector<DirectX::XMFLOAT4X4>& boneWorld, float settleSeconds, float windClock = 0.0f);
 
     // Moves kinematic bodies to boneWorld and advances the simulation by dt seconds
     // (fixed 1/120 s substeps, at most maxSubsteps of them: simulated time beyond that is dropped

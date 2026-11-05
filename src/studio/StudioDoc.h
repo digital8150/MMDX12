@@ -316,6 +316,11 @@ struct StudioDoc {
     // The gravity and the wind, saved in the project ("physicsWorld"); edits go through PhysicsEnvCommand (one undo
     // step per gesture).
     PhysicsEnv physicsEnv;
+    // The physics popup's gesture in progress (not saved, so a new document starts without one): the values before it
+    // and the ImGui id of the control held or typed in.
+    bool physicsEnvEditing = false;
+    uint32_t physicsEnvControl = 0;
+    PhysicsEnv physicsEnvBefore;
     bool showWindVector = true;   // viewport 3D wind-direction arrow
     RowKind curveClipKind = RowKind::Group;  // copied interpolation block: Bone (64 bytes) or Camera (24); Group = empty
     uint8_t curveClip[64] = {};

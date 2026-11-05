@@ -36,7 +36,8 @@ struct PhysicsEnv {
     }
 
     // Non-finite values fall back to the defaults; amounts are clamped (wider than the popup's sliders, so a value
-    // set by a script stays); a direction keeps its heading and is scaled into the -1..1 box of its fields.
+    // set by a script stays); a direction keeps its heading and is scaled into the -1..1 box of its fields. The wind
+    // stays horizontal (the popup edits its X / Z only).
     void Sanitize() {
         const auto finite = [](float v, float fallback, float lo, float hi) {
             return std::isfinite(v) ? std::clamp(v, lo, hi) : fallback;
@@ -49,6 +50,7 @@ struct PhysicsEnv {
         };
         gravity = finite(gravity, kDefaultGravity, 0.0f, 200.0f);
         gravityDir = direction(gravityDir, {0, -1, 0});
+        windDir.y = 0.0f;
         windDir = direction(windDir, {0, 0, 1});
         windStrength = finite(windStrength, 0.0f, 0.0f, 10.0f);
         windGust = finite(windGust, 0.0f, 0.0f, 10.0f);

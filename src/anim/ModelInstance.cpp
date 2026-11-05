@@ -515,7 +515,7 @@ void ModelInstance::RunPhysics(float dt) {
     physicsPose_.resize(n);
     for (int i = 0; i < n; ++i) physicsPose_[i] = bones_[i].world;
     if (physicsResetPending_) {
-        physics_->Reset(physicsPose_, 1.0f);
+        physics_->Reset(physicsPose_, 1.0f, physicsResetClock_);
         physicsResetPending_ = false;
     } else {
         physics_->Step(physicsPose_, dt, physicsMaxSubsteps_);

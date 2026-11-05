@@ -311,7 +311,7 @@ Agents keep misusing the CLI and then blaming the app. These rules are verified 
   - `PhysicsWorld` (Bullet, `Physics.cpp` only) runs between the before- and after-physics bones in `UpdatePose(dt)`.
     Only the character enables it. `App::UpdateScene` derives dt from the motion clock and resets the bodies on seeks/loops.
     `SetGravity` (m/s^2 along a direction; the world runs x 10) and `SetWind` set the environment (default 9.8 down,
-    no wind); `Reset` settles the bodies in both and restarts the wind's gust clock.
+    no wind); `Reset` settles the bodies in both (gusts held) and sets the wind's gust clock (`ResetPhysics(windClock)`).
 - `render`: `Dx12Context` (device, frames, descriptors, `UploadBatch`, PNG capture) and `Renderer`.
   - The renderer runs an ordered `IRenderPass` list (see `Passes.h`): Shadow → Scene → Resolve → PathTrace → SSAO → SSR → Composite → Volumetric → TAA → Upscale → DoF → Bloom → Post → Backdrop → Present. `PassContext::path` decides which passes work (RayTraced: ray-query sun shadows in the scene PS, RTAO, RT reflections; PathTraced: compute path tracer + temporal/à-trous denoiser writing the G-buffer). Passes own their targets via `OnResize`; inputs are bound through per-frame `TransientDescriptors`.
     PT outlines: in PT mode `ScenePass::DrawPtEdges` rasterises a depth pre-pass (`PSDepthAlpha`) + the edges (default or the
@@ -571,6 +571,8 @@ Agents keep misusing the CLI and then blaming the app. These rules are verified 
     the atom icon) edits them, one undo step per gesture (`PhysicsEnvCommand`, which re-seeds the bodies); saved as the
     project's "physicsWorld" (absent = MMD's 9.8 down, no wind; the format version is unchanged). `StudioUpdateModel`
     applies them every frame (viewport and renders), the bake through `BakeOptions::env`; play mode keeps the defaults.
+    Every studio reset starts the gust clock at the timeline time (the bake at its preroll's first frame), so the gusts
+    of the viewport, a render and a bake line up.
   - Models are added inside the studio on worker threads (`StudioJob`, `LoadStudioModel/Stage/Song`), uploaded in
     `StudioPollJobs`. `StudioModel::uid` is stable; removal waits for the GPU and clears the undo history (commands hold
     model indices). Replacing a model's file (outliner menu "모델 바꾸기", the "+" popup in replace mode: `StudioJob::replaceUid`,

@@ -54,8 +54,12 @@ public:
     // for more substeps (spiral of death). Interactive play uses a low cap, offline renders 10.
     void SetPhysicsMaxSubsteps(int n) { physicsMaxSubsteps_ = n > 0 ? n : 1; }
     // The next UpdatePose teleports the bodies to the animated pose and lets them settle
-    // instead of simulating the jump. Call after seeks, loops, and on the first frame.
-    void ResetPhysics() { physicsResetPending_ = true; }
+    // instead of simulating the jump. Call after seeks, loops, and on the first frame. `windClock` is the wind's gust
+    // clock from there on (PhysicsWorld::Reset; the studio passes the timeline time).
+    void ResetPhysics(float windClock = 0.0f) {
+        physicsResetPending_ = true;
+        physicsResetClock_ = windClock;
+    }
 
     // Evaluates morphs -> bones (hierarchy, append, IK) -> physics advanced by physicsDt seconds
     // (if enabled) -> after-physics bones -> skinning matrices.
@@ -125,6 +129,7 @@ private:
     bool physicsEnabled_ = false;
     int physicsMaxSubsteps_ = 10;   // Bullet substep cap per Step (see SetPhysicsMaxSubsteps)
     bool physicsResetPending_ = true;
+    float physicsResetClock_ = 0.0f;        // the wind's gust clock after the pending reset (seconds)
     std::vector<XMFLOAT4X4> physicsPose_;   // scratch: animated bone worlds handed to physics
     std::vector<PhysicsWorld::BoneResult> physicsOut_;  // scratch: simulated bone worlds
     std::vector<int> physicsResult_;        // scratch: per bone, index into physicsOut_ or -1
