@@ -151,6 +151,7 @@ progress.md is the session log. Read its latest entry first.
     and `mmestate` logs a `MMESTATE` line (switch, Ray-MMD switch, workflow, per loaded model: id, resolved MME mode, resolved material ray 0|1),
     `fxpanel <open|close> [effects|shader|mme]` opens / closes the play-mode 화면 효과 side panel on a tab,
     `videorange <all|start end>` sets the lobby video render dialog's range (timecodes or seconds),
+    `rendershutdown 0|1` / `rendershutdownanswer <cancel|now>` drive "완료 후 시스템 종료" (automated runs: a 3 s countdown and a `SYSTEM SHUTDOWN dry run` log line, never a real shutdown),
     `studioexport`/`studioimport <vmd>` and `studiovpdexport`/`studiovpdimport <vpd>` skip the file dialogs; pose editing:
     `studiobone <name>` clicks that bone's joint, `studiogizmo <x|y|z|yz|zx|xy|rx|ry|rz> <dx> <dy> [steps]` drags a gizmo
     part; arm rest-pose correction is `studiorestpose <deg> [both|left|right]` (selected model, one undo step) and
@@ -194,6 +195,7 @@ progress.md is the session log. Read its latest entry first.
   - `studio_project_test`: .mmdxproj save/load round trip, VMD naming/cleanup, atomic writes, prop offset matrix
   - `pbr_tex_probe <pmx> [--dump <dir>] [--verbose]`: PBR (Ray-MMD) map decode per material: paths, channel, mip-0 size, loops, UV scale/flip
   - `gltf_pbr_test`: imported PBR records (`captures/assets_dl` BoomBox.glb maps / channels, Seed-san.vrm = no records; SKIP when absent; `tools/testdata/ext_test.glb` = the S2a glTF extensions + lights)
+  - `spot_shadow_pick_test`: the spot shadow budget (reach test, score, hysteresis)
   - `studio_focus_test`: DoF focus track evaluation, automatic focus (score, hysteresis, rack), focus keys in projects
   - `mmdx12_mcp [--pipe <name>] [--pid <pid>] [--launch] [--timeout <ms>]`: Model Context Protocol stdio bridge
   - `mcp_smoke.py [--handshake-only] [--scenario]`: MCP test client (protocol handshake & end-to-end scenario)
@@ -331,11 +333,14 @@ Agents keep misusing the CLI and then blaming the app. These rules are verified 
     Punctual lights (S7a): `Renderer::kMaxPunctualLights` = 256 lights in the upload (`LightParams::punctual`, one
     `GpuLight` of 112 B per light per constant-buffer slot), `SceneConstants::numLights` stays the count every shader
     loops over. Spot shadow maps keep `kSpotShadowSlices` = 16 slices: `Renderer::PickSpotShadowSlices` scores the
-    casting spots by `intensity x luminance(colour) x range / distance to the eye` and keeps last frame's pick unless
+    casting spots by power x falloff at the caster x cone position x how visible the caster is, and keeps last frame's pick unless
     a newcomer scores 1.5x more (hysteresis, slice kept while the light stays), so the 16 most important spots cast and
     the rest are unshadowed in raster / RT. The vector is uploaded into `SceneConstants::spotViewProj` and through
     `PassContext::spotSlices` to `ShadowPass` / `FillGpuLights`. Point shadows keep their budget (`PointShadowCount`,
-    face size halves when the map no longer fits). The PT / offline GI light pick uses a power CDF
+    face size halves when the map no longer fits). A slice holds characters and props only, so `render/SpotShadowPick.*`
+    (`tools/spot_shadow_pick_test`) gives a slice only to a spot whose cone and range reach a caster (`LightReachesSphere`
+    against `GpuModel::LiveBoundingSphere`, from the bones of the last `UpdateSkinning`; such a map would be empty, so the
+    image is the same) and `ShadowPass::DrawSlice` skips the models outside the light's volume (spots and points). The PT / offline GI light pick uses a power CDF
     (`Renderer::FillLightCdf`: intensity x luminance(colour) x range^2, x the spot cone proxy) uploaded as raw floats and
     bound through the bindless buffer table (`SceneConstants::lightCdfParams` = heap index + count); `shaders/light_pick.hlsli`
     (`LightCdfPick`) samples it. Offline GI keeps its exact all-lights estimator up to 4 lights and takes 4 CDF samples

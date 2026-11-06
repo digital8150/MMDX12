@@ -11,6 +11,7 @@
 #include <algorithm>
 #include <atomic>
 #include <cctype>
+#include <cfloat>
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
@@ -149,6 +150,63 @@ bool GpuModel::Create(Dx12Context& ctx, UploadBatch& batch, const PmxModel& pmx,
             boundsMax_.y = std::max(boundsMax_.y, v.position.y);
             boundsMax_.z = std::max(boundsMax_.z, v.position.z);
         }
+    }
+    // The casters' live bounds. A skinned vertex is a weighted sum of (bone + rotated offset), so it stays within
+    // sum(weight x |vertex - bone|) of the bones' hull, whatever the pose. SDEF rotates about C and moves C with the
+    // blend of cr0 / cr1 (skinning.hlsli), and vertex morphs add their offsets before skinning (all at weight 1).
+    if (role_ == ModelRole::Character && vertexCount_ > 0) {
+        const auto distance = [](const DirectX::XMFLOAT3& a, const DirectX::XMFLOAT3& b) {
+            const float dx = a.x - b.x, dy = a.y - b.y, dz = a.z - b.z;
+            return std::sqrt(dx * dx + dy * dy + dz * dz);
+        };
+        std::vector<float> morphReach(vertexCount_, 0.0f);
+        float morphMax = 0.0f;
+        for (const PmxMorph& morph : pmx.morphs) {
+            if (morph.type != PmxMorphType::Vertex) continue;
+            for (const PmxMorph::VertexOffset& o : morph.vertexOffsets) {
+                if (o.vertex < 0 || (uint32_t)o.vertex >= vertexCount_) continue;
+                float& sum = morphReach[(size_t)o.vertex];
+                sum += distance(o.offset, DirectX::XMFLOAT3{0.0f, 0.0f, 0.0f});
+                morphMax = std::max(morphMax, sum);
+            }
+        }
+        const DirectX::XMFLOAT3 mid{(boundsMin_.x + boundsMax_.x) * 0.5f, (boundsMin_.y + boundsMax_.y) * 0.5f,
+                                    (boundsMin_.z + boundsMax_.z) * 0.5f};
+        const float restRadius = distance(mid, boundsMax_) + morphMax;
+        boneRest_.clear();
+        for (const PmxBone& bone : pmx.bones) boneRest_.push_back(bone.position);
+        if (boneRest_.empty()) {
+            boneRest_.push_back(mid);
+            skinMargin_ = restRadius;
+        } else {
+            for (uint32_t i = 0; i < vertexCount_; ++i) {
+                const PmxVertex& v = pmx.vertices[i];
+                const int32_t b0 = v.boneIndex[0], b1 = v.boneIndex[1];
+                const auto valid = [&](int32_t b) { return b >= 0 && (size_t)b < boneRest_.size(); };
+                float reach = 0.0f;
+                if (v.deform == PmxDeform::SDEF && valid(b0) && valid(b1)) {
+                    const float w0 = v.boneWeight[0], w1 = 1.0f - w0;
+                    const DirectX::XMFLOAT3 rw{v.sdefR0.x * w0 + v.sdefR1.x * w1, v.sdefR0.y * w0 + v.sdefR1.y * w1,
+                                               v.sdefR0.z * w0 + v.sdefR1.z * w1};
+                    const DirectX::XMFLOAT3 cr0{v.sdefC.x + (v.sdefR0.x - rw.x) * 0.5f, v.sdefC.y + (v.sdefR0.y - rw.y) * 0.5f,
+                                                v.sdefC.z + (v.sdefR0.z - rw.z) * 0.5f};
+                    const DirectX::XMFLOAT3 cr1{v.sdefC.x + (v.sdefR1.x - rw.x) * 0.5f, v.sdefC.y + (v.sdefR1.y - rw.y) * 0.5f,
+                                                v.sdefC.z + (v.sdefR1.z - rw.z) * 0.5f};
+                    reach = distance(v.position, v.sdefC) + w0 * distance(cr0, boneRest_[(size_t)b0]) +
+                            w1 * distance(cr1, boneRest_[(size_t)b1]);
+                } else {
+                    for (int w = 0; w < 4; ++w) {
+                        const int32_t b = v.boneIndex[w];
+                        if (valid(b) && v.boneWeight[w] > 0.0f)
+                            reach += v.boneWeight[w] * distance(v.position, boneRest_[(size_t)b]);
+                    }
+                }
+                skinMargin_ = std::max(skinMargin_, reach + morphReach[i]);
+            }
+        }
+        // Until the first pose (and for a boneless model given no matrices), the rest pose: the bones hold identity.
+        liveCenter_ = mid;
+        liveRadius_ = restRadius + 0.01f;
     }
     if (boneCount_ == 0) {
         // No bones: everything bound to bone 0 which holds an identity matrix.
@@ -994,6 +1052,28 @@ void GpuModel::UpdateSkinning(uint64_t frame, const std::vector<DirectX::XMFLOAT
         memcpy(boneMapped_[i], skin.data(), count * 64);
     }
     skinInitialized_ = true;
+    if (!boneRest_.empty() && !skin.empty()) {
+        // Rest position x skin matrix = the bone's position in this pose. The largest axis length is the pose's scale
+        // (the display scale and a placement's scale, possibly non-uniform), which also scales the margin.
+        DirectX::XMFLOAT3 lo{FLT_MAX, FLT_MAX, FLT_MAX}, hi{-FLT_MAX, -FLT_MAX, -FLT_MAX};
+        float scaleSq = 0.0f;
+        const size_t n = std::min(boneRest_.size(), skin.size());
+        for (size_t b = 0; b < n; ++b) {
+            const DirectX::XMFLOAT3& p = boneRest_[b];
+            const DirectX::XMFLOAT4X4& m = skin[b];
+            const float x = p.x * m._11 + p.y * m._21 + p.z * m._31 + m._41;
+            const float y = p.x * m._12 + p.y * m._22 + p.z * m._32 + m._42;
+            const float z = p.x * m._13 + p.y * m._23 + p.z * m._33 + m._43;
+            lo = {std::min(lo.x, x), std::min(lo.y, y), std::min(lo.z, z)};
+            hi = {std::max(hi.x, x), std::max(hi.y, y), std::max(hi.z, z)};
+            scaleSq = std::max({scaleSq, m._11 * m._11 + m._12 * m._12 + m._13 * m._13,
+                                m._21 * m._21 + m._22 * m._22 + m._23 * m._23,
+                                m._31 * m._31 + m._32 * m._32 + m._33 * m._33});
+        }
+        const float ex = (hi.x - lo.x) * 0.5f, ey = (hi.y - lo.y) * 0.5f, ez = (hi.z - lo.z) * 0.5f;
+        liveCenter_ = {lo.x + ex, lo.y + ey, lo.z + ez};
+        liveRadius_ = std::sqrt(ex * ex + ey * ey + ez * ez) + skinMargin_ * std::sqrt(scaleSq) + 0.01f;
+    }
 }
 
 void GpuModel::UpdateMorphs(uint64_t frame, const std::vector<DirectX::XMFLOAT3>& deltas, uint64_t version) {

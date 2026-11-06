@@ -3,6 +3,7 @@
 #include "render/PassCommon.h"
 #include "render/GpuModel.h"
 #include "render/Renderer.h"
+#include "render/SpotShadowPick.h"
 #include "render/RayTracing.h"
 #include "render/Upscaler.h"
 #include "render/ShaderInterop.h"
@@ -170,7 +171,7 @@ uint32_t PointShadowCount(const LightParams& light, uint32_t maxLights) {
 // cascades, 3 + i spot slice i, 19 + i point slice i). Spot/point slices take characters only:
 // preset lights hang on a truss, and re-drawing the stage per slice would be wasteful.
 void ShadowPass::DrawSlice(PassContext& pc, const Texture& map, uint32_t slice, uint32_t matrixIndex,
-                           bool charactersOnly, const DirectX::XMMATRIX* overrideMatrix) {
+                           bool charactersOnly, const DirectX::XMMATRIX* overrideMatrix, const PunctualLight* light) {
     ID3D12GraphicsCommandList* cmd = pc.cmd;
     D3D12_VIEWPORT vp{0, 0, (float)map.width, (float)map.height, 0, 1};
     D3D12_RECT sc{0, 0, (LONG)map.width, (LONG)map.height};
@@ -187,6 +188,11 @@ void ShadowPass::DrawSlice(PassContext& pc, const Texture& map, uint32_t slice, 
     }
     for (GpuModel* model : pc.view.models) {
         if (!model || (charactersOnly && model->Role() != ModelRole::Character)) continue;
+        if (light) {
+            DirectX::XMFLOAT3 center;
+            float radius = 0.0f;
+            if (model->LiveBoundingSphere(center, radius) && !LightReachesSphere(*light, center, radius)) continue;
+        }
         BindModelBuffers(cmd, *model, pc.frame);
         cmd->SetGraphicsRootShaderResourceView(2, model->BoneBuffer(pc.frame));
         ID3D12PipelineState* bound = nullptr;
@@ -248,8 +254,10 @@ void ShadowPass::Execute(PassContext& pc) {
     if (spot) {
         if (spots) {
             spot.Transition(cmd, D3D12_RESOURCE_STATE_DEPTH_WRITE);
-            for (size_t i = 0; i < spotPick.size(); ++i)
-                if (spotPick[i] >= 0) DrawSlice(pc, spot, (uint32_t)spotPick[i], kShadowCascades + (uint32_t)spotPick[i], true);
+            for (size_t i = 0; i < spotPick.size() && i < pc.view.light.punctual.size(); ++i)
+                if (spotPick[i] >= 0)
+                    DrawSlice(pc, spot, (uint32_t)spotPick[i], kShadowCascades + (uint32_t)spotPick[i], true, nullptr,
+                              &pc.view.light.punctual[i]);
         }
         spot.Transition(cmd, kSrv);
     }
@@ -276,7 +284,7 @@ void ShadowPass::Execute(PassContext& pc) {
                 for (uint32_t f = 0; f < 6; ++f) {
                     const DirectX::XMMATRIX view = DirectX::XMMatrixLookToLH(eye, kFaces[f].dir, kFaces[f].up);
                     const DirectX::XMMATRIX vp = view * proj;
-                    DrawSlice(pc, point, pointIdx * 6 + f, kShadowCascades + kSpotShadowSlices + pointIdx * 6 + f, true, &vp);
+                    DrawSlice(pc, point, pointIdx * 6 + f, kShadowCascades + kSpotShadowSlices + pointIdx * 6 + f, true, &vp, &p);
                 }
                 ++pointIdx;
             }

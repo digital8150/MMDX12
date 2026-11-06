@@ -289,18 +289,18 @@ std::filesystem::path App::StudioRecoveryFile() const {
     return ExecutableDir() / L"recovery" / L"autosave.mmdxproj";
 }
 
-void App::StudioAutosave(bool force, bool wait) {
+bool App::StudioAutosave(bool force, bool wait) {
     if (studioAutosave_.valid() && studioAutosave_.wait_for(std::chrono::seconds(0)) == std::future_status::ready)
         studioAutosave_.get();
-    if (!studio_) return;
+    if (!studio_) return true;
     StudioDoc& d = *studio_;
     if (!force) {
-        if (timeSeconds_ - studioAutosaveAt_ < kAutosaveSeconds) return;
+        if (timeSeconds_ - studioAutosaveAt_ < kAutosaveSeconds) return true;
         studioAutosaveAt_ = timeSeconds_;
-        if (!d.Dirty() || d.ChangeStamp() == d.autosavedStamp) return;
+        if (!d.Dirty() || d.ChangeStamp() == d.autosavedStamp) return true;
     }
     if (studioAutosave_.valid()) {
-        if (!wait) return;  // the previous one is still writing: try again at the next tick
+        if (!wait) return true;  // the previous one is still writing: try again at the next tick
         studioAutosave_.get();
     }
     // The snapshot (a copy of the motions) is taken here; serialising and writing happen on a worker thread so a
@@ -320,7 +320,7 @@ void App::StudioAutosave(bool force, bool wait) {
             LOG_WARN("studio: autosave failed: %s", err.c_str());
         return ok;
     });
-    if (wait) studioAutosave_.get();
+    return wait ? studioAutosave_.get() : true;
 }
 
 void App::StudioDiscardRecovery() {

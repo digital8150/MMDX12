@@ -1203,6 +1203,12 @@ bool App::ExecuteUiCommand(const std::string& cmd, const std::vector<std::string
             settings_.Save(settingsPath_);
             ApplyRenderSettings();
         }
+    } else if (cmd == "rendershutdown") {  // rendershutdown 0|1: the "완료 후 시스템 종료" switch (scripted runs: dry run)
+        shutdownAfterRender_ = !args.empty() && args[0] != "0";
+        LOG_INFO("SYSTEM SHUTDOWN switch %d", shutdownAfterRender_ ? 1 : 0);
+    } else if (cmd == "rendershutdownanswer") {  // rendershutdownanswer <cancel|now>: presses the countdown's button
+        if (!args.empty() && args[0] == "now") shutdownDeadline_ = timeSeconds_;
+        else CancelShutdownCountdown();
     } else if (cmd == "videorange") {  // videorange <all|start end>: the lobby video render dialog's range
         if (!args.empty() && ToLowerAscii(args[0]) == "all") {
             videoRangeCustom_ = false;

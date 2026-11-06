@@ -16,6 +16,7 @@
 #include "app/UiKit.h"
 #include "asset/ImageLoader.h"
 #include "core/Log.h"
+#include "core/SystemShutdown.h"
 #include "core/TextUtil.h"
 #include "core/Timecode.h"
 #include "imgui.h"
@@ -984,6 +985,7 @@ void App::FinishOffline(bool cancelled) {
     const bool video = offline_.mode == OfflineMode::Video;
     const bool cli = offline_.fromCli;
     const bool lobby = (video || probe) && offline_.fromLobby;
+    bool delivered = offline_.mode == OfflineMode::Still && !cancelled;   // the file the user waits for is on disk
     offline_.finishing = true;
     if (offline_.realtime) ApplyRenderSettings();   // back from the video's fixed-resolution settings
     renderer_.EndFrameReadback();                   // the last recorded frame may not have been signalled yet
@@ -991,10 +993,11 @@ void App::FinishOffline(bool cancelled) {
         // transparent export: the PNG sequence is written by the sink's worker thread
         if (offline_.sink) {
             if (cancelled) offline_.sink->Abort();
-            else offline_.sink->Finish();
+            else delivered = offline_.sink->Finish();
             offline_.sink.reset();
         }
         const int written = offline_.frame;
+        delivered = delivered && written > 0;
         if (written == 0) {
             if (!toast_.error || toast_.until < timeSeconds_)
                 toast_ = {Tr("영상 렌더를 취소했습니다"), "", {}, false, timeSeconds_ + 6.0};
@@ -1022,6 +1025,7 @@ void App::FinishOffline(bool cancelled) {
         // Count after Finish / Abort: the worker encodes behind this thread, so before the drain a short render
         // could still read 0 here and the finished file was deleted below.
         const uint32_t written = offline_.sink->FramesWritten();
+        delivered = video && !cancelled && sinkOk && written > 0;
         if (!sinkOk && !cancelled) {
             if (!toast_.error) toast_ = {Tr("영상 인코딩에 실패했습니다"), "", {}, true, timeSeconds_ + 8.0};
         }
@@ -1062,12 +1066,18 @@ void App::FinishOffline(bool cancelled) {
         }
     }
     LOG_INFO("offline render %s: %s", cancelled ? "cancelled" : "finished", PathToUtf8(offline_.output).c_str());
+    // A cancelled or failed render never powers the PC off: the user has to see why there is no file. A job that ends
+    // behind the open dialog (an MCP render) is not the one its switch was set for.
+    if (!videoDialogOpen_) {
+        if (shutdownAfterRender_ && delivered) BeginShutdownCountdown(cli);
+        shutdownAfterRender_ = false;
+    }
     lastRenderedTime_ = -1.0;  // next real-time frame is a camera cut (no stale history)
     if (offline_.studio) {
         StudioRestoreAfterRender();   // reads offline_ (the editor's time and camera mode)
         offline_ = OfflineJob{};
         screen_ = studio_ ? Screen::Studio : Screen::Select;
-        if (cli) running_ = false;
+        if (cli && !shutdownPending_) running_ = false;
         return;
     }
     playTime_ = offline_.startSeconds;
@@ -1080,7 +1090,103 @@ void App::FinishOffline(bool cancelled) {
     } else {
         screen_ = Screen::Play;
     }
-    if (cli) running_ = false;
+    if (cli && !shutdownPending_) running_ = false;
+}
+
+void App::DrawShutdownSwitch(const char* id, float width) {
+    const std::string child = std::string(id) + "_area";
+    ImGui::BeginChild(child.c_str(), ImVec2(width, ui::Dp(34.0f)), ImGuiChildFlags_None,
+                      ImGuiWindowFlags_NoBackground | ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
+    ui::Switch(id, Tr("완료 후 시스템 종료"), &shutdownAfterRender_);
+    if (ImGui::IsItemHovered()) ui::Tooltip(Tr("저장이 끝나면 60초 뒤 PC 전원을 끕니다 (이번 렌더만)"));
+    ImGui::EndChild();
+}
+
+void App::BeginShutdownCountdown(bool quitIfCancelled) {
+    // Automated runs never touch the machine (ExecuteSystemShutdown) and must not wait a minute for it either.
+    constexpr double kCountdownSeconds = 60.0, kHeadlessCountdownSeconds = 3.0;
+    shutdownPending_ = true;
+    shutdownQuitIfCancelled_ = quitIfCancelled;
+    shutdownDeadline_ = timeSeconds_ + (HeadlessRun() ? kHeadlessCountdownSeconds : kCountdownSeconds);
+    LOG_INFO("SYSTEM SHUTDOWN countdown started");
+}
+
+void App::CancelShutdownCountdown() {
+    if (!shutdownPending_) return;
+    shutdownPending_ = false;
+    LOG_INFO("SYSTEM SHUTDOWN countdown cancelled");
+    if (shutdownQuitIfCancelled_) running_ = false;
+}
+
+void App::ExecuteSystemShutdown() {
+    shutdownPending_ = false;
+    if (HeadlessRun()) {
+        LOG_INFO("SYSTEM SHUTDOWN dry run: an automated run never powers the machine off");
+        if (shutdownQuitIfCancelled_) running_ = false;
+        return;
+    }
+    // Before Windows is told: the session may end at any moment after that.
+    settings_.Save(settingsPath_);
+    if (studio_ && studio_->Dirty() && !StudioAutosave(true, true)) {
+        LOG_ERROR("system shutdown stopped: the recovery file could not be written");
+        toast_ = {Tr("시스템을 종료하지 못했습니다"), Tr("저장하지 않은 스튜디오 작업을 복구 파일에 쓰지 못했습니다"), {}, true,
+                  timeSeconds_ + 10.0};
+        return;
+    }
+    std::string error;
+    if (RequestSystemShutdown(&error)) {
+        LOG_INFO("SYSTEM SHUTDOWN requested");
+        running_ = false;
+        return;
+    }
+    LOG_ERROR("system shutdown failed: %s", error.c_str());
+    toast_ = {Tr("시스템을 종료하지 못했습니다"), error, {}, true, timeSeconds_ + 10.0};
+    if (shutdownQuitIfCancelled_) running_ = false;
+}
+
+void App::DrawShutdownCountdown() {
+    using namespace ui;
+    // Armed in a dialog whose job never started (cancelled, or the lobby's scene failed to load): do not carry it over
+    // to some later render. A unit song's formation modal and the scene load still lead to the job.
+    if (shutdownAfterRender_ && !videoDialogOpen_ && !formationModal_.open && offline_.mode == OfflineMode::None &&
+        screen_ != Screen::Loading)
+        shutdownAfterRender_ = false;
+    if (!shutdownPending_) return;
+    if (timeSeconds_ >= shutdownDeadline_) {
+        ExecuteSystemShutdown();
+        return;
+    }
+    const ImVec2 ds = ImGui::GetIO().DisplaySize;
+    ImGui::OpenPopup("##shutdowncountdown");
+    ImGui::SetNextWindowPos(ImVec2(ds.x * 0.5f, ds.y * 0.5f), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
+    ImGui::SetNextWindowSize(ImVec2(Dp(420.0f), 0.0f));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(Dp(24.0f), Dp(22.0f)));
+    ImGui::PushStyleColor(ImGuiCol_PopupBg, ImGui::ColorConvertU32ToFloat4(P().surface));
+    if (ImGui::BeginPopupModal("##shutdowncountdown", nullptr,
+                               ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize)) {
+        ImDrawList* dl = ImGui::GetWindowDrawList();
+        const Palette& p = P();
+        const ImVec2 c = ImGui::GetCursorScreenPos();
+        Text(dl, Font::Semibold, size::Title, c, p.ink, Tr("렌더를 마쳤습니다"));
+        char line[96];
+        std::snprintf(line, sizeof(line), Tr("%d초 후 시스템을 종료합니다"),
+                      (int)std::ceil(std::max(0.0, shutdownDeadline_ - timeSeconds_)));
+        Text(dl, Font::Regular, size::Body, ImVec2(c.x, c.y + Dp(32.0f)), p.ink2, line);
+        ImGui::Dummy(ImVec2(Dp(372.0f), Dp(64.0f)));
+        const bool cancel = Button("##shutdowncancel", Tr("종료 취소"), icon::X, ButtonKind::Primary, ImVec2(180, 40));
+        ImGui::SameLine(0.0f, Dp(10.0f));
+        const bool now = Button("##shutdownnow", Tr("지금 종료"), nullptr, ButtonKind::Secondary, ImVec2(180, 40));
+        if (cancel || ImGui::IsKeyPressed(ImGuiKey_Escape)) {
+            ImGui::CloseCurrentPopup();
+            CancelShutdownCountdown();
+        } else if (now) {
+            ImGui::CloseCurrentPopup();
+            shutdownDeadline_ = timeSeconds_;
+        }
+        ImGui::EndPopup();
+    }
+    ImGui::PopStyleColor();
+    ImGui::PopStyleVar();
 }
 
 // ---------------------------------------------------------------------------
@@ -1115,7 +1221,10 @@ void App::DrawOfflineOverlay() {
     // ---- preview: the exact image handed to the encoder, letterboxed (the live viewport is hidden)
     const bool hasPreview = video && offline_.previewFrame >= 0 && offline_.previewW > 0 && offline_.previewH > 0;
     const uint64_t previewTex = hasPreview ? renderer_.OfflinePreviewTexture() : 0;
-    const float panelH = Dp(video ? 168.0f : 128.0f);
+    // the shutdown switch's row; not on a sample render (it delivers no file) or a plain command-line job (which never
+    // powers the machine off, ExecuteSystemShutdown)
+    const bool shutdownRow = !probe && (!HeadlessRun() || !options_.uiScript.empty());
+    const float panelH = Dp((video ? 168.0f : 128.0f) + (shutdownRow ? 36.0f : 0.0f));
     const ImVec2 panelTop((ds.x - std::min(ds.x - Dp(40.0f), Dp(720.0f))) * 0.5f, ds.y - Dp(24.0f) - panelH);
     if (previewTex) {
         dl->AddRectFilled(ImVec2(0, 0), ds, IM_COL32(0, 0, 0, 255));
@@ -1213,6 +1322,11 @@ void App::DrawOfflineOverlay() {
                                ? (float)((offline_.frame + (double)pr.fraction) / offline_.frameCount)
                                : 0.0f;
         ProgressBar(dl, ImVec2(x0, y + Dp(128.0f)), ImVec2(x1, y + Dp(134.0f)), frac);
+    }
+
+    if (shutdownRow) {
+        ImGui::SetCursorScreenPos(ImVec2(x0, b.y - Dp(64.0f)));
+        DrawShutdownSwitch("##offshutdown", x1 - x0);
     }
 
     // last line: format + output file name

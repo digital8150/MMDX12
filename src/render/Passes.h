@@ -1,8 +1,8 @@
 // The frame's pass list, in execution order (pc.path decides which ones do work):
 //   ShadowPass    cascaded shadow map (depth only, skinned)                       Raster, or any path
 //                 with volumetrics on (the volumetric march samples it); spot shadow maps of the
-//                 characters for the first 8 spot lights (SpotShadowsWanted: raster/RT scene
-//                 shading and volumetrics)
+//                 characters for the spots Renderer::PickSpotShadowSlices chose (SpotShadowsWanted:
+//                 raster/RT scene shading and volumetrics)
 //   LightCull     S7c: clustered light lists (16 x 9 x 24 froxels over the main camera), a no-op            raster/RT
 //                 at <= kClusterMinLights lights or offscreen (runs right before ScenePass)
 //   ScenePass     sky, studio floor, MMD materials + edges -> MSAA colour/normal/velocity/depth
@@ -66,8 +66,9 @@ public:
     void Execute(PassContext& pc) override;
 
 private:
+    // `light`: skip the models outside this light's lit volume (their shadow could not land on anything it lights).
     void DrawSlice(PassContext& pc, const Texture& map, uint32_t slice, uint32_t matrixIndex, bool charactersOnly,
-                   const DirectX::XMMATRIX* overrideMatrix = nullptr);
+                   const DirectX::XMMATRIX* overrideMatrix = nullptr, const PunctualLight* light = nullptr);
     ComPtr<ID3D12RootSignature> rootSig_;
     ComPtr<ID3D12PipelineState> psoOpaque_, psoAlpha_;
 };

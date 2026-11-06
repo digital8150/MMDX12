@@ -1063,7 +1063,7 @@ void App::MainLoop() {
         }
         if (!running_) break;
         // An offline render (video/still) keeps going while minimized.
-        if (minimized_ && offline_.mode == OfflineMode::None) {
+        if (minimized_ && offline_.mode == OfflineMode::None && !shutdownPending_) {
             PumpMcp(true);
             Sleep(16);
             continue;
@@ -1175,6 +1175,7 @@ void App::RenderFrame() {
         DrawRayMmeConfirm();
         break;
     }
+    DrawShutdownCountdown();
 
     ImGui::Render();
 
