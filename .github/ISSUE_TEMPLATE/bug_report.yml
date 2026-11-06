@@ -1,0 +1,92 @@
+name: Bug report
+description: Something crashes, renders incorrectly or does not work as expected.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        English, Korean, Japanese and Chinese are all fine.
+        For a security problem, use the private report form in SECURITY.md instead.
+  - type: input
+    id: version
+    attributes:
+      label: MMDX12 version
+      description: The release number, or the commit if you built it yourself.
+      placeholder: "3.3.0"
+    validations:
+      required: true
+  - type: input
+    id: gpu
+    attributes:
+      label: GPU and driver version
+      placeholder: "AMD RX 6650 XT, driver 25.10.1"
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Where does it happen?
+      multiple: true
+      options:
+        - Library or lobby
+        - Play mode
+        - Studio
+        - Video or still render
+        - Shader packs or effects
+        - MME or Ray-MMD
+        - Stages or gallery
+        - Updater or installation
+        - Other
+    validations:
+      required: true
+  - type: dropdown
+    id: renderer
+    attributes:
+      label: Render path
+      description: Choose every path where you see the problem.
+      multiple: true
+      options:
+        - Raster
+        - Ray traced
+        - Path traced
+        - Offline GI
+        - Not related to rendering
+        - Not sure
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Load ...
+        2. Click ...
+        3. See ...
+    validations:
+      required: true
+  - type: textarea
+    id: result
+    attributes:
+      label: Expected and actual result
+    validations:
+      required: true
+  - type: textarea
+    id: log
+    attributes:
+      label: mmdx12.log
+      description: >-
+        Attach mmdx12.log from the folder that holds MMDX12.exe, right after the problem happens.
+        If you have already restarted the app, attach mmdx12.previous.log.
+        The log can contain your Windows user name in file paths, so edit it out if you prefer.
+    validations:
+      required: true
+  - type: textarea
+    id: media
+    attributes:
+      label: Screenshots or video
+      description: Helpful for anything visual.
+  - type: textarea
+    id: assets
+    attributes:
+      label: Models, motions or stages involved
+      description: Names, or public download links if the problem depends on a specific file. Do not attach files you have no right to share.
