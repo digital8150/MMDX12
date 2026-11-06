@@ -553,6 +553,8 @@ void App::DrawVideoRenderDialog() {
 
     // On the right: 취소 and 렌더링 시작
     const float startW = Dp(176.0f), cancelW = Dp(96.0f);
+    ImGui::SetCursorScreenPos(ImVec2(x0, y5 + Dp(3.0f)));
+    DrawShutdownSwitch("##vidshutdown", x1 - startW - Dp(10.0f) - cancelW - Dp(16.0f) - x0);
     ImGui::SetCursorScreenPos(ImVec2(x1 - startW - Dp(10.0f) - cancelW, y5));
     const bool cancel = Button("##vidcancel", Tr("취소"), nullptr, ButtonKind::Secondary, ImVec2(96, 40));
     ImGui::SameLine(0.0f, Dp(10.0f));

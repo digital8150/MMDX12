@@ -766,7 +766,8 @@ private:
     bool StudioSaveTo(const std::filesystem::path& file);
     studio::ProjectData StudioProjectData() const;    // snapshot of the document (copies the motions)
     std::filesystem::path StudioRecoveryFile() const; // <exe>/recovery/autosave.mmdxproj
-    void StudioAutosave(bool force, bool wait);       // timer: writes the recovery file on a worker thread
+    // timer: writes the recovery file on a worker thread; false = `wait` saw that write fail
+    bool StudioAutosave(bool force, bool wait);
     void StudioDiscardRecovery();                     // waits for a running autosave, deletes the recovery files
     // replaceUid != 0: the loaded model replaces that model's file (StudioReplaceModel) instead of being added.
     // `material` (non-null) overrides the resolved material choice for the loaded model (P5: a material-source change
@@ -878,7 +879,7 @@ private:
     void DrawStudioHelp();                            // shortcut overlay (? key / top bar button)
     bool StudioModal() const { return videoDialogOpen_ || studioHelpOpen_ || studioLeaveConfirm_ || studioLightPresetPending_ >= 0 ||
                                        studioStopwatchOff_ || studioBakeDialogOpen_ || studioBakeRunning_ ||
-                                       studioRestPoseOpen_; }
+                                       studioRestPoseOpen_ || shutdownPending_; }
 
     // --- scripted UI input for tests (UiScript.cpp) and MCP
     void PumpUiScript();  // before ImGui::NewFrame: feeds the events due at framesInScene_
@@ -1008,6 +1009,12 @@ private:
     void EncodeOfflineImage(ImageRGBA8&& img, double renderSeconds);
     void FinishOffline(bool cancelled);  // Offline -> Play (paused); closes the encoder; toast
     void DrawOfflineOverlay();  // progress panel over the preview (screen_ == Offline)
+    // "완료 후 시스템 종료": a job that delivered its file starts a cancellable countdown, then powers the PC off.
+    void DrawShutdownSwitch(const char* id, float width);
+    void BeginShutdownCountdown(bool quitIfCancelled);
+    void DrawShutdownCountdown();   // the countdown modal, over any screen
+    void CancelShutdownCountdown();
+    void ExecuteSystemShutdown();
     void DrawVideoRenderDialog();  // video render settings + start (Select, UiVideoDialog.cpp)
     void ResetVideoRange();        // whole song + empty text fields (called where the dialog / song changes)
     // formation modal (UiFormation.cpp)
@@ -1463,6 +1470,10 @@ private:
     } offline_;
     CameraParams lastLiveCamera_;       // camera of the last real-time frame (still motion blur)
     bool haveLastLiveCamera_ = false;
+    bool shutdownAfterRender_ = false;  // armed for the job in progress / about to start: one job, never saved
+    bool shutdownPending_ = false;      // the countdown is running
+    bool shutdownQuitIfCancelled_ = false;  // the job came from the command line: it would have quit by now
+    double shutdownDeadline_ = 0.0;     // timeSeconds_ of the shutdown
     bool videoDialogOpen_ = false;      // the select screen's video render dialog
     // Video render range (select screen dialog; not persisted). Whole song by default.
     bool videoRangeCustom_ = false;     // false: whole song, true: the custom [videoRangeSec_]

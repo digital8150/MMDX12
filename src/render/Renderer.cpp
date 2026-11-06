@@ -3,6 +3,7 @@
 #include "render/Passes.h"
 #include "render/MmeRuntime.h"
 #include "render/MmeSkin.h"
+#include "render/SpotShadowPick.h"
 #include "asset/ImageLoader.h"
 #include "asset/PmxModel.h"
 #include "core/I18n.h"
@@ -1269,7 +1270,7 @@ void Renderer::FillSceneConstants(const FrameView& view, uint32_t w, uint32_t h,
     if (targets_.spotShadowMap && SpotShadowsWanted(settings_, EffectivePath(), offscreen)) {
         // Offscreen renders (thumbnails, offline) must not move the on-screen choice's hysteresis state.
         const std::vector<int> keepPrev = offscreen ? prevSpotPick_ : std::vector<int>{};
-        pick = PickSpotShadowSlices(view.light, cam);
+        pick = PickSpotShadowSlices(view.light, cam, view.models, aspect);
         if (offscreen) prevSpotPick_ = keepPrev;
         for (size_t i = 0; i < pick.size(); ++i) {
             if (pick[i] < 0) continue;
@@ -1443,56 +1444,23 @@ uint32_t Renderer::FillGpuFogVolumes(const LightParams& light, GpuFogVolume* out
 }
 
 // S7a: the spot shadow budget. At most kSpotShadowSlices spots cast shadows (the map has one slice per light); the
-// rest are unshadowed in raster. Score = intensity * luminance(colour) * range / distance to the eye (a bright, close
-// light matters most). A light keeps last frame's slice unless a newcomer scores kSpotPickHysteresis times more, so
-// the choice does not flicker between similar lights.
-std::vector<int> Renderer::PickSpotShadowSlices(const LightParams& light, const CameraParams& camera) {
-    constexpr float kSpotPickHysteresis = 1.5f;
+// rest are unshadowed in raster. A spot that reaches no caster takes no slice: its map would be empty.
+std::vector<int> Renderer::PickSpotShadowSlices(const LightParams& light, const CameraParams& camera,
+                                                const std::vector<GpuModel*>& models, float aspect) {
     const size_t count = std::min<size_t>(light.punctual.size(), kMaxPunctualLights);
-    std::vector<int> pick(count, -1);
-    std::vector<float> score(count, -1.0f);
-    for (size_t i = 0; i < count; ++i) {
-        const PunctualLight& p = light.punctual[i];
-        if (p.spotCosOuter <= -1.0f || p.shadow == LightShadowType::NoCast) continue;
-        const float dx = p.position.x - camera.eye.x, dy = p.position.y - camera.eye.y, dz = p.position.z - camera.eye.z;
-        const float dist = std::max(std::sqrt(dx * dx + dy * dy + dz * dz), 1.0f);
-        const float lum = 0.2126f * p.color.x + 0.7152f * p.color.y + 0.0722f * p.color.z;
-        score[i] = p.intensity * lum * std::max(p.range, 0.0f) / dist;
+    std::vector<SpotCaster> casters;
+    for (const GpuModel* model : models) {
+        if (!model || model->Role() != ModelRole::Character) continue;
+        bool casts = false;
+        for (const GpuModel::Material& m : model->Materials()) casts = casts || (m.castShadow && m.indexCount > 0);
+        SpotCaster c;
+        if (!casts || !model->LiveBoundingSphere(c.center, c.radius)) continue;
+        c.viewWeight = CasterViewWeight(camera, aspect, c.center, c.radius);
+        casters.push_back(c);
     }
-    // 1. last frame's choice stays (same slice) while the light still qualifies
-    bool sliceUsed[kSpotShadowSlices] = {};
-    for (size_t i = 0; i < count && i < prevSpotPick_.size(); ++i) {
-        const int s = prevSpotPick_[i];
-        if (s < 0 || s >= (int)kSpotShadowSlices || score[i] <= 0.0f || sliceUsed[s]) continue;
-        pick[i] = s;
-        sliceUsed[s] = true;
-    }
-    // 2. newcomers in score order fill the free slices, or replace the weakest pick when they score clearly higher
-    std::vector<size_t> newcomers;
-    for (size_t i = 0; i < count; ++i)
-        if (score[i] > 0.0f && pick[i] < 0) newcomers.push_back(i);
-    std::stable_sort(newcomers.begin(), newcomers.end(), [&](size_t a, size_t b) { return score[a] > score[b]; });
-    for (size_t i : newcomers) {
-        int free = -1;
-        for (uint32_t s = 0; s < kSpotShadowSlices; ++s)
-            if (!sliceUsed[s]) { free = (int)s; break; }
-        if (free >= 0) {
-            pick[i] = free;
-            sliceUsed[free] = true;
-            continue;
-        }
-        // full: replace the weakest pick only when the newcomer scores kSpotPickHysteresis times more
-        int weakest = -1;
-        float weakestScore = 0.0f;
-        for (size_t j = 0; j < count; ++j) {
-            if (pick[j] < 0 || score[j] <= 0.0f) continue;
-            if (weakest < 0 || score[j] < weakestScore) { weakest = (int)j; weakestScore = score[j]; }
-        }
-        if (weakest < 0 || score[i] < weakestScore * kSpotPickHysteresis) continue;
-        const int freedSlice = pick[(size_t)weakest];
-        pick[(size_t)weakest] = -1;
-        pick[i] = freedSlice;   // the newcomer takes the replaced light's slice
-    }
+    std::vector<float> score(count, 0.0f);
+    for (size_t i = 0; i < count; ++i) score[i] = SpotShadowScore(light.punctual[i], casters, settings_.volumetric);
+    std::vector<int> pick = PickSpotSlices(score, prevSpotPick_, kSpotShadowSlices);
     prevSpotPick_ = pick;
     return pick;
 }
@@ -1841,16 +1809,18 @@ void Renderer::RecordScene(ID3D12GraphicsCommandList* cmd, const FrameView& view
                                   : kMaxPunctualLights;
     FillGpuLights(view.light, lights.data(), &spotSlices_, pointCap);
     memcpy(lightBufMapped_ + (size_t)cbSlot * kLightBytes, lights.data(), lights.size() * sizeof(GpuLight));
-    // S7a: one LIGHTS line per scene (the punctual setup changed): count, shadowed spots and shadowed points.
+    // S7a: one LIGHTS line per scene (the punctual setup changed): count, shadowed spots and shadowed points. The
+    // shadowed spots follow the performers, so a change of that count alone is not a new line; it only logs a new high.
     {
         uint32_t spotCount = 0;
         for (int s : spotSlices_) spotCount += s >= 0 ? 1u : 0u;
         const uint32_t pointCount = PointShadowCount(view.light, kMaxPunctualLights);
         const uint32_t clusterGrid = (uint32_t)sc.lightClusterParams.y;
-        if (lightCount != loggedLights_[0] || spotCount != loggedLights_[1] || pointCount != loggedLights_[2] ||
+        if (lightCount != loggedLights_[0] || spotCount > loggedLights_[1] || pointCount != loggedLights_[2] ||
             clusterGrid != loggedClusterGrid_) {
+            if (lightCount != loggedLights_[0]) loggedLights_[1] = 0;
             loggedLights_[0] = lightCount;
-            loggedLights_[1] = spotCount;
+            loggedLights_[1] = std::max(loggedLights_[1], spotCount);
             loggedLights_[2] = pointCount;
             loggedClusterGrid_ = clusterGrid;
             // S7c: clusters = the scene shaders read a froxel list this frame; maxPerCluster is not read back from the

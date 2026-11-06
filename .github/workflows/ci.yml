@@ -44,7 +44,7 @@ jobs:
             'studio_edit_test', 'studio_light_test', 'studio_project_test', 'studio_gizmo_test', 'studio_pose_test',
             'studio_focus_test', 'restpose_retarget_test', 'rest_pose_test', 'shader_choice_test', 'look_preset_test',
             'world_track_test', 'gallery_index_test', 'stage_store_test', 'pack_guard_test', 'mme_parse_test --selftest',
-            'mme_script_test', 'dds_test', 'raymat_test', 'pack_suggest_test'
+            'mme_script_test', 'dds_test', 'raymat_test', 'pack_suggest_test', 'spot_shadow_pick_test'
           )
           $failed = @()
           foreach ($t in $tests) {
