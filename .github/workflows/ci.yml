@@ -1,5 +1,6 @@
 # Build + CPU-only tests on GitHub-hosted Windows runners (no GPU: rendering QA stays local, see CLAUDE.md).
 # Runs for pull requests (also from forks: read-only token, no secrets) and pushes to master.
+# Changes that only touch documentation skip the build; everything else builds through a compile cache.
 name: CI
 
 on:
@@ -16,7 +17,54 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # Says "false" only when every changed file is documentation. An API error, an empty list or a list too long
+  # to trust all say "true", and a failure of this job also leaves the build below running.
+  changes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      code: ${{ steps.filter.outputs.code }}
+    steps:
+      - id: filter
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT: ${{ github.event_name }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+          BEFORE: ${{ github.event.before }}
+          AFTER: ${{ github.sha }}
+        run: |
+          case "$EVENT" in
+            pull_request)
+              files=$(gh api --paginate "repos/$REPO/pulls/$PR/files" \
+                --jq '.[] | .filename, (.previous_filename // empty)') || files= ;;
+            push)
+              files=$(gh api "repos/$REPO/compare/$BEFORE...$AFTER" \
+                --jq 'if (.files | length) >= 300 then error("too many files") else .files[] | .filename, (.previous_filename // empty) end') || files= ;;
+            *)
+              files= ;;
+          esac
+          code=false
+          if [ -z "$files" ] || [ "$(printf '%s\n' "$files" | wc -l)" -ge 3000 ]; then
+            code=true
+          else
+            while IFS= read -r f; do
+              case "$f" in
+                *.md|docs/*|.github/ISSUE_TEMPLATE/*) ;;
+                *) echo "Needs a build: $f"; code=true; break ;;
+              esac
+            done <<< "$files"
+          fi
+          echo "code=$code"
+          echo "code=$code" >> "$GITHUB_OUTPUT"
+
   windows:
+    needs: changes
+    # GitHub reports a job skipped by this condition as passed, so the required check still completes.
+    if: ${{ !cancelled() && needs.changes.outputs.code != 'false' }}
     runs-on: windows-2025
     timeout-minutes: 60
     steps:
@@ -30,12 +78,54 @@ jobs:
       - name: Ninja
         run: pip install ninja
 
+      # compiler_check=content: a new runner image with the same compiler keeps the cache.
+      - name: Ccache
+        env:
+          VERSION: 4.14.2
+          SHA256: 6993ce645e53192cec592ee23186200b574ac4c59097ecde8d9cfd681b47ae84
+        run: |
+          $zip = "$env:RUNNER_TEMP\ccache.zip"
+          $bin = "$env:RUNNER_TEMP\ccache-bin"
+          Invoke-WebRequest "https://github.com/ccache/ccache/releases/download/v$env:VERSION/ccache-$env:VERSION-windows-x86_64.zip" -OutFile $zip
+          if ((Get-FileHash $zip -Algorithm SHA256).Hash -ne $env:SHA256) { throw "ccache checksum mismatch" }
+          Expand-Archive $zip $bin
+          (Get-ChildItem $bin -Recurse -Filter ccache.exe).DirectoryName | Add-Content $env:GITHUB_PATH
+          "CCACHE_DIR=$env:RUNNER_TEMP\ccache" | Add-Content $env:GITHUB_ENV
+          "CCACHE_MAXSIZE=2G" | Add-Content $env:GITHUB_ENV
+          "CCACHE_COMPILERCHECK=content" | Add-Content $env:GITHUB_ENV
+
+      # A pull request reads master's cache and its own; what it saves is never read by master or other pull requests.
+      - name: Restore the compile cache
+        uses: actions/cache/restore@v6
+        with:
+          path: ${{ runner.temp }}/ccache
+          key: ccache-windows-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: ccache-windows-
+
+      # No debug information here: /Zi cannot be cached, and nothing in CI reads the PDBs.
       - name: Configure
-        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo
+        run: >-
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo
+          -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
+          "-DCMAKE_C_FLAGS_RELWITHDEBINFO=/O2 /Ob1 /DNDEBUG" "-DCMAKE_CXX_FLAGS_RELWITHDEBINFO=/O2 /Ob1 /DNDEBUG"
 
       # The ALL build also runs tools/i18n_check.py (missing / duplicate translation keys, printf mismatches).
       - name: Build
-        run: cmake --build build
+        run: |
+          ccache --zero-stats
+          cmake --build build
+
+      - name: Compile cache statistics
+        if: ${{ !cancelled() }}
+        run: ccache --show-stats
+
+      # Also after a failed build, so the next attempt keeps what did compile.
+      - name: Save the compile cache
+        if: ${{ !cancelled() }}
+        uses: actions/cache/save@v6
+        with:
+          path: ${{ runner.temp }}/ccache
+          key: ccache-windows-${{ github.run_id }}-${{ github.run_attempt }}
 
       - name: Tests (no GPU, no asset library)
         shell: pwsh
