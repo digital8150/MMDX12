@@ -15,6 +15,17 @@ void Check(bool ok, const char* what) {
     if (!ok) ++g_failures;
 }
 
+// Every picked light holds its own slice inside the budget.
+bool SlicesValid(const std::vector<int>& pick, int slices) {
+    std::vector<bool> used((size_t)slices, false);
+    for (int s : pick) {
+        if (s < 0) continue;
+        if (s >= slices || used[(size_t)s]) return false;
+        used[(size_t)s] = true;
+    }
+    return true;
+}
+
 PunctualLight Spot(XMFLOAT3 pos, XMFLOAT3 aim, float range, float coneOuter, float intensity = 2.0f,
                    XMFLOAT3 color = {1, 1, 1}) {
     PunctualLight p;
@@ -141,6 +152,7 @@ void TestHysteresis() {
     int n = 0;
     for (int s : a) n += s >= 0 ? 1 : 0;
     Check(n == 16 && a[15] >= 0 && a[16] < 0, "the 16 best win");
+    Check(SlicesValid(a, 16), "distinct slices in range");
 
     std::vector<float> s2 = score;
     s2[16] = s2[15] * 1.2f;
@@ -150,6 +162,7 @@ void TestHysteresis() {
     s2[16] = s2[15] * 2.0f;
     b = PickSpotSlices(s2, a, 16);
     Check(b[16] == a[15] && b[15] < 0, "a newcomer 2x stronger takes the weakest pick's slice");
+    Check(SlicesValid(b, 16), "distinct slices in range after the swap");
     bool others = true;
     for (size_t i = 0; i < 15; ++i) others = others && b[i] == a[i];
     Check(others, "the other slices stay");
@@ -158,6 +171,7 @@ void TestHysteresis() {
     s3[3] = 0.0f;
     b = PickSpotSlices(s3, a, 16);
     Check(b[3] < 0 && b[16] == a[3], "a light out of reach frees its slice at once");
+    Check(SlicesValid(b, 16), "distinct slices in range after the free");
 
     std::vector<float> shorter(10, 1.0f);
     b = PickSpotSlices(shorter, a, 16);

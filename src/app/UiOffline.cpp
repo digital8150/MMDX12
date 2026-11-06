@@ -1066,9 +1066,12 @@ void App::FinishOffline(bool cancelled) {
         }
     }
     LOG_INFO("offline render %s: %s", cancelled ? "cancelled" : "finished", PathToUtf8(offline_.output).c_str());
-    // A cancelled or failed render never powers the PC off: the user has to see why there is no file.
-    if (shutdownAfterRender_ && delivered) BeginShutdownCountdown(cli);
-    shutdownAfterRender_ = false;
+    // A cancelled or failed render never powers the PC off: the user has to see why there is no file. A job that ends
+    // behind the open dialog (an MCP render) is not the one its switch was set for.
+    if (!videoDialogOpen_) {
+        if (shutdownAfterRender_ && delivered) BeginShutdownCountdown(cli);
+        shutdownAfterRender_ = false;
+    }
     lastRenderedTime_ = -1.0;  // next real-time frame is a camera cut (no stale history)
     if (offline_.studio) {
         StudioRestoreAfterRender();   // reads offline_ (the editor's time and camera mode)
@@ -1124,7 +1127,12 @@ void App::ExecuteSystemShutdown() {
     }
     // Before Windows is told: the session may end at any moment after that.
     settings_.Save(settingsPath_);
-    if (studio_ && studio_->Dirty()) StudioAutosave(true, true);
+    if (studio_ && studio_->Dirty() && !StudioAutosave(true, true)) {
+        LOG_ERROR("system shutdown stopped: the recovery file could not be written");
+        toast_ = {Tr("시스템을 종료하지 못했습니다"), Tr("저장하지 않은 스튜디오 작업을 복구 파일에 쓰지 못했습니다"), {}, true,
+                  timeSeconds_ + 10.0};
+        return;
+    }
     std::string error;
     if (RequestSystemShutdown(&error)) {
         LOG_INFO("SYSTEM SHUTDOWN requested");

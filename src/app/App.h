@@ -766,7 +766,8 @@ private:
     bool StudioSaveTo(const std::filesystem::path& file);
     studio::ProjectData StudioProjectData() const;    // snapshot of the document (copies the motions)
     std::filesystem::path StudioRecoveryFile() const; // <exe>/recovery/autosave.mmdxproj
-    void StudioAutosave(bool force, bool wait);       // timer: writes the recovery file on a worker thread
+    // timer: writes the recovery file on a worker thread; false = `wait` saw that write fail
+    bool StudioAutosave(bool force, bool wait);
     void StudioDiscardRecovery();                     // waits for a running autosave, deletes the recovery files
     // replaceUid != 0: the loaded model replaces that model's file (StudioReplaceModel) instead of being added.
     // `material` (non-null) overrides the resolved material choice for the loaded model (P5: a material-source change

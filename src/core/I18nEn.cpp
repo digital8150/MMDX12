@@ -50,6 +50,7 @@ const Entry kEnglish[] = {
     {"종료 취소", "Cancel shutdown"},
     {"지금 종료", "Shut down now"},
     {"시스템을 종료하지 못했습니다", "Could not shut down the system"},
+    {"저장하지 않은 스튜디오 작업을 복구 파일에 쓰지 못했습니다", "Could not write the unsaved studio work to the recovery file"},
     {"고품질 영상을 저장했습니다", "High-quality video saved"},
     {"곡  ", "Songs  "},
     {"곡 검색", "Search songs"},

@@ -295,8 +295,8 @@ public:
     // Bind-pose bounds (model space).
     DirectX::XMFLOAT3 BoundsMin() const { return boundsMin_; }
     DirectX::XMFLOAT3 BoundsMax() const { return boundsMax_; }
-    // World-space bounding sphere of the pose last given to UpdateSkinning (characters / props only: the casters of the
-    // spot and point shadow slices). False = no pose yet or another role.
+    // World-space bounding sphere of the pose last given to UpdateSkinning, the rest pose before the first one
+    // (characters / props only: the casters of the spot and point shadow slices). False = another role.
     bool LiveBoundingSphere(DirectX::XMFLOAT3& center, float& radius) const {
         center = liveCenter_;
         radius = liveRadius_;
