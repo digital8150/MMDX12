@@ -295,6 +295,13 @@ public:
     // Bind-pose bounds (model space).
     DirectX::XMFLOAT3 BoundsMin() const { return boundsMin_; }
     DirectX::XMFLOAT3 BoundsMax() const { return boundsMax_; }
+    // World-space bounding sphere of the pose last given to UpdateSkinning (characters / props only: the casters of the
+    // spot and point shadow slices). False = no pose yet or another role.
+    bool LiveBoundingSphere(DirectX::XMFLOAT3& center, float& radius) const {
+        center = liveCenter_;
+        radius = liveRadius_;
+        return liveRadius_ > 0.0f;
+    }
 
     // S8a: rest-pose area of every triangle (parallel to the index list / 3), and the material's emission estimate:
     // the luminance the shaders' emission terms (ScreenEmission / AutoLumEmission / PBR emissive) add at an average
@@ -404,6 +411,11 @@ private:
     bool dynamic_ = false;   // M8a: an animated stage rebuilds its BLAS
     bool prop_ = false;      // a studio prop (the world's ground map includes it)
     DirectX::XMFLOAT3 boundsMin_{}, boundsMax_{};
+    // LiveBoundingSphere: the bones' rest positions and how far a skinned vertex can lie outside their hull.
+    std::vector<DirectX::XMFLOAT3> boneRest_;
+    float skinMargin_ = 0.0f;
+    DirectX::XMFLOAT3 liveCenter_{};
+    float liveRadius_ = 0.0f;
     ComPtr<ID3D12Resource> boneBuf_[kRing];
     void* boneMapped_[kRing] = {};
     ComPtr<ID3D12Resource> morphBuf_[kRing];

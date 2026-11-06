@@ -227,10 +227,10 @@ private:
     static uint32_t FillGpuLights(const LightParams& light, GpuLight* out, const std::vector<int>* spotSlices = nullptr,
                                   uint32_t pointCap = kMaxPunctualLights);
     // S7a: the shadow budget over the spot lights: per punctual light index the shadow slice (0..kSpotShadowSlices-1)
-    // or -1. Candidates are spots with cast shadows; score = intensity * luminance(colour) * range / distance to the
-    // eye. The best kSpotShadowSlices win, but a light picked last frame keeps its slice unless a newcomer scores
-    // kSpotPickHysteresis times more (stable across frames).
-    std::vector<int> PickSpotShadowSlices(const LightParams& light, const CameraParams& camera);
+    // or -1. Candidates are the casting spots that reach a shadow caster of `models` (a slice holds nothing else);
+    // the score and the hysteresis are render/SpotShadowPick.h.
+    std::vector<int> PickSpotShadowSlices(const LightParams& light, const CameraParams& camera,
+                                          const std::vector<GpuModel*>& models, float aspect);
     // S7a: the light pick CDF of the frame (normalised inclusive running sum of the pick weight, one float per light);
     // returns the light count written (<= capacity). Read by the path tracer / offline GI through the bindless buffer
     // table. Zero weights fall back to a uniform CDF.
