@@ -1,0 +1,13 @@
+name: Question
+description: Ask about using or extending MMDX12.
+labels: ["question"]
+body:
+  - type: markdown
+    attributes:
+      value: English, Korean, Japanese and Chinese are all fine.
+  - type: textarea
+    id: question
+    attributes:
+      label: Your question
+    validations:
+      required: true

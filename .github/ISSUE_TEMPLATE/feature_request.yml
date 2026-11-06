@@ -1,0 +1,27 @@
+name: Feature request
+description: Suggest a new feature or an improvement.
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        English, Korean, Japanese and Chinese are all fine.
+        Some ideas can be built as a shader pack or stage without changing the app: see CONTRIBUTING.md.
+  - type: textarea
+    id: problem
+    attributes:
+      label: What are you trying to do?
+      description: Describe the goal and what gets in the way today.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What would you like to happen?
+    validations:
+      required: true
+  - type: textarea
+    id: references
+    attributes:
+      label: Examples or references
+      description: Screenshots, or how another tool handles this.
