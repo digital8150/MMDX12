@@ -738,7 +738,8 @@ bool App::ExecuteUiCommand(const std::string& cmd, const std::vector<std::string
             StudioSetAudio(args[0] == "none" ? std::filesystem::path() : std::filesystem::absolute(Utf8ToPath(args[0])));
         }
     } else if (cmd == "studioaudiolock") {  // studioaudiolock 0|1
-        if (studio_ && !args.empty()) StudioSetAudioLocked(num(0) != 0.0);
+        if (!args.empty() && (args[0] == "0" || args[0] == "1")) { if (studio_) StudioSetAudioLocked(args[0] == "1"); }
+        else LOG_WARN("ui script: studioaudiolock expects 0 or 1, got '%s'", args.empty() ? "" : args[0].c_str());
     } else if (cmd == "studiobgvideo") {  // studiobgvideo <file|none>: the WHOLE rest of the line is the path
         if (studio_) {
             std::string path;

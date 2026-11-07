@@ -790,6 +790,16 @@ bool Timeline(const char* id, ImVec2 size, const std::vector<TimelineRow>& rows,
                 ev.rangeChanged = true;
                 changed = true;
             }
+        } else if (view.dragMode == 6 && view.audioLocked) {
+            // locked mid-drag (a script / MCP command): the drag ends here; what it already moved stays one undo step
+            if (view.audioDragMoved && view.audioOffsetSeconds != view.audioDragFromOffset) {
+                ev.audioOffsetEnd = true;
+                ev.audioOffsetFrom = view.audioDragFromOffset;
+                ev.audioOffsetSeconds = view.audioOffsetSeconds;
+                changed = true;
+            }
+            view.audioDragMoved = false;
+            view.dragMode = 0;
         } else if (view.dragMode == 6) {
             // the clip follows the mouse in content coordinates (also while the view auto-scrolls); whole frames,
             // snapping its start to the playhead / frame 0 within 8 px; Shift = free (sub-frame)
