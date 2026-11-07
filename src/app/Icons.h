@@ -100,6 +100,8 @@ inline constexpr const char* FolderSimple = "\xee\x89\x9a";
 inline constexpr const char* LinkBreak = "\xee\x8b\xa4";
 inline constexpr const char* LinkSimple = "\xee\x8b\xa6";
 inline constexpr const char* MusicNotes = "\xee\x8d\x80";
+inline constexpr const char* LockSimple = "\xee\x8c\x88";
+inline constexpr const char* LockSimpleOpen = "\xee\x8c\x8a";
 inline constexpr const char* Paperclip = "\xee\x8e\x9a";
 inline constexpr const char* PencilSimple = "\xee\x8e\xb4";
 } // namespace mmdx::icon

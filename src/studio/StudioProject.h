@@ -197,6 +197,7 @@ struct ProjectData {
     MotionData camera;                 // camera, light and self-shadow keys (camera VMD) + focus keys (editor "focus"); bones/morphs ignored
     std::filesystem::path audioPath;   // absolute; empty = no audio
     double audioOffset = 0.0;          // seconds: the audio starts at this timeline time (may be negative)
+    bool audioLocked = false;          // "audio"."locked": the timeline cannot move the audio (absent = false)
     // Background AVI (背景AVI): absolute path (empty = none), start offset in seconds, and whether it is also drawn
     // as the screen background (default false: it only feeds screen.bmp materials).
     std::filesystem::path bgVideoPath;

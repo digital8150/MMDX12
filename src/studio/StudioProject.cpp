@@ -748,6 +748,7 @@ bool SaveProject(const std::filesystem::path& file, const ProjectData& data, std
             j["audio"] = nullptr;
         } else {
             j["audio"] = {{"path", RelPath(data.audioPath, dir)}, {"offset", data.audioOffset}};
+            if (data.audioLocked) j["audio"]["locked"] = true;
         }
         if (data.bgVideoPath.empty()) {
             j["backgroundVideo"] = nullptr;
@@ -1060,6 +1061,7 @@ bool LoadProject(const std::filesystem::path& file, ProjectData& out, std::strin
         if (j.contains("audio") && j["audio"].is_object()) {
             out.audioPath = ResolvePath(ReadString(j["audio"], "path", ""), dir);
             out.audioOffset = ReadDouble(j["audio"], "offset", out.audioOffset);
+            out.audioLocked = ReadBool(j["audio"], "locked", false);
         }
 
         if (j.contains("backgroundVideo") && j["backgroundVideo"].is_object()) {

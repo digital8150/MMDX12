@@ -197,6 +197,7 @@ bool App::FinishStudioLoad() {
     // a light track that only repeats MMD's defaults says nothing (and would override the lighting): dropped, as in play mode
     if (IsDefaultLightTrack(doc->camera.light)) doc->camera.light.clear();
     doc->audioOffset = pkg.audioOffset;
+    doc->audioLocked = pkg.audioLocked;
     doc->bgVideoPath = pkg.bgVideoPath;
     doc->bgVideoOffset = pkg.bgVideoOffset;
     doc->bgVideoAsBackground = pkg.bgVideoAsBackground;
@@ -6221,6 +6222,7 @@ void App::DrawStudioTimeline(float x0, float y0, float x1, float y1) {
     d.view.audioDurationSeconds = (float)audio_.DurationSeconds();
     d.view.audioOffsetSeconds = (float)d.audioOffset;
     d.view.audioFps = (float)kMmdFps;
+    d.view.audioLocked = d.audioLocked;
 
     TimelineEvents ev;
     Timeline("##tl", ImVec2(0, 0), d.rows, d.Frame(), d.EndFrame(), d.view, ev);
@@ -6235,6 +6237,7 @@ void App::DrawStudioTimeline(float x0, float y0, float x1, float y1) {
     }
     if (ev.audioOffsetEnd) StudioCommitAudioOffset(ev.audioOffsetFrom, ev.audioOffsetSeconds);
     if (ev.audioMenu) ImGui::OpenPopup("##audiolanemenu");
+    if (ev.audioLockToggle) StudioSetAudioLocked(!d.audioLocked);
     ImGui::SetNextWindowSize(ImVec2(Dp(260.0f), 0));
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(Dp(12.0f), Dp(12.0f)));
     if (ImGui::BeginPopup("##audiolanemenu")) {

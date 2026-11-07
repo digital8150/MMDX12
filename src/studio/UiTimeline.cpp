@@ -143,6 +143,11 @@ bool Timeline(const char* id, ImVec2 size, const std::vector<TimelineRow>& rows,
         audioClipX(view.audioOffsetSeconds, xs, xe);
         return mousePos.x >= xs && mousePos.x <= xe;
     };
+    // The lock button at the right end of the audio lane's label column.
+    const auto audioLockRect = [&]() {
+        const float cy = (rulerBottom + contentY) * 0.5f;
+        return ImRect(ImVec2(keyAreaX - Dp(28.0f), cy - Dp(11.0f)), ImVec2(keyAreaX - Dp(6.0f), cy + Dp(11.0f)));
+    };
 
     // The key of row `rowIndex` under the mouse (7 px pick radius), or nullptr.
     const auto keyUnderMouse = [&](int rowIndex) -> const TimelineKey* {
@@ -511,10 +516,13 @@ bool Timeline(const char* id, ImVec2 size, const std::vector<TimelineRow>& rows,
                 }
             }
         } else if (audioLane && mousePos.y >= rulerBottom && mousePos.y < contentY) {
-            if (mousePos.x < keyAreaX) {
+            if (mousePos.x < keyAreaX && audioLockRect().Contains(mousePos)) {
+                ev.audioLockToggle = true;  // the label's lock button
+                changed = true;
+            } else if (mousePos.x < keyAreaX) {
                 ev.audioMenu = true;  // the lane's label: the host's audio menu
                 changed = true;
-            } else if (mouseOnAudioClip()) {
+            } else if (!view.audioLocked && mouseOnAudioClip()) {
                 view.dragMode = 6;
                 view.audioDragFromOffset = view.audioOffsetSeconds;
                 view.audioDragMoved = false;
@@ -919,8 +927,10 @@ bool Timeline(const char* id, ImVec2 size, const std::vector<TimelineRow>& rows,
     view.scrollY = std::clamp(view.scrollY, 0.0f, maxScrollY);
 
     // The audio clip: the horizontal resize cursor while hovered or dragged.
-    if ((hovered && view.dragMode == 0 && !leftDown && mouseOnAudioClip()) || view.dragMode == 6)
+    if ((hovered && view.dragMode == 0 && !leftDown && !view.audioLocked && mouseOnAudioClip()) || view.dragMode == 6)
         ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeEW);
+    if (audioLane && hovered && view.dragMode == 0 && !leftDown && audioLockRect().Contains(mousePos))
+        ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
 
     // Hover over a lane handle: the hand cursor.
     if (hovered && view.graphDrag == 0 && !leftDown) {
@@ -1255,8 +1265,17 @@ bool Timeline(const char* id, ImVec2 size, const std::vector<TimelineRow>& rows,
         if (labelHovered) dl->AddRectFilled(ImVec2(bb.Min.x, y0), ImVec2(keyAreaX, y1), WithAlpha(p.ink, 0.04f));
         dl->AddRectFilled(ImVec2(bb.Min.x, y0 + Dp(6.0f)), ImVec2(bb.Min.x + Dp(3.0f), y1 - Dp(6.0f)), audioCol, Dp(1.5f));
         Icon(dl, icon::MusicNotes, 14.0f, ImVec2(bb.Min.x + Dp(16.0f), y0 + Dp(14.0f)), p.ink2);
-        TextEllipsis(dl, Font::Semibold, size::Small, ImVec2(bb.Min.x + Dp(28.0f), y0 + Dp(5.0f)), keyAreaX - Dp(6.0f), p.ink,
+        TextEllipsis(dl, Font::Semibold, size::Small, ImVec2(bb.Min.x + Dp(28.0f), y0 + Dp(5.0f)), keyAreaX - Dp(32.0f), p.ink,
                      view.audioLabel && *view.audioLabel ? view.audioLabel : Tr("음원"));
+        // the lock button: filled accent while locked, a faint open lock otherwise
+        const ImRect lockR = audioLockRect();
+        const bool lockHovered = labelHovered && lockR.Contains(mousePos);
+        if (view.audioLocked || lockHovered)
+            dl->AddRectFilled(lockR.Min, lockR.Max, view.audioLocked ? WithAlpha(p.accent, lockHovered ? 0.22f : 0.14f)
+                                                                     : WithAlpha(p.ink, 0.06f), Dp(4.0f));
+        Icon(dl, view.audioLocked ? icon::LockSimple : icon::LockSimpleOpen, 14.0f,
+             ImVec2((lockR.Min.x + lockR.Max.x) * 0.5f, (lockR.Min.y + lockR.Max.y) * 0.5f),
+             view.audioLocked ? p.accentInk : (lockHovered ? p.ink2 : p.ink3));
         {
             char offBuf[96];
             const float off = view.audioOffsetSeconds;
@@ -1265,11 +1284,15 @@ bool Timeline(const char* id, ImVec2 size, const std::vector<TimelineRow>& rows,
                 std::snprintf(offBuf, sizeof(offBuf), Tr("오프셋 %+.2f초 · %+d프레임"), off, (int)std::round(offFrames));
             else
                 std::snprintf(offBuf, sizeof(offBuf), Tr("오프셋 %+.3f초 · %+.1f프레임"), off, offFrames);
-            Text(dl, Font::Regular, size::Caption, ImVec2(bb.Min.x + Dp(28.0f), y0 + Dp(23.0f)),
-                 dragging ? p.accentInk : p.ink3, offBuf);
+            TextEllipsis(dl, Font::Regular, size::Caption, ImVec2(bb.Min.x + Dp(28.0f), y0 + Dp(23.0f)), keyAreaX - Dp(32.0f),
+                         dragging ? p.accentInk : p.ink3, offBuf);
         }
         dl->PopClipRect();
-        if (labelHovered) Tooltip(Tr("음원 메뉴 (오프셋 · 바꾸기 · 제거)"));
+        if (lockHovered)
+            Tooltip(view.audioLocked ? Tr("음원 위치 고정 해제") : Tr("음원 위치 고정 (드래그로 움직이지 않음)"));
+        else if (labelHovered) Tooltip(Tr("음원 메뉴 (오프셋 · 바꾸기 · 제거)"));
+        if (uiprobe::Enabled())
+            uiprobe::Add("##tlaudiolock", view.audioLocked ? Tr("음원 위치 고정 해제") : Tr("음원 위치 고정"), lockR.Min, lockR.Max);
         if (uiprobe::Enabled())
             uiprobe::Add("##tlaudiolabel", view.audioLabel ? view.audioLabel : "", ImVec2(bb.Min.x, y0), ImVec2(keyAreaX, y1));
 
@@ -1283,7 +1306,7 @@ bool Timeline(const char* id, ImVec2 size, const std::vector<TimelineRow>& rows,
         }
         float xs, xe;
         audioClipX(view.audioOffsetSeconds, xs, xe);
-        const bool clipHot = dragging || (hovered && view.dragMode == 0 && mouseOnAudioClip());
+        const bool clipHot = dragging || (hovered && view.dragMode == 0 && !view.audioLocked && mouseOnAudioClip());
         dl->AddRectFilled(ImVec2(xs, cy0), ImVec2(xe, cy1), WithAlpha(audioCol, clipHot ? 0.20f : 0.13f), Dp(4.0f));
         const float vx0 = std::max(xs, keyAreaX), vx1 = std::min(xe, bb.Max.x);
         const float mid = (cy0 + cy1) * 0.5f, halfH = (cy1 - cy0) * 0.5f - Dp(2.0f);
@@ -1329,8 +1352,8 @@ bool Timeline(const char* id, ImVec2 size, const std::vector<TimelineRow>& rows,
         }
         dl->AddRect(ImVec2(xs, cy0), ImVec2(xe, cy1), WithAlpha(audioCol, clipHot ? 0.95f : 0.6f), Dp(4.0f), 0,
                     clipHot ? Dp(1.5f) : Dp(1.0f));
-        // the start edge: a grip line where the audio begins
-        if (xs >= keyAreaX && xs <= bb.Max.x)
+        // the start edge: a grip line where the audio begins (none while locked: nothing to grab)
+        if (!view.audioLocked && xs >= keyAreaX && xs <= bb.Max.x)
             dl->AddLine(ImVec2(xs + Dp(1.0f), cy0 + Dp(1.0f)), ImVec2(xs + Dp(1.0f), cy1 - Dp(1.0f)), audioCol, Dp(2.0f));
         if (dragging) {  // the offset as a bubble at the clip's start
             char buf[64];
@@ -1352,6 +1375,8 @@ bool Timeline(const char* id, ImVec2 size, const std::vector<TimelineRow>& rows,
                          ImVec2(std::min(xe, bb.Max.x), cy1));
         if (clipHot && !dragging && view.dragMode == 0)
             Tooltip(Tr("드래그해서 음원 위치 조정 · 재생 헤드에 붙어요 · Shift = 자유 이동"));
+        else if (view.audioLocked && hovered && view.dragMode == 0 && mouseOnAudioClip())
+            Tooltip(Tr("음원 위치가 고정되어 있어요 (왼쪽 자물쇠로 해제)"));
     }
 
     if (view.rangeStart >= 0 && view.rangeEnd >= view.rangeStart) {
