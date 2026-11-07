@@ -1638,6 +1638,17 @@ void App::BuildStudioFrameView(FrameView& view) {
             if (std::filesystem::is_regular_file(candidate, ec)) { p.gobo = PathToUtf8(candidate); break; }
         }
     }
+    // S9b-3: the same for a stage sky light's image (`skyMap` is stage-relative in a manifest; a studio pick is absolute).
+    // Unresolved, the renderer could not load it and the studio showed the procedural sky instead of the stage's image.
+    if (!view.light.skyMap.empty() && !Utf8ToPath(view.light.skyMap).is_absolute()) {
+        const std::filesystem::path path = Utf8ToPath(view.light.skyMap);
+        for (const StudioStage& s : d.stages) {
+            if (!s.manifest) continue;
+            std::error_code ec;
+            const std::filesystem::path candidate = s.manifest->dir / path;
+            if (std::filesystem::is_regular_file(candidate, ec)) { view.light.skyMap = PathToUtf8(candidate); break; }
+        }
+    }
     // S9: a stage's environment.fog is the project's medium while that stage is in the scene (the stage panel shows the
     // same values; a later stage in the list wins, as its rig would).
     for (const StudioStage& s : d.stages) {
