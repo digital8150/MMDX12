@@ -133,9 +133,14 @@ private:
     ComPtr<ID3D12PipelineState> psoAddBackRtId_, psoAddNoCullRtId_, psoNdBackRtId_, psoNdNoCullRtId_;
     // path tracer outlines: depth-only pre-pass (PSDepthAlpha, colour writes off); null = PT draws no outlines
     ComPtr<ID3D12PipelineState> psoDepthBack_, psoDepthNoCull_;
+    // raster camera view: depth pre-pass of the opaque materials (no pixel shader), so the stage's lit pixel shader runs
+    // once per visible surface instead of once per layer of overdraw. Null = no pre-pass.
+    ComPtr<ID3D12PipelineState> psoPrepassBack_, psoPrepassNoCull_;
     ComPtr<ID3D12RootSignature> rootSig_;
     // PT mode: the outline layer (depth pre-pass + edges, default or PackEdge) for PathTracePass to composite
     void DrawPtEdges(PassContext& pc);
+    // The opaque materials' depth, with only the depth target bound (the caller re-binds the colour targets).
+    void DrawDepthPrepass(PassContext& pc);
 
     // M4b: MME object effects drawn inside Execute (lit camera view only). DrawMmeModel draws one model's owned
     // materials with its effect. `handled[i]` per material: 0 = draw natively (existing code), 1 = drawn by MME

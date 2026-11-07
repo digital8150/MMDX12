@@ -103,6 +103,14 @@ progress.md is the session log. Read its latest entry first.
   offline GI reflect a mirror hit as a delta event (tint weight, cone lobe when rough; `prevBsdfValid = false`); quad /
   ortho views, feeds and `RenderToImage` show the tint only. No mirror material = no textures, no extra render, identical
   frame.
+- Stage draw cost (neon_plaza 45 -> 21 ms, RTX 4070 Ti): screens with the same camera + size are one feed (`StageScreens`:
+  it renders once, the others `CopyResource`; `kMaxFeedsPerFrame` counts distinct cameras). A static stage (one bone, no
+  vertex morph, >= 50k triangles) sorts its opaque materials' triangles by xz cell at load (`BuildDrawCells`,
+  `STAGECELLS` log line; blending materials and material morph targets keep their order) and `GpuModel::DrawMaterial` draws only the cells inside a
+  `CullFrustum` (sun cascades x / y planes, camera / feed / mirror views all six), since a baked stage's material spans
+  the whole set and a whole-material test culls nothing. The raster camera view has a depth pre-pass
+  (`ScenePass::DrawDepthPrepass`: `GpuModel::DepthPrepassMaterial`, no PS, DSV only; models with a surface pack or MME
+  and materials with a bound screen / video texture skip it), which is why VSMain's clip position is `precise` (the two PSOs must rasterise the same depth).
 - Spot gobos (S7b, docs/stage_format.md "`gobo`"): a spot may carry a projected stencil (`SceneLight::gobo` = a file
   path + `goboRotation` / `goboScale` / `goboSpin` / `goboFocus`; a stage light's path is relative to the stage folder and
   `app/StageRuntime` resolves it). `GpuLight` stays 112 B: the per-light gobo data is a second raw buffer
@@ -239,7 +247,10 @@ Agents keep misusing the CLI and then blaming the app. These rules are verified 
 - **Same frame across runs (A/B comparisons): `--seek <sec> --paused --no-physics`.**
   `--seek` alone keeps playing: the capture happens `--frames` frames later in wall-clock time, so two identical runs
   differ (measured: 113k of 518k pixels). `--paused` holds the scene at the seek time (residual 1.2k px = physics
-  settling); adding `--no-physics` makes two runs bit-identical (measured: 0 px). Use `--frames 60` or more so TAA
+  settling); adding `--no-physics` makes depth, velocity and the lit scene match between runs, but not always the final
+  image: the half-res SSR / SSAO passes fall into two states per run (neon_plaza: 15.5k px, max 25 levels, sparse X marks
+  in the floor reflection, cause not found; spot pick, camera, bones, constants, bytecode, frame index and uv all ruled
+  out, 2026-11-07), so diff against both states before calling a difference real. Use `--frames 60` or more so TAA
   converges. `--seek`, `--autoplay` and `--paused` are one-shot: consumed when the scene loads.
 - **Settings come from `<build dir>/bin/mmdx12.ini`, one per build dir**, and they differ (window size, lighting preset,
   DoF, effect stack, shader packs per character). An A/B between two build dirs must either copy the same ini into both
