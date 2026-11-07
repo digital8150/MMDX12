@@ -68,10 +68,17 @@ jobs:
           publish=true
           review=false
           [ "$EVENT" = pull_request ] && publish=false
+          # The published commit, from the nightly release's notes and not from the update server's feed: a taken-over
+          # server naming a later commit would hide a pull request from the range below, and the site's CDN turns runners
+          # away. The publish job writes the notes last, so they are never newer than the feed: a failed publish only widens
+          # the range. Looked up on pull requests too (no effect there), so a dry run shows that it works.
+          prev=$(gh release view nightly -R "$REPO" --json body --jq .body |
+            sed -nE 's/^Latest: .* from ([0-9a-f]{40})\..*/\1/p' | head -n 1) || prev=
+          echo "Published commit: ${prev:-unknown}"
+          [ -n "$prev" ] || echo "::warning::No published commit in the nightly release's notes: a master build goes to review"
           if [ "$EVENT" = workflow_run ]; then
             # Anything unknown ends in review: a failed lookup must not skip the owner.
             review=true
-            prev=$(curl -fsS "$BASE_URL/nightly.json" | jq -r '.commit // empty') || prev=
             if [ -n "$prev" ]; then
               compare=$(gh api "repos/$REPO/compare/$prev...$sha") || compare='{"status":"unknown"}'
               status=$(jq -r .status <<< "$compare")
@@ -238,7 +245,8 @@ jobs:
             -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$RUNNER_TEMP/known_hosts" "$LOGIN@$HOST"
           rm -f "$RUNNER_TEMP/key"
 
-      # Rollback material: the five newest zips stay.
+      # Rollback material: the five newest zips stay. The gate job reads the published commit from these notes' first
+      # line, so keep its wording in step with the gate's sed and keep this after the upload to the server.
       - name: Release notes, old zips
         env:
           GH_TOKEN: ${{ github.token }}
