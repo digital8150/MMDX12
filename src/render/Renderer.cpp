@@ -644,6 +644,7 @@ bool Renderer::RenderScreenFeed(ID3D12GraphicsCommandList* cmd, const FrameView&
                    ctx_->FrameNumber(), false, false, &builtin_, RenderPath::Raster, nullptr, nullptr,
                    0.0f, 0.0f, frameTimeMs_};
     pc.fogVolumes = 0;   // a feed draws no local fog volumes
+    pc.sceneConstantsCpu = &sc;   // DrawFeed culls the stage cells against the feed's camera
     stats_.drawCalls = 0;
     stats_.triangles = 0;
     // The screens inside a feed show their PREVIOUS frame's texture: StageScreens binds after the feeds ran, so the
@@ -929,6 +930,7 @@ bool Renderer::RenderMirror(ID3D12GraphicsCommandList* cmd, const FrameView& vie
                    ctx_->FrameNumber(), false, false, &builtin_, RenderPath::Raster, nullptr, nullptr,
                    0.0f, 0.0f, frameTimeMs_};
     pc.fogVolumes = 0;
+    pc.sceneConstantsCpu = &sc;   // DrawFeed culls the stage cells against the reflected camera
     stats_.drawCalls = 0;
     stats_.triangles = 0;
     const bool drew = scenePass_->DrawFeed(pc, m.color, m.normal, m.velocity, m.depth);

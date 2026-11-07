@@ -479,22 +479,49 @@ void StageScreens::Render(Dx12Context& ctx, ID3D12GraphicsCommandList* cmd, cons
         DrawProgramScreen(ctx, cmd, it->second, *pack, s.tex, view.sceneTime, ctx.FrameNumber(), view.screens[i].params);
     }
 
-    // 4. Camera feeds: render at most kMaxFeedsPerFrame per frame, round robin over the rest.
+    // 4. Camera feeds: render at most kMaxFeedsPerFrame per frame, round robin over the rest. Screens showing the same
+    // camera at the same size are one feed: it renders once and the others copy its texture (a stage's two jumbotrons
+    // on one camera cost one scene render), so the budget counts distinct cameras.
     {
-        std::vector<size_t> feeds;
-        for (size_t i = 0; i < impl.slots.size(); ++i)
-            if (impl.slots[i].source == StageScreenSource::Camera && impl.slots[i].tex && impl.slots[i].enabled)
-                feeds.push_back(i);
-        if (!feeds.empty()) {
-            const uint32_t count = std::min<uint32_t>((uint32_t)feeds.size(), kMaxFeedsPerFrame);
-            for (uint32_t f = 0; f < count; ++f) {
-                const size_t idx = feeds[(impl.feedCursor + f) % feeds.size()];
-                Impl::Slot& s = impl.slots[idx];
-                const ScreenView& sv = view.screens[idx];
-                if (renderFeed(f, sv, s.tex))
-                    s.tex.state = D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE;
+        struct FeedGroup { std::vector<size_t> screens; };
+        std::vector<FeedGroup> groups;
+        const auto sameFeed = [&](size_t a, size_t b) {
+            const CameraParams& ca = view.screens[a].camera;
+            const CameraParams& cb = view.screens[b].camera;
+            return impl.slots[a].tex.width == impl.slots[b].tex.width &&
+                   impl.slots[a].tex.height == impl.slots[b].tex.height &&
+                   std::memcmp(&ca.view, &cb.view, sizeof(ca.view)) == 0 && ca.fovYRadians == cb.fovYRadians &&
+                   ca.nearZ == cb.nearZ && ca.farZ == cb.farZ;
+        };
+        for (size_t i = 0; i < impl.slots.size(); ++i) {
+            if (impl.slots[i].source != StageScreenSource::Camera || !impl.slots[i].tex || !impl.slots[i].enabled)
+                continue;
+            FeedGroup* group = nullptr;
+            for (FeedGroup& g : groups)
+                if (sameFeed(g.screens.front(), i)) { group = &g; break; }
+            if (!group) {
+                groups.emplace_back();
+                group = &groups.back();
             }
-            impl.feedCursor = (impl.feedCursor + count) % (uint32_t)feeds.size();
+            group->screens.push_back(i);
+        }
+        if (!groups.empty()) {
+            const uint32_t count = std::min<uint32_t>((uint32_t)groups.size(), kMaxFeedsPerFrame);
+            for (uint32_t f = 0; f < count; ++f) {
+                const FeedGroup& group = groups[(impl.feedCursor + f) % groups.size()];
+                Impl::Slot& s = impl.slots[group.screens.front()];
+                if (!renderFeed(f, view.screens[group.screens.front()], s.tex)) continue;
+                s.tex.state = D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE;
+                for (size_t c = 1; c < group.screens.size(); ++c) {
+                    Impl::Slot& other = impl.slots[group.screens[c]];
+                    s.tex.Transition(cmd, D3D12_RESOURCE_STATE_COPY_SOURCE);
+                    other.tex.Transition(cmd, D3D12_RESOURCE_STATE_COPY_DEST);
+                    cmd->CopyResource(other.tex.res.Get(), s.tex.res.Get());
+                    other.tex.Transition(cmd, D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE);
+                    s.tex.Transition(cmd, D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE);
+                }
+            }
+            impl.feedCursor = (impl.feedCursor + count) % (uint32_t)groups.size();
         }
     }
 

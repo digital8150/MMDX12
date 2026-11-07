@@ -193,6 +193,11 @@ void ShadowPass::DrawSlice(PassContext& pc, const Texture& map, uint32_t slice, 
             float radius = 0.0f;
             if (model->LiveBoundingSphere(center, radius) && !LightReachesSphere(*light, center, radius)) continue;
         }
+        // A sun cascade draws only the stage cells inside its rectangle (x / y: a caster in front of the near plane
+        // still shadows). The spot / point slices draw characters and props only.
+        GpuModel::CullFrustum frustum;
+        const bool cull = !light && !overrideMatrix && matrixIndex < kShadowCascades && pc.sceneConstantsCpu &&
+                          model->BuildCullFrustum(pc.sceneConstantsCpu->shadowViewProj[matrixIndex], false, frustum);
         BindModelBuffers(cmd, *model, pc.frame);
         cmd->SetGraphicsRootShaderResourceView(2, model->BoneBuffer(pc.frame));
         ID3D12PipelineState* bound = nullptr;
@@ -205,8 +210,7 @@ void ShadowPass::DrawSlice(PassContext& pc, const Texture& map, uint32_t slice, 
             }
             cmd->SetGraphicsRootConstantBufferView(1, m.constants);
             cmd->SetGraphicsRootDescriptorTable(3, pc.ctx.SrvHeap().Gpu(m.srvTable));
-            cmd->DrawIndexedInstanced(m.indexCount, 1, m.indexStart, 0, 0);
-            pc.stats.drawCalls++;
+            pc.stats.drawCalls += model->DrawMaterial(cmd, m, cull ? &frustum : nullptr);
         }
     }
 }
@@ -574,6 +578,26 @@ bool ScenePass::CreatePipelines(Dx12Context& ctx, const std::filesystem::path& s
         if (FAILED(device->CreateGraphicsPipelineState(&depth, IID_PPV_ARGS(&psoDepthNoCull_)))) psoDepthBack_.Reset();
     }
     if (!psoDepthBack_) LOG_WARN("ScenePass: depth pre-pass unavailable, the path tracer draws no outlines");
+
+    // The raster camera view's depth pre-pass: the lit PSO's own vertex shader (the same clip positions, LESS_EQUAL lets
+    // the lit draw through), no pixel shader, no colour targets. Optional: without it the view just overdraws.
+    psoPrepassBack_.Reset();
+    psoPrepassNoCull_.Reset();
+    {
+        D3D12_GRAPHICS_PIPELINE_STATE_DESC prepass = rasterPso;
+        prepass.VS = {vsLit->GetBufferPointer(), vsLit->GetBufferSize()};
+        prepass.PS = {nullptr, 0};
+        prepass.BlendState = CD3DX12_BLEND_DESC(D3D12_DEFAULT);
+        prepass.NumRenderTargets = 0;
+        for (DXGI_FORMAT& format : prepass.RTVFormats) format = DXGI_FORMAT_UNKNOWN;
+        prepass.RasterizerState.FillMode = D3D12_FILL_MODE_SOLID;
+        prepass.RasterizerState.CullMode = D3D12_CULL_MODE_BACK;
+        if (FAILED(device->CreateGraphicsPipelineState(&prepass, IID_PPV_ARGS(&psoPrepassBack_))))
+            psoPrepassBack_.Reset();
+        prepass.RasterizerState.CullMode = D3D12_CULL_MODE_NONE;
+        if (FAILED(device->CreateGraphicsPipelineState(&prepass, IID_PPV_ARGS(&psoPrepassNoCull_))))
+            psoPrepassNoCull_.Reset();
+    }
 
     // DLSS-RR guides (RayTraced): the lit MRT layout with PSGuides, compiled like PSMain (DXC when available).
     // Built only here; ScenePass::DrawGuides runs only while RR is active, so RR-off frames have no extra cost.
@@ -2163,6 +2187,8 @@ bool ScenePass::DrawFeed(PassContext& pc, Texture& color, Texture& normal, Textu
         GpuModel* model = pc.view.models[mi];
         if (!model) continue;
         const uint32_t modelIdInfo = (((uint32_t)(mi + 1) & 0xFFu) << 8) | (model->Role() == ModelRole::Character ? 0x80u : 0u);
+        GpuModel::CullFrustum frustum;
+        const bool cull = pc.sceneConstantsCpu && model->BuildCullFrustum(pc.sceneConstantsCpu->viewProj, true, frustum);
         BindModelBuffers(cmd, *model, pc.frame);
         cmd->SetGraphicsRootShaderResourceView(2, model->BoneBuffer(pc.frame));
         cmd->SetGraphicsRootShaderResourceView(4, model->PrevBoneBuffer(pc.frame));
@@ -2189,8 +2215,7 @@ bool ScenePass::DrawFeed(PassContext& pc, Texture& color, Texture& normal, Textu
                                    pbrRecord ? model->PbrIndex(matIndex) : 0xFFFFFFFFu, pbrDebugChannel,
                                    pbrRecord ? 1u : 0u, modelIdInfo};
             cmd->SetGraphicsRoot32BitConstants(14, 5, c, 0);
-            cmd->DrawIndexedInstanced(m.indexCount, 1, m.indexStart, 0, 0);
-            pc.stats.drawCalls++;
+            pc.stats.drawCalls += model->DrawMaterial(cmd, m, cull ? &frustum : nullptr);
             pc.stats.triangles += m.indexCount / 3;
         }
     }
@@ -2199,6 +2224,30 @@ bool ScenePass::DrawFeed(PassContext& pc, Texture& color, Texture& normal, Textu
     velocity.Transition(cmd, kSrv);
     depth.Transition(cmd, kSrv);
     return true;
+}
+
+void ScenePass::DrawDepthPrepass(PassContext& pc) {
+    ID3D12GraphicsCommandList* cmd = pc.cmd;
+    for (GpuModel* model : pc.view.models) {
+        // A surface pack or an MME effect owns the model's shading (it may discard): those models keep overdrawing.
+        if (!model || !model->ShaderPackId().empty() || model->HasMmeEffects()) continue;
+        GpuModel::CullFrustum frustum;
+        const bool cull = pc.sceneConstantsCpu && model->BuildCullFrustum(pc.sceneConstantsCpu->viewProj, true, frustum);
+        BindModelBuffers(cmd, *model, pc.frame);
+        cmd->SetGraphicsRootShaderResourceView(2, model->BoneBuffer(pc.frame));
+        cmd->SetGraphicsRootShaderResourceView(4, model->PrevBoneBuffer(pc.frame));
+        ID3D12PipelineState* bound = nullptr;
+        for (const GpuModel::Material& m : model->Materials()) {
+            if (!model->DepthPrepassMaterial(m)) continue;
+            ID3D12PipelineState* want = m.doubleSided ? psoPrepassNoCull_.Get() : psoPrepassBack_.Get();
+            if (want != bound) {
+                cmd->SetPipelineState(want);
+                bound = want;
+            }
+            cmd->SetGraphicsRootConstantBufferView(1, m.constants);
+            pc.stats.drawCalls += model->DrawMaterial(cmd, m, cull ? &frustum : nullptr);
+        }
+    }
 }
 
 void ScenePass::Execute(PassContext& pc) {
@@ -2285,6 +2334,13 @@ void ScenePass::Execute(PassContext& pc) {
         cmd->RSSetScissorRects(1, &scissor);
         cmd->SetGraphicsRootConstantBufferView(0, vd.constants);
 
+        if (v == 0 && drawCount == 1 && pc.path == RenderPath::Raster && !pc.offscreen && !wire &&
+            pc.settings.shading == ViewShading::Lit && psoPrepassBack_ && psoPrepassNoCull_) {
+            cmd->OMSetRenderTargets(0, nullptr, FALSE, &dsv);
+            DrawDepthPrepass(pc);
+            cmd->OMSetRenderTargets(hasId ? 4 : 3, rtvs, FALSE, &dsv);
+        }
+
         if (!pc.settings.transparentBackground) {
             // Wireframe / ortho views: one flat colour instead of the sky gradient (which needs a perspective camera)
             cmd->SetPipelineState((wire || vd.ortho) ? psoFlatBg_.Get() : psoSky_.Get());
@@ -2302,6 +2358,9 @@ void ScenePass::Execute(PassContext& pc) {
             GpuModel* model = pc.view.models[mi];
             if (!model) continue;
             const uint32_t modelIdInfo = (((uint32_t)(mi + 1) & 0xFFu) << 8) | (model->Role() == ModelRole::Character ? 0x80u : 0u);
+            GpuModel::CullFrustum frustum;
+            const bool cull = !vd.ortho && pc.sceneConstantsCpu &&
+                              model->BuildCullFrustum(pc.sceneConstantsCpu->viewProj, true, frustum);
             BindModelBuffers(cmd, *model, pc.frame);
             cmd->SetGraphicsRootShaderResourceView(2, model->BoneBuffer(pc.frame));
             cmd->SetGraphicsRootShaderResourceView(4, model->PrevBoneBuffer(pc.frame));
@@ -2387,8 +2446,7 @@ void ScenePass::Execute(PassContext& pc) {
                     const uint32_t c[5] = {0xFFFFFFFFu, 0xFFFFFFFFu, pbrDebugChannel, 0u, modelIdInfo};
                     cmd->SetGraphicsRoot32BitConstants(14, 5, c, 0);
                 }
-                cmd->DrawIndexedInstanced(m.indexCount, 1, m.indexStart, 0, 0);
-                pc.stats.drawCalls++;
+                pc.stats.drawCalls += model->DrawMaterial(cmd, m, cull ? &frustum : nullptr);
                 pc.stats.triangles += m.indexCount / 3;
             }
 

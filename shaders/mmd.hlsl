@@ -125,7 +125,10 @@ VSOut VSMain(VSIn v) {
     Skin(v, wp3, wn);
     float4 wp = float4(wp3, 1.0);
     float4 pwp = float4(PrevSkinPosition(v), 1.0);
-    o.pos = mul(wp, gViewProj);
+    // precise: the depth pre-pass and the lit draw must rasterise the very same depth (the compiler may not contract
+    // this differently for a PSO without a pixel shader)
+    precise float4 clipPos = mul(wp, gViewProj);
+    o.pos = clipPos;
     o.worldPos = wp.xyz;
     o.nrm = wn;
     o.uv = v.uv;

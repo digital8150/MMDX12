@@ -105,6 +105,99 @@ bool GpuModel::Create(Dx12Context& ctx, UploadBatch& batch, const PmxModel& pmx,
     return Create(ctx, batch, pmx, textures, builtin, role, pbr, nullptr);
 }
 
+// The material blends (its pixels depend on the draw order) or may: diffuse alpha, a texture with alpha, a dielectric.
+static bool MaterialBlends(const PmxModel& pmx, size_t mi, const std::vector<ImageRGBA8>& textures,
+                           const PbrModelData& pbr, const std::vector<CompressedImage>* compressed) {
+    const PmxMaterial& m = pmx.materials[mi];
+    if (m.diffuse.w < 0.999f) return true;
+    const int32_t t = m.textureIndex;
+    if (t >= 0 && (size_t)t < textures.size() && textures[(size_t)t].hasAlpha) return true;
+    if (compressed && t >= 0 && (size_t)t < compressed->size() && (*compressed)[(size_t)t].hasAlpha) return true;
+    if (mi < pbr.materials.size() && pbr.materials[mi].valid) {
+        const PbrMaterial& p = pbr.materials[mi];
+        if (p.ext.transmission > 0.0f || p.ext.transmissionTex.kind != PbrTexKind::None) return true;
+    }
+    return false;
+}
+
+// Sorts the triangles of a large static stage's opaque materials by world xz cell (the draw order inside an opaque
+// material does not matter: the depth test decides) and returns the cells. Only a model with one bone and no vertex
+// morphs: its cells' bounds stay valid under the root transform. Blending materials keep their authored order and draw
+// whole. Empty `sorted` = nothing to do.
+static void BuildDrawCells(const PmxModel& pmx, ModelRole role, const std::vector<ImageRGBA8>& textures,
+                           const PbrModelData& pbr, const std::vector<CompressedImage>* compressed,
+                           std::vector<uint32_t>& sorted, std::vector<GpuModel::DrawCell>& cells,
+                           std::vector<std::pair<uint32_t, uint32_t>>& perMaterial) {
+    constexpr size_t kMinTriangles = 50000;      // below this a whole stage is cheap: the draw calls would cost more
+    constexpr float kCellSize = 50.0f;           // MMD units (about 4 m)
+    constexpr float kMaxCellsPerAxis = 64.0f;
+    if (role != ModelRole::Stage || pmx.bones.size() > 1 || pmx.indices.size() / 3 < kMinTriangles ||
+        pmx.vertices.empty())
+        return;
+    for (const PmxMorph& mo : pmx.morphs)
+        if (mo.type == PmxMorphType::Vertex) return;
+    float minX = FLT_MAX, maxX = -FLT_MAX, minZ = FLT_MAX, maxZ = -FLT_MAX;
+    for (const PmxVertex& v : pmx.vertices) {
+        minX = std::min(minX, v.position.x);
+        maxX = std::max(maxX, v.position.x);
+        minZ = std::min(minZ, v.position.z);
+        maxZ = std::max(maxZ, v.position.z);
+    }
+    const float cellSize = std::max(kCellSize, std::max(maxX - minX, maxZ - minZ) / kMaxCellsPerAxis);
+    sorted = pmx.indices;
+    perMaterial.assign(pmx.materials.size(), {0u, 0u});
+    struct Tri { uint64_t key; uint32_t index; };
+    std::vector<Tri> tris;
+    uint32_t start = 0;
+    size_t splitTriangles = 0;
+    for (size_t mi = 0; mi < pmx.materials.size(); ++mi) {
+        const uint32_t count = pmx.materials[mi].indexCount;
+        const uint32_t materialStart = start;
+        start += count;
+        if (count < 3 || materialStart + count > pmx.indices.size() ||
+            MaterialBlends(pmx, mi, textures, pbr, compressed))
+            continue;
+        tris.resize(count / 3);
+        for (uint32_t t = 0; t < count / 3; ++t) {
+            const DirectX::XMFLOAT3& a = pmx.vertices[pmx.indices[materialStart + t * 3 + 0]].position;
+            const DirectX::XMFLOAT3& b = pmx.vertices[pmx.indices[materialStart + t * 3 + 1]].position;
+            const DirectX::XMFLOAT3& c = pmx.vertices[pmx.indices[materialStart + t * 3 + 2]].position;
+            const uint64_t cx = (uint64_t)std::max(0.0f, ((a.x + b.x + c.x) / 3.0f - minX) / cellSize);
+            const uint64_t cz = (uint64_t)std::max(0.0f, ((a.z + b.z + c.z) / 3.0f - minZ) / cellSize);
+            tris[t] = {(cz << 32) | cx, t};
+        }
+        std::stable_sort(tris.begin(), tris.end(), [](const Tri& x, const Tri& y) { return x.key < y.key; });
+        const uint32_t firstCell = (uint32_t)cells.size();
+        uint64_t key = UINT64_MAX;
+        for (uint32_t i = 0; i < count / 3; ++i) {
+            if (tris[i].key != key) {
+                key = tris[i].key;
+                GpuModel::DrawCell cell;
+                cell.indexStart = materialStart + i * 3;
+                cell.boundsMin = {FLT_MAX, FLT_MAX, FLT_MAX};
+                cell.boundsMax = {-FLT_MAX, -FLT_MAX, -FLT_MAX};
+                cells.push_back(cell);
+            }
+            GpuModel::DrawCell& cell = cells.back();
+            for (uint32_t v = 0; v < 3; ++v) {
+                const uint32_t index = pmx.indices[materialStart + tris[i].index * 3 + v];
+                sorted[materialStart + i * 3 + v] = index;
+                const DirectX::XMFLOAT3& p = pmx.vertices[index].position;
+                cell.boundsMin = {std::min(cell.boundsMin.x, p.x), std::min(cell.boundsMin.y, p.y),
+                                  std::min(cell.boundsMin.z, p.z)};
+                cell.boundsMax = {std::max(cell.boundsMax.x, p.x), std::max(cell.boundsMax.y, p.y),
+                                  std::max(cell.boundsMax.z, p.z)};
+            }
+            cell.indexCount += 3;
+        }
+        perMaterial[mi] = {firstCell, (uint32_t)cells.size() - firstCell};
+        splitTriangles += count / 3;
+    }
+    LOG_INFO("STAGECELLS model=%s cell=%.0f cells=%zu triangles=%zu/%zu", pmx.name.c_str(), cellSize, cells.size(),
+             splitTriangles, pmx.indices.size() / 3);
+    if (cells.empty()) sorted.clear();
+}
+
 bool GpuModel::Create(Dx12Context& ctx, UploadBatch& batch, const PmxModel& pmx,
                       const std::vector<ImageRGBA8>& textures, const BuiltinTextures& builtin,
                       ModelRole role, const PbrModelData& pbr, const std::vector<CompressedImage>* compressed) {
@@ -114,7 +207,12 @@ bool GpuModel::Create(Dx12Context& ctx, UploadBatch& batch, const PmxModel& pmx,
     additionalUvCount_ = pmx.additionalUvCount;
     boneCount_ = (uint32_t)pmx.bones.size();
     vertexCount_ = (uint32_t)pmx.vertices.size();
-    indexCount_ = (uint32_t)pmx.indices.size();
+    drawCells_.clear();
+    std::vector<uint32_t> sortedIndices;
+    std::vector<std::pair<uint32_t, uint32_t>> cellsPerMaterial;
+    BuildDrawCells(pmx, role, textures, pbr, compressed, sortedIndices, drawCells_, cellsPerMaterial);
+    const std::vector<uint32_t>& indices = sortedIndices.empty() ? pmx.indices : sortedIndices;
+    indexCount_ = (uint32_t)indices.size();
 
     // Vertices.
     std::vector<GpuVertex> verts(vertexCount_);
@@ -228,7 +326,7 @@ bool GpuModel::Create(Dx12Context& ctx, UploadBatch& batch, const PmxModel& pmx,
         LOG_ERROR("model '%s': vertex buffer creation failed", name_.c_str());
         return false;
     }
-    ib_ = batch.CreateBuffer(pmx.indices.data(), pmx.indices.size() * sizeof(uint32_t),
+    ib_ = batch.CreateBuffer(indices.data(), indices.size() * sizeof(uint32_t),
                              D3D12_RESOURCE_STATE_INDEX_BUFFER | D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE |
                                  D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
                              L"model.ib");
@@ -240,15 +338,15 @@ bool GpuModel::Create(Dx12Context& ctx, UploadBatch& batch, const PmxModel& pmx,
     vbv_.SizeInBytes = (UINT)(verts.size() * sizeof(GpuVertex));
     vbv_.BufferLocation = vb_->GetGPUVirtualAddress();
     ibv_.Format = DXGI_FORMAT_R32_UINT;
-    ibv_.SizeInBytes = (UINT)(pmx.indices.size() * sizeof(uint32_t));
+    ibv_.SizeInBytes = (UINT)(indices.size() * sizeof(uint32_t));
     ibv_.BufferLocation = ib_->GetGPUVirtualAddress();
 
     // S8a: rest-pose triangle areas (the emissive-triangle CDF weighs a triangle by area x emission estimate).
-    triAreas_.assign(pmx.indices.size() / 3, 0.0f);
+    triAreas_.assign(indices.size() / 3, 0.0f);
     for (size_t t = 0; t < triAreas_.size(); ++t) {
-        const DirectX::XMFLOAT3& a = pmx.vertices[pmx.indices[t * 3 + 0]].position;
-        const DirectX::XMFLOAT3& b = pmx.vertices[pmx.indices[t * 3 + 1]].position;
-        const DirectX::XMFLOAT3& c = pmx.vertices[pmx.indices[t * 3 + 2]].position;
+        const DirectX::XMFLOAT3& a = pmx.vertices[indices[t * 3 + 0]].position;
+        const DirectX::XMFLOAT3& b = pmx.vertices[indices[t * 3 + 1]].position;
+        const DirectX::XMFLOAT3& c = pmx.vertices[indices[t * 3 + 2]].position;
         const float e1[3] = {b.x - a.x, b.y - a.y, b.z - a.z};
         const float e2[3] = {c.x - a.x, c.y - a.y, c.z - a.z};
         const float cx = e1[1] * e2[2] - e1[2] * e2[1];
@@ -604,6 +702,17 @@ bool GpuModel::Create(Dx12Context& ctx, UploadBatch& batch, const PmxModel& pmx,
                           (textures[m.textureIndex].hasAlpha ||
                            (compressedAt(m.textureIndex) && compressedAt(m.textureIndex)->hasAlpha));
         mat.sphereMode = (uint8_t)m.sphereMode;
+        if (mIdx < cellsPerMaterial.size()) {
+            mat.cellFirst = cellsPerMaterial[mIdx].first;
+            mat.cellCount = cellsPerMaterial[mIdx].second;
+        }
+        {
+            // PBR_FLAG_CUTOUT (GpuModel's record below) discards by the ALPHA slot; a material morph can change the alpha
+            const bool hasRecord = mIdx < pbr.materials.size() && pbr.materials[mIdx].valid;
+            const float threshold = hasRecord ? pbr.materials[mIdx].alphaThreshold : 0.0f;
+            const bool cutout = threshold > 0.0f && threshold < 0.999f;
+            mat.opaqueAtLoad = !cutout && !morphable[mIdx] && !MaterialBlends(pmx, mIdx, textures, pbr, compressed);
+        }
         mat.edgeSize = m.edgeSize;
         mat.constants = materialCb_->GetGPUVirtualAddress() + mIdx * sizeof(MaterialConstants);
 
@@ -682,14 +791,14 @@ bool GpuModel::Create(Dx12Context& ctx, UploadBatch& batch, const PmxModel& pmx,
     // never carries a screen, so character models skip the fit (an extra per-material pass over their triangles).
     for (size_t mIdx = 0; role == ModelRole::Stage && mIdx < pmx.materials.size() && mIdx < consts.size(); ++mIdx) {
         const uint32_t first = materials_[mIdx].indexStart;
-        const uint32_t count = std::min(materials_[mIdx].indexCount, (uint32_t)(pmx.indices.size() - first));
+        const uint32_t count = std::min(materials_[mIdx].indexCount, (uint32_t)(indices.size() - first));
         double cx = 0, cy = 0, cz = 0;
         // area-weighted normal and centroid (the same fit as the S10 mirror plane below)
         double nx = 0, ny = 0, nz = 0, area = 0;
         for (uint32_t t = 0; t + 2 < count; t += 3) {
-            const DirectX::XMFLOAT3& a = pmx.vertices[pmx.indices[first + t + 0]].position;
-            const DirectX::XMFLOAT3& b = pmx.vertices[pmx.indices[first + t + 1]].position;
-            const DirectX::XMFLOAT3& c = pmx.vertices[pmx.indices[first + t + 2]].position;
+            const DirectX::XMFLOAT3& a = pmx.vertices[indices[first + t + 0]].position;
+            const DirectX::XMFLOAT3& b = pmx.vertices[indices[first + t + 1]].position;
+            const DirectX::XMFLOAT3& c = pmx.vertices[indices[first + t + 2]].position;
             const double p[3][3] = {{a.x, a.y, a.z}, {b.x, b.y, b.z}, {c.x, c.y, c.z}};
             const double e1[3] = {p[1][0] - p[0][0], p[1][1] - p[0][1], p[1][2] - p[0][2]};
             const double e2[3] = {p[2][0] - p[0][0], p[2][1] - p[0][1], p[2][2] - p[0][2]};
@@ -697,15 +806,15 @@ bool GpuModel::Create(Dx12Context& ctx, UploadBatch& batch, const PmxModel& pmx,
                                   e1[0] * e2[1] - e1[1] * e2[0]};
             const double tri = 0.5 * std::sqrt(cr[0] * cr[0] + cr[1] * cr[1] + cr[2] * cr[2]);
             if (!(tri > 0.0)) continue;
-            nx += tri * (pmx.vertices[pmx.indices[first + t + 0]].normal.x +
-                         pmx.vertices[pmx.indices[first + t + 1]].normal.x +
-                         pmx.vertices[pmx.indices[first + t + 2]].normal.x) / 3.0;
-            ny += tri * (pmx.vertices[pmx.indices[first + t + 0]].normal.y +
-                         pmx.vertices[pmx.indices[first + t + 1]].normal.y +
-                         pmx.vertices[pmx.indices[first + t + 2]].normal.y) / 3.0;
-            nz += tri * (pmx.vertices[pmx.indices[first + t + 0]].normal.z +
-                         pmx.vertices[pmx.indices[first + t + 1]].normal.z +
-                         pmx.vertices[pmx.indices[first + t + 2]].normal.z) / 3.0;
+            nx += tri * (pmx.vertices[indices[first + t + 0]].normal.x +
+                         pmx.vertices[indices[first + t + 1]].normal.x +
+                         pmx.vertices[indices[first + t + 2]].normal.x) / 3.0;
+            ny += tri * (pmx.vertices[indices[first + t + 0]].normal.y +
+                         pmx.vertices[indices[first + t + 1]].normal.y +
+                         pmx.vertices[indices[first + t + 2]].normal.y) / 3.0;
+            nz += tri * (pmx.vertices[indices[first + t + 0]].normal.z +
+                         pmx.vertices[indices[first + t + 1]].normal.z +
+                         pmx.vertices[indices[first + t + 2]].normal.z) / 3.0;
             cx += tri * (a.x + b.x + c.x) / 3.0;
             cy += tri * (a.y + b.y + c.y) / 3.0;
             cz += tri * (a.z + b.z + c.z) / 3.0;
@@ -732,7 +841,7 @@ bool GpuModel::Create(Dx12Context& ctx, UploadBatch& batch, const PmxModel& pmx,
         double saa = 0, sbb = 0, sab = 0;
         for (uint32_t t = 0; t + 2 < count; t += 3) {
             for (int v = 0; v < 3; ++v) {
-                const DirectX::XMFLOAT3& p = pmx.vertices[pmx.indices[first + t + (uint32_t)v]].position;
+                const DirectX::XMFLOAT3& p = pmx.vertices[indices[first + t + (uint32_t)v]].position;
                 const double d[3] = {p.x - rect.center.x, p.y - rect.center.y, p.z - rect.center.z};
                 const double da = d[0] * a0[0] + d[1] * a0[1] + d[2] * a0[2];
                 const double db = d[0] * b0[0] + d[1] * b0[1] + d[2] * b0[2];
@@ -757,7 +866,7 @@ bool GpuModel::Create(Dx12Context& ctx, UploadBatch& batch, const PmxModel& pmx,
             double au = 0, av = 0, bu = 0, bv = 0;
             for (uint32_t t = 0; t + 2 < count; t += 3) {
                 for (int v = 0; v < 3; ++v) {
-                    const PmxVertex& pv = pmx.vertices[pmx.indices[first + t + (uint32_t)v]];
+                    const PmxVertex& pv = pmx.vertices[indices[first + t + (uint32_t)v]];
                     const double d[3] = {pv.position.x - rect.center.x, pv.position.y - rect.center.y,
                                          pv.position.z - rect.center.z};
                     const double da = d[0] * a[0] + d[1] * a[1] + d[2] * a[2];
@@ -778,7 +887,7 @@ bool GpuModel::Create(Dx12Context& ctx, UploadBatch& batch, const PmxModel& pmx,
         float halfA = 0.0f, halfB = 0.0f;
         for (uint32_t t = 0; t + 2 < count; t += 3) {
             for (int v = 0; v < 3; ++v) {
-                const DirectX::XMFLOAT3& p = pmx.vertices[pmx.indices[first + t + (uint32_t)v]].position;
+                const DirectX::XMFLOAT3& p = pmx.vertices[indices[first + t + (uint32_t)v]].position;
                 const float dx = p.x - rect.center.x, dy = p.y - rect.center.y, dz = p.z - rect.center.z;
                 halfA = std::max(halfA, std::abs(dx * rect.axisA.x + dy * rect.axisA.y + dz * rect.axisA.z));
                 halfB = std::max(halfB, std::abs(dx * rect.axisB.x + dy * rect.axisB.y + dz * rect.axisB.z));
@@ -799,12 +908,12 @@ bool GpuModel::Create(Dx12Context& ctx, UploadBatch& batch, const PmxModel& pmx,
         MirrorPlane plane;
         plane.material = mIdx;
         const uint32_t first = materials_[mIdx].indexStart;
-        const uint32_t count = std::min(materials_[mIdx].indexCount, (uint32_t)(pmx.indices.size() - first));
+        const uint32_t count = std::min(materials_[mIdx].indexCount, (uint32_t)(indices.size() - first));
         double cx = 0, cy = 0, cz = 0, nx = 0, ny = 0, nz = 0, area = 0;
         for (uint32_t t = 0; t + 2 < count; t += 3) {
-            const DirectX::XMFLOAT3& a = pmx.vertices[pmx.indices[first + t + 0]].position;
-            const DirectX::XMFLOAT3& b = pmx.vertices[pmx.indices[first + t + 1]].position;
-            const DirectX::XMFLOAT3& c = pmx.vertices[pmx.indices[first + t + 2]].position;
+            const DirectX::XMFLOAT3& a = pmx.vertices[indices[first + t + 0]].position;
+            const DirectX::XMFLOAT3& b = pmx.vertices[indices[first + t + 1]].position;
+            const DirectX::XMFLOAT3& c = pmx.vertices[indices[first + t + 2]].position;
             const double e1[3] = {b.x - a.x, b.y - a.y, b.z - a.z};
             const double e2[3] = {c.x - a.x, c.y - a.y, c.z - a.z};
             const double cr[3] = {e1[1] * e2[2] - e1[2] * e2[1], e1[2] * e2[0] - e1[0] * e2[2],
@@ -813,15 +922,15 @@ bool GpuModel::Create(Dx12Context& ctx, UploadBatch& batch, const PmxModel& pmx,
             if (!(tri > 0.0)) continue;
             // The plane's orientation is the surface's own: the area-weighted vertex normals (the importer mirrors the
             // axis and flips the winding, so the winding cross product is not the visible side).
-            nx += tri * (pmx.vertices[pmx.indices[first + t + 0]].normal.x +
-                         pmx.vertices[pmx.indices[first + t + 1]].normal.x +
-                         pmx.vertices[pmx.indices[first + t + 2]].normal.x) / 3.0;
-            ny += tri * (pmx.vertices[pmx.indices[first + t + 0]].normal.y +
-                         pmx.vertices[pmx.indices[first + t + 1]].normal.y +
-                         pmx.vertices[pmx.indices[first + t + 2]].normal.y) / 3.0;
-            nz += tri * (pmx.vertices[pmx.indices[first + t + 0]].normal.z +
-                         pmx.vertices[pmx.indices[first + t + 1]].normal.z +
-                         pmx.vertices[pmx.indices[first + t + 2]].normal.z) / 3.0;
+            nx += tri * (pmx.vertices[indices[first + t + 0]].normal.x +
+                         pmx.vertices[indices[first + t + 1]].normal.x +
+                         pmx.vertices[indices[first + t + 2]].normal.x) / 3.0;
+            ny += tri * (pmx.vertices[indices[first + t + 0]].normal.y +
+                         pmx.vertices[indices[first + t + 1]].normal.y +
+                         pmx.vertices[indices[first + t + 2]].normal.y) / 3.0;
+            nz += tri * (pmx.vertices[indices[first + t + 0]].normal.z +
+                         pmx.vertices[indices[first + t + 1]].normal.z +
+                         pmx.vertices[indices[first + t + 2]].normal.z) / 3.0;
             cx += tri * (a.x + b.x + c.x) / 3.0;
             cy += tri * (a.y + b.y + c.y) / 3.0;
             cz += tri * (a.z + b.z + c.z) / 3.0;
@@ -847,9 +956,9 @@ bool GpuModel::Create(Dx12Context& ctx, UploadBatch& batch, const PmxModel& pmx,
                 maxDist = std::max(maxDist, std::abs(d));
             };
             for (uint32_t t = 0; t + 2 < count; t += 3) {
-                addVertex(pmx.vertices[pmx.indices[first + t + 0]].position);
-                addVertex(pmx.vertices[pmx.indices[first + t + 1]].position);
-                addVertex(pmx.vertices[pmx.indices[first + t + 2]].position);
+                addVertex(pmx.vertices[indices[first + t + 0]].position);
+                addVertex(pmx.vertices[indices[first + t + 1]].position);
+                addVertex(pmx.vertices[indices[first + t + 2]].position);
             }
             const double extent = std::max(std::max(hi[0] - lo[0], hi[1] - lo[1]), hi[2] - lo[2]);
             plane.valid = maxDist <= std::max(extent * 0.01, 1e-4);
@@ -1044,7 +1153,73 @@ void GpuModel::SetMaterialBlendHints(const std::vector<uint8_t>& hints, uint8_t 
     for (size_t i = 0; i < materials_.size(); ++i) materials_[i].constants = materialCb_->GetGPUVirtualAddress() + i * sizeof(MaterialConstants);
 }
 
+bool GpuModel::BuildCullFrustum(const DirectX::XMFLOAT4X4& viewProj, bool depthPlanes, CullFrustum& out) const {
+    if (drawCells_.empty()) return false;
+    DirectX::XMFLOAT4X4 m;
+    DirectX::XMStoreFloat4x4(&m, DirectX::XMMatrixMultiply(DirectX::XMLoadFloat4x4(&rootSkin_),
+                                                           DirectX::XMLoadFloat4x4(&viewProj)));
+    // clip = (p, 1) * m, so each clip coordinate is the dot product with a column of m
+    const auto plane = [&](float sign, int column) {
+        return DirectX::XMFLOAT4{m.m[0][3] + sign * m.m[0][column], m.m[1][3] + sign * m.m[1][column],
+                                 m.m[2][3] + sign * m.m[2][column], m.m[3][3] + sign * m.m[3][column]};
+    };
+    out.count = 0;
+    out.planes[out.count++] = plane(1.0f, 0);    // x >= -w
+    out.planes[out.count++] = plane(-1.0f, 0);   // x <= w
+    out.planes[out.count++] = plane(1.0f, 1);    // y >= -w
+    out.planes[out.count++] = plane(-1.0f, 1);   // y <= w
+    if (depthPlanes) {
+        out.planes[out.count++] = {m.m[0][2], m.m[1][2], m.m[2][2], m.m[3][2]};   // z >= 0
+        out.planes[out.count++] = plane(-1.0f, 2);                                // z <= w
+    }
+    return true;
+}
+
+uint32_t GpuModel::DrawMaterial(ID3D12GraphicsCommandList* cmd, const Material& m, const CullFrustum* frustum) const {
+    if (!frustum || m.cellCount == 0) {
+        cmd->DrawIndexedInstanced(m.indexCount, 1, m.indexStart, 0, 0);
+        return 1;
+    }
+    uint32_t draws = 0, start = 0, count = 0;
+    for (uint32_t c = 0; c < m.cellCount; ++c) {
+        const DrawCell& cell = drawCells_[m.cellFirst + c];
+        bool outside = false;
+        for (uint32_t p = 0; p < frustum->count && !outside; ++p) {
+            const DirectX::XMFLOAT4& pl = frustum->planes[p];
+            // the box corner farthest along the plane's normal
+            const float d = pl.x * (pl.x > 0.0f ? cell.boundsMax.x : cell.boundsMin.x) +
+                            pl.y * (pl.y > 0.0f ? cell.boundsMax.y : cell.boundsMin.y) +
+                            pl.z * (pl.z > 0.0f ? cell.boundsMax.z : cell.boundsMin.z) + pl.w;
+            outside = d < 0.0f;
+        }
+        if (outside) continue;
+        if (count && start + count == cell.indexStart) {
+            count += cell.indexCount;
+            continue;
+        }
+        if (count) {
+            cmd->DrawIndexedInstanced(count, 1, start, 0, 0);
+            ++draws;
+        }
+        start = cell.indexStart;
+        count = cell.indexCount;
+    }
+    if (count) {
+        cmd->DrawIndexedInstanced(count, 1, start, 0, 0);
+        ++draws;
+    }
+    return draws;
+}
+
+bool GpuModel::DepthPrepassMaterial(const Material& m) const {
+    if (!m.opaqueAtLoad || !m.visible || m.indexCount == 0 || m.additive || m.noDepthWrite || m.screen ||
+        opacity_ != 1.0f)
+        return false;
+    return PbrTransmission((size_t)(&m - materials_.data())) <= 0.0f;   // a stage rule may turn a material into glass
+}
+
 void GpuModel::UpdateSkinning(uint64_t frame, const std::vector<DirectX::XMFLOAT4X4>& skin) {
+    if (!skin.empty()) rootSkin_ = skin[0];
     const size_t count = std::min(skin.size(), (size_t)(boneCount_ == 0 ? 1u : boneCount_));
     const uint32_t r = (uint32_t)(frame % kRing);
     for (uint32_t i = 0; i < kRing; ++i) {
@@ -1091,6 +1266,7 @@ void GpuModel::UpdateMorphs(uint64_t frame, const std::vector<DirectX::XMFLOAT3>
 void GpuModel::UpdateMaterials(uint64_t frame, const std::vector<PmxMorph::MaterialOffset>& mul,
                                const std::vector<PmxMorph::MaterialOffset>& add, uint64_t version, float opacity) {
     if (!materialMapped_ || materials_.empty()) return;
+    opacity_ = opacity;
     const size_t n = materials_.size();
     const bool identity = mul.size() != n || add.size() != n;
     if (identity) version = 0;
@@ -1474,6 +1650,7 @@ float GpuModel::EmitEstimate(size_t material) const {
 
 void GpuModel::SetMaterialScreen(size_t materialIndex, bool on, float brightness) {
     if (materialIndex >= materials_.size()) return;
+    materials_[materialIndex].screen = on;
     if (materialOrigReflect_.size() < materials_.size()) return;   // the model was not created through Create
     for (MaterialConstants* c : {materialIndex < baseConsts_.size() ? &baseConsts_[materialIndex] : nullptr,
                                  materialIndex < materialConsts_.size() ? &materialConsts_[materialIndex] : nullptr}) {

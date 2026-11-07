@@ -95,7 +95,21 @@ public:
         bool additive = false;       // the model's own .emd effect is additive: ScenePass uses the additive PSO
         bool noDepthWrite = false;   // the model's own .emd effect draws with ZWriteEnable = false (no depth write)
         uint8_t sphereMode = 0;      // PMX sphere mode (0 none, 1 multiply, 2 add, 3 subtexture): MME UseSphereMap
+        bool screen = false;         // S5: shows a stage screen's texture (its alpha is the screen's: not known opaque)
+        bool opaqueAtLoad = false;   // no blending or discard from the data known at load (DepthPrepassMaterial)
+        uint32_t cellFirst = 0, cellCount = 0;   // the material's part of DrawCells() (0 = draw it whole)
         float edgeSize = 0;
+    };
+
+    // A static stage's opaque materials are sorted by world xz cell at load, so a view draws only the cells its frustum
+    // touches (a baked stage's material spans the whole set, so a whole-material test culls nothing).
+    struct DrawCell {
+        uint32_t indexStart = 0, indexCount = 0;
+        DirectX::XMFLOAT3 boundsMin{}, boundsMax{};   // model space
+    };
+    struct CullFrustum {
+        DirectX::XMFLOAT4 planes[6] = {};   // model space, inside = dot(p, 1) >= 0
+        uint32_t count = 0;
     };
 
     GpuModel();
@@ -284,6 +298,15 @@ public:
     void SetPbrOverrides(uint64_t frame, const std::vector<PbrOverride>& list, uint64_t version);
     // Generic data traits of the model (additional UVs, toon-map materials) for ShaderPack::Suggests.
     ModelTraits Traits() const;
+    // The planes of a row-vector clip matrix in this model's space (through its one root bone). `depthPlanes` false = x
+    // and y only (a shadow map keeps casters in front of its near plane). False when the model has no cells.
+    bool BuildCullFrustum(const DirectX::XMFLOAT4X4& viewProj, bool depthPlanes, CullFrustum& out) const;
+    // Draws a material: through its cells inside `frustum` (null = all of it), contiguous cells as one draw call.
+    // Returns the number of draw calls.
+    uint32_t DrawMaterial(ID3D12GraphicsCommandList* cmd, const Material& m, const CullFrustum* frustum) const;
+    // The material can go into ScenePass's depth pre-pass: its pixels always write depth and are never discarded or
+    // blended, including the runtime state (stage rule overrides, studio opacity, screen binding, .emd blend hints).
+    bool DepthPrepassMaterial(const Material& m) const;
     D3D12_GPU_VIRTUAL_ADDRESS BoneBuffer(uint64_t frame) const;      // StructuredBuffer<float4x4> (t0)
     D3D12_GPU_VIRTUAL_ADDRESS PrevBoneBuffer(uint64_t frame) const;  // previous frame (t4)
     const DirectX::XMFLOAT4X4* BoneMatricesCpu(uint64_t frame) const {
@@ -416,6 +439,9 @@ private:
     float skinMargin_ = 0.0f;
     DirectX::XMFLOAT3 liveCenter_{};
     float liveRadius_ = 0.0f;
+    std::vector<DrawCell> drawCells_;
+    DirectX::XMFLOAT4X4 rootSkin_{1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};   // UpdateSkinning: the cells' bone
+    float opacity_ = 1.0f;   // UpdateMaterials: the studio's accessory opacity
     ComPtr<ID3D12Resource> boneBuf_[kRing];
     void* boneMapped_[kRing] = {};
     ComPtr<ID3D12Resource> morphBuf_[kRing];
