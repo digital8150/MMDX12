@@ -95,6 +95,7 @@ struct AppSettings {
     std::vector<VideoProbe> videoProbes;  // measured sample renders, oldest first
     std::string leaderboardUrl = "https://home.codingbot.kr/api/benchmark";
     std::string updateFeedUrl;               // auto-update feed (empty: the built-in default)
+    bool nightlyNoticeShown = false;         // a nightly build told this install what it is
     // Open gallery (docs/effect_ecosystem.md §3): additional index URLs, kept in ini "galleryIndex=<url>" lines.
     // The official index (ShaderPackStore::kDefaultIndexUrl) is implicit and always fetched first, never stored.
     std::vector<std::string> galleryIndexes;

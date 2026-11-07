@@ -20,6 +20,11 @@ Usage:
 `--base-url` is the URL the manifests/ and objects/ folders will be served under (e.g.
 https://mmdx.codingbot.kr/update). The manifest's `objects` field points at <base-url>/objects/;
 without it the manifest uses the relative "../objects/" (resolved against the manifest URL).
+
+Nightly builds (.github/workflows/nightly.yml) also pass:
+    --known-feed URL    objects the manifest of that live feed lists are already on the server: <out> leaves them out
+    --feed FILE --zip Z --zip-url U --page P --commit SHA --note TEXT
+                        write the update feed (what the app reads) for this version
 Standard library only (python 3).
 """
 import argparse
@@ -29,6 +34,9 @@ import json
 import os
 import shutil
 import sys
+import time
+import urllib.error
+import urllib.request
 
 # Directory names anywhere under the install root that never belong to a version: the user's
 # library and caches/logs the app writes at runtime.
@@ -74,14 +82,42 @@ def skipped(path, root):
     return False
 
 
+def fetch_json(url):
+    # The site sits behind a CDN that turns away urllib's default User-Agent.
+    request = urllib.request.Request(url, headers={"User-Agent": "MMDX12-make-update"})
+    with urllib.request.urlopen(request, timeout=60) as r:
+        return json.load(r)
+
+
+def known_objects(feed_url):
+    """SHA-256 of every file the live feed's manifest lists; empty when there is no feed yet."""
+    try:
+        return {f["sha256"] for f in fetch_json(fetch_json(feed_url)["manifest"])["files"]}
+    except urllib.error.HTTPError as e:
+        if e.code != 404:
+            raise
+        print(f"no feed at {feed_url}: writing every object")
+        return set()
+
+
 def main():
     ap = argparse.ArgumentParser(description="Build the delta-update manifest + object store.")
     ap.add_argument("stage", help="staged release tree (or its parent); MMDX12.exe inside")
     ap.add_argument("--version", required=True, help="version string, e.g. 1.9.2")
     ap.add_argument("--out", required=True, help="output dir for manifests/ and objects/")
     ap.add_argument("--base-url", default="", help="URL the manifests/ and objects/ live under")
+    ap.add_argument("--known-feed", default="", help="live feed whose manifest's objects need no upload")
+    ap.add_argument("--feed", default="", help="write the update feed to this file (needs --base-url)")
+    ap.add_argument("--zip", default="", help="the version's full zip (feed size + sha256)")
+    ap.add_argument("--zip-url", default="", help="where the zip will be served (feed url)")
+    ap.add_argument("--page", default="", help="release page (feed page)")
+    ap.add_argument("--commit", default="", help="commit this build came from (feed commit)")
+    ap.add_argument("--note", default="", help="update note (feed notes.en)")
     args = ap.parse_args()
+    if args.feed and not (args.base_url and args.zip and args.zip_url):
+        sys.exit("error: --feed needs --base-url, --zip and --zip-url")
 
+    known = known_objects(args.known_feed) if args.known_feed else set()
     root = find_install_root(args.stage)
     manifests = os.path.join(args.out, "manifests")
     objects = os.path.join(args.out, "objects")
@@ -107,7 +143,7 @@ def main():
             total += size
 
             dest = os.path.join(objects, digest[:2], digest)
-            if not os.path.exists(dest):
+            if digest not in known and not os.path.exists(dest):
                 os.makedirs(os.path.dirname(dest), exist_ok=True)
                 shutil.copyfile(full, dest)
                 new_objects += 1
@@ -142,6 +178,24 @@ def main():
     print("latest.json fields:")
     print(f'  "manifest": "{manifest_url}",')
     print(f'  "manifestSha256": "{manifest_sha}",')
+
+    if args.feed:
+        feed = {
+            "version": args.version,
+            "url": args.zip_url,
+            "size": os.path.getsize(args.zip),
+            "sha256": sha256_of(args.zip),
+            "page": args.page,
+            "published": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "commit": args.commit,
+            "manifest": manifest_url,
+            "manifestSha256": manifest_sha,
+            "notes": {"en": args.note},
+        }
+        with open(args.feed, "w", encoding="utf-8") as f:
+            json.dump(feed, f, ensure_ascii=False, indent=1)
+            f.write("\n")
+        print(f"wrote {args.feed}")
 
 
 if __name__ == "__main__":

@@ -161,6 +161,8 @@ Other layouts work too: folder names like `models` or `motions` count, and witho
 2. Add your MMD files to the `library` folder.
 3. Run `MMDX12.exe`. Windows may show a SmartScreen warning the first time because the exe isn't signed: click "More info", then "Run anyway".
 
+Want the newest changes before a release? [Nightly builds](https://github.com/digital8150/MMDX12/releases/tag/nightly) come automatically from every change to `master`. They can break, so unzip them into their own folder. Projects saved in a nightly may not open in a stable version.
+
 **What you need:** Windows 10/11 and a DirectX 12 graphics card. Ray tracing, path tracing and the high-quality renderer need a ray-tracing capable GPU (e.g. NVIDIA RTX, AMD RX 6000+, Intel Arc). DLSS needs an NVIDIA RTX card.
 
 ### Controls

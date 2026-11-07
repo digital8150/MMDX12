@@ -51,4 +51,22 @@ Get-File 'https://github.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SDK/releases/do
 $ffxBase = 'Samples/Upscalers/FidelityFX_FSR/dx12/x64/Release/'
 Expand-Entries $ffxZip @(($ffxBase + 'amd_fidelityfx_loader_dx12.dll'), ($ffxBase + 'amd_fidelityfx_upscaler_dx12.dll')) (Join-Path $ext 'ffx/bin')
 
+# These DLLs ship inside every release: a changed download must never reach a zip. A new SDK version updates this list.
+$expected = @{
+    'dlss/bin/nvngx_dlss.dll'                  = 'd00b5b0ab29c3ca101b70c3a5ecb3a01b7ef33766a3383a28a18623083e6123e'
+    'dlss/bin/nvngx_dlssd.dll'                 = 'b49435ae346f227feafe7bbe937d88277ea0ee7323975ec06488f377fdb46cee'
+    'dlss/bin/nvngx_dlssg.dll'                 = '8d59d49b36410dd6b62fef2503a5871d347415bd85d943fa0848563a95dd50c7'
+    'xess/bin/libxess.dll'                     = '251659dd84a3e84de67c886a4186e01f3eca49b00641906fe38bb6b807e5d5b7'
+    'ffx/bin/amd_fidelityfx_loader_dx12.dll'   = 'e2d85aa05a9bd9ed8b38935fdf5199372cca6f74c12015143bb6f945ee1608aa'
+    'ffx/bin/amd_fidelityfx_upscaler_dx12.dll' = 'd0dcccc74a43c44ba435b7a369b456e0970d8a4464e4bd683119b374f2c9fb46'
+}
+foreach ($rel in $expected.Keys) {
+    $file = Join-Path $ext $rel
+    $got = (Get-FileHash $file -Algorithm SHA256).Hash.ToLower()
+    if ($got -ne $expected[$rel]) {
+        Remove-Item -Force $file
+        throw "$rel has SHA-256 $got, expected $($expected[$rel]); deleted"
+    }
+}
+
 Write-Host 'done'

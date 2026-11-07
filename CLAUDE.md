@@ -22,7 +22,22 @@ progress.md is the session log. Read its latest entry first.
   counts it as available meanwhile, `OfflineReady` says it is done: a pending GI job and the studio's GI viewport wait
   for that, `BeginOffline` and `Shutdown` block on it (`EnsureOffline`). Re-creating the pipelines for another MSAA
   count (`Render`) stays serial: a pass may then release resources through the context (`WaitForGpu`, `DeferRelease`).
-- Upscaler runtime DLLs are git-ignored: run `tools/fetch_sdks.ps1` once (DLSS 310.9.16, XeSS 3.0.2, FidelityFX 2.3.0), then rebuild. Missing DLLs only disable that upscaler.
+- Upscaler runtime DLLs are git-ignored: run `tools/fetch_sdks.ps1` once (DLSS 310.9.16, XeSS 3.0.2, FidelityFX 2.3.0), then rebuild. Missing DLLs only disable that upscaler. The script checks their SHA-256 (a new SDK version updates its list).
+- Release channels: stable = the tagged releases as before. Nightly = `.github/workflows/nightly.yml`, one build per master
+  commit that passed CI (`tools/package_release.ps1 -NightlyBuild <n>`: version = next minor of CMakeLists' + `-nightly.<n>`,
+  e.g. `3.4.0-nightly.12`; CMake `MMDX12_NIGHTLY_VERSION` -> `MMDX12_NIGHTLY`). The channel is fixed at build time
+  (`updater::kNightlyBuild`, `kDefaultFeedUrl`), so another channel = another folder. A nightly cannot submit to the
+  leaderboard, tells a new install once that its projects may not open in a stable version, and never fetches optional
+  components (its zip has them; that path's manifest has no signed hash). Zips: the `nightly` prerelease (the tag stays
+  put; the feed's `commit` says which build is live). Update store: `/updates/nightly/` on the site.
+  Security model: nothing a user installs may depend on the update server being honest. The publish job signs the feed
+  (`core/FeedSignature.h`, RSA-PSS over the exact feed bytes, secret `NIGHTLY_SIGN_KEY`, never on the server) and a nightly
+  exe only reads a feed that verifies against `updater::kFeedPublicKey`; the feed's hashes cover the zip, the manifest and
+  every object. Stable feeds are NOT signed yet. Build job: no secrets, no compile cache, hash-pinned downloads. Publish job:
+  runs no repository code, actions pinned to commits, deploy environment limited to master. The gate job only passes a
+  master push by the repository owner (`workflow_run` also fires for a fork's branch named master) and sends a range
+  holding anyone else's pull request to the `nightly-review` environment for approval. Keep server names, paths and
+  accounts out of this repository, the workflow and its logs: they live in Secrets and in CLAUDE.local.md.
 - Render path / upscaler from the CLI: `--render raster|rt|pt`, `--rtao-rays <n>` (1..64), `--studio-renderer raster|rt|pt|gi` (studio viewport: lit single view), `--upscaler none|dlss|fsr|xess`, `--upscale-quality native|quality|balanced|performance|ultra`,
   `--dlss-model auto|cnn|transformer|transformer2`, `--dlss-rr 0|1` (DLSS Ray Reconstruction on the RayTraced / PathTraced
   paths with DLSS; it replaces the RT AO / reflection filtering and the PT denoiser, and runs instead of TAA),

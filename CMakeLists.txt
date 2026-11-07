@@ -15,8 +15,14 @@ if(MSVC)
   add_compile_definitions(NOMINMAX WIN32_LEAN_AND_MEAN UNICODE _UNICODE _CRT_SECURE_NO_WARNINGS)
 endif()
 
-# the app version (logged at start; release zips are named after it)
-add_compile_definitions(MMDX12_VERSION="${PROJECT_VERSION}")
+# the app version (logged at start; release zips are named after it). A nightly build passes its own version string
+# (tools/package_release.ps1 -NightlyBuild): it also selects the nightly update feed (app/Updater.h).
+set(MMDX12_NIGHTLY_VERSION "" CACHE STRING "Version string of a nightly build (empty: a stable build)")
+if(MMDX12_NIGHTLY_VERSION)
+  add_compile_definitions(MMDX12_VERSION="${MMDX12_NIGHTLY_VERSION}" MMDX12_NIGHTLY)
+else()
+  add_compile_definitions(MMDX12_VERSION="${PROJECT_VERSION}")
+endif()
 
 set(EXT ${CMAKE_SOURCE_DIR}/external)
 
@@ -75,7 +81,7 @@ target_include_directories(mmdx_core SYSTEM PRIVATE ${EXT}/cgltf)
 target_sources(mmdx_core PRIVATE src/studio/SceneLight.cpp)
 # Media Foundation: asset/VideoReader (IMFSourceReader) and the RIFF AVI reader. mfreadwrite pulls the source
 # reader in; the app already links these too (VideoEncoder).
-target_link_libraries(mmdx_core PRIVATE ufbx mfplat mfreadwrite mfuuid)
+target_link_libraries(mmdx_core PRIVATE ufbx mfplat mfreadwrite mfuuid bcrypt)
 
 # anim: skeleton pose, IK, morphs, VMD evaluation (no GPU)
 file(GLOB ANIM_SRC CONFIGURE_DEPENDS src/anim/*.cpp)
@@ -280,6 +286,11 @@ if(EXISTS ${CMAKE_SOURCE_DIR}/tools/stage_store_test.cpp)
   add_executable(stage_store_test tools/stage_store_test.cpp src/app/StageStore.cpp)
   target_include_directories(stage_store_test PRIVATE ${CMAKE_SOURCE_DIR}/src)
   target_link_libraries(stage_store_test PRIVATE mmdx_core winhttp)
+endif()
+if(EXISTS ${CMAKE_SOURCE_DIR}/tools/feed_signature_test.cpp)
+  add_executable(feed_signature_test tools/feed_signature_test.cpp)
+  target_include_directories(feed_signature_test PRIVATE ${CMAKE_SOURCE_DIR}/src)
+  target_link_libraries(feed_signature_test PRIVATE mmdx_core winhttp)
 endif()
 if(EXISTS ${CMAKE_SOURCE_DIR}/tools/pack_guard_test.cpp)
   add_executable(pack_guard_test tools/pack_guard_test.cpp src/render/PackCrashGuard.cpp)

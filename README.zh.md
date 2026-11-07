@@ -149,6 +149,8 @@
 2. 把 MMD 文件放进 `library` 文件夹。
 3. 运行 `MMDX12.exe`。由于是未签名的可执行文件,第一次运行时可能会弹出 SmartScreen 警告,点击"更多信息"→"仍要运行"即可。
 
+想在发布前试用最新改动,可以下载[每夜构建版](https://github.com/digital8150/MMDX12/releases/tag/nightly)。它在 `master` 每次变更时自动生成,可能存在问题,请解压到单独的文件夹。在每夜构建版中保存的项目可能无法在稳定版中打开。
+
 **系统要求:** Windows 10/11,支持 DirectX 12 的显卡。光线追踪、路径追踪和高质量渲染器需要支持光线追踪的显卡(NVIDIA RTX、AMD RX 6000 及以上、Intel Arc 等),DLSS 仅限 NVIDIA RTX。
 
 ### 操作方式
