@@ -657,13 +657,19 @@ PSOut MmdShadePbr(VSOut i, bool front, GpuPbrMaterial m, float3 n0, float4 tex, 
     // Environment specular: the sky the path tracer reflects (SkyColor at full radiance, not the hemiStrength fill),
     // seen along the GGX dominant direction and pre-blurred toward the normal's sky for rough lobes, weighted by the
     // analytic split-sum DFG (Karis, "Physically Based Shading on Mobile") x AO. Metals get their colour from here.
+    // The same DFG weight goes to the reflection passes (NormalTag's PBR tag): where a reflection ray hits something,
+    // the composite swaps this sky for what the ray hit, so a wet road mirrors the performers as strongly as the sky.
+    // One sharp ray stands in for the lobe, so rough lobes fade the swap out (they keep the pre-blurred sky).
+    float pbrReflW = 0.0;
     if (envSpecOn) {
         float nv = saturate(dot(n, V));
         float pr = sqrt(saturate(rough));   // perceptual roughness (rough is GGX alpha)
         float3 R = reflect(-V, n);
         float3 Rd = normalize(lerp(n, R, (1.0 - pr) * (sqrt(1.0 - pr) + pr)));
         float3 env = lerp(SkyColor(Rd), Hemisphere(n), pr * pr);
-        color += PbrEnvBrdfApprox(f0, pr, nv) * env * ao;
+        const float3 dfg = PbrEnvBrdfApprox(f0, pr, nv);
+        color += dfg * env * ao;
+        pbrReflW = saturate(dot(dfg, float3(0.2126, 0.7152, 0.0722)) * ao * (1.0 - smoothstep(0.3, 0.65, pr)));
     }
 
     // Sun specular (replaces the MMD Blinn), x N.L x light colour x shadow, per shading model.
@@ -739,7 +745,9 @@ PSOut MmdShadePbr(VSOut i, bool front, GpuPbrMaterial m, float3 n0, float4 tex, 
         alpha *= coverage;
         return PackOutput(color, alpha, n, reflectivity, i.curClip, i.prevClip, 0u, true);
     }
-    return PackOutput(color, alpha, n, alpha > 0.9 ? reflectivity : 0.0, i.curClip, i.prevClip);
+    // Environment-lit PBR surfaces carry the DFG weight (PBR tag); CEL / skin keep the MMD reflectivity.
+    const float tag = envSpecOn ? kReflTagPbrBase - pbrReflW : reflectivity;
+    return PackOutput(color, alpha, n, alpha > 0.9 ? tag : 0.0, i.curClip, i.prevClip);
 }
 
 // Per-material PBR branch entry (gPbrActive is 0 unless the run has Ray records for this draw). --pbr-debug wins
@@ -877,7 +885,8 @@ PSOut PSPack(VSOut i, bool front : SV_IsFrontFace) {
     r.color += r.emission;
 #endif
     // negative reflectivity = "no ambient occlusion here" (composite.hlsl); SSR / RT reflections skip it as well
-    float refl = r.noAo ? -1.0 : (r.alpha > 0.9 ? r.reflectivity : 0.0);
+    // (a pack's own negative value keeps meaning "no AO": it must not reach the PBR tag band, common.hlsli)
+    float refl = (r.noAo || r.reflectivity < 0.0) ? -1.0 : (r.alpha > 0.9 ? r.reflectivity : 0.0);
 #if defined(SCENE_HAS_ID) && SCENE_HAS_ID
     uint tag = 0;
 #if defined(PACK_CAP_SURFACE_OUTPUT) && PACK_CAP_SURFACE_OUTPUT

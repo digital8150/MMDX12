@@ -150,6 +150,22 @@ float3 OctDecode(float2 f) {
     return normalize(n);
 }
 
+// Normal-target z = the pixel's reflection tag (mmd.hlsl NormalTag, read by ssr / rtreflect / composite):
+//   [0, 1]       MMD reflectivity: an F0-like value, the composite adds Schlick and blends the reflection over the pixel.
+//   2            planar mirror (RT path: the full-resolution mirror pass owns the pixel).
+//   (-1.75, 0)   no AO, no reflection (translucent stage pixels, world surfaces, emission).
+//   <= -2        PBR: -(2 + W). The scene PS already added the sky as environment specular weighted by the split-sum
+//                DFG; W is that DFG weight (luminance, x AO, faded out on rough lobes), and a traced / screen-space hit
+//                replaces W x sky by W x the hit. A miss leaves the PS's sky alone.
+// The target is alpha-blended like the colour: a blend of a PBR tag with 0 / -1 lands in the no-AO band (no
+// reflection), never in the mirror or the MMD band.
+static const float kReflTagPbrBase = -2.0;
+bool ReflTagIsPbr(float z) { return z <= -1.75; }
+float ReflTagPbrWeight(float z) { return saturate(-z - 2.0); }
+bool ReflTagNoAo(float z) { return z < 0.0 && !ReflTagIsPbr(z); }
+// The weight the reflection passes test before tracing (PBR: W, MMD: the reflectivity, mirror: 1).
+float ReflTagGate(float z) { return ReflTagIsPbr(z) ? ReflTagPbrWeight(z) : min(z, 1.0); }
+
 // Raw device depth -> positive view-space z (LH perspective).
 float LinearZ(float d) { return gNearZ * gFarZ / (gFarZ - d * (gFarZ - gNearZ)); }
 
