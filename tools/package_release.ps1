@@ -12,6 +12,8 @@ param(
     [string[]]$CMakeArgs = @()
 )
 $ErrorActionPreference = 'Stop'
+# A test build trusts a throwaway key (tools/sign_feed.py new-test-key): it must never become a release.
+if ($CMakeArgs -match 'MMDX12_FEED_TEST_KEY') { throw 'MMDX12_FEED_TEST_KEY is for test builds, never a release' }
 $root = Split-Path -Parent $PSScriptRoot
 $build = Join-Path $root 'build_release'
 $vsDevCmd = 'C:\Program Files\Microsoft Visual Studio\18\Community\Common7\Tools\VsDevCmd.bat'
@@ -146,4 +148,6 @@ if (Test-Path $liteZip) { Remove-Item -Force $liteZip }
 Compress-Archive -Path $liteStage -DestinationPath $liteZip -CompressionLevel Optimal
 Remove-Item -Recurse -Force $liteStage
 Write-Host "packaged $liteZip ($([math]::Round((Get-Item $liteZip).Length / 1MB, 1)) MB)"
+# The rest of a stable release: CLAUDE.md "Release channels". A version that has no signed feed cannot update.
 Write-Host "delta update: python tools\make_update.py `"$stage`" --version $Version --out dist\update --base-url <updates url>"
+Write-Host 'then upload the store and the GitHub release; the website repo signs the feed (its sign-feed workflow) and deploys it'

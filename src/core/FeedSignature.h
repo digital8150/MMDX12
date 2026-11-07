@@ -6,7 +6,8 @@
 // The feed file is the plain feed fields plus
 //   "signedFeed": base64 of the feed JSON the app really reads,
 //   "signature":  base64 RSA-PSS (SHA-256, 32-byte salt) over exactly those bytes.
-// The outer fields are ignored once a key is set: only the signed bytes count.
+// The app ignores the outer fields: only the signed bytes count. Versions from before signing read those outer fields
+// and ignore the other two. Signing: the website repo's sign-feed workflow (stable), .github/workflows/nightly.yml (nightly).
 #include <string>
 #include <string_view>
 

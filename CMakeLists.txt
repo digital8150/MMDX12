@@ -18,6 +18,11 @@ endif()
 # the app version (logged at start; release zips are named after it). A nightly build passes its own version string
 # (tools/package_release.ps1 -NightlyBuild): it also selects the nightly update feed (app/Updater.h).
 set(MMDX12_NIGHTLY_VERSION "" CACHE STRING "Version string of a nightly build (empty: a stable build)")
+# Test builds only: the key feeds are checked against, in place of the channel's own (tools/sign_feed.py new-test-key).
+set(MMDX12_FEED_TEST_KEY "" CACHE STRING "Public key modulus of an update E2E test build (empty: the real keys)")
+if(MMDX12_FEED_TEST_KEY)
+  add_compile_definitions(MMDX12_FEED_TEST_KEY="${MMDX12_FEED_TEST_KEY}")
+endif()
 if(MMDX12_NIGHTLY_VERSION)
   add_compile_definitions(MMDX12_VERSION="${MMDX12_NIGHTLY_VERSION}" MMDX12_NIGHTLY)
 else()
@@ -291,6 +296,14 @@ if(EXISTS ${CMAKE_SOURCE_DIR}/tools/feed_signature_test.cpp)
   add_executable(feed_signature_test tools/feed_signature_test.cpp)
   target_include_directories(feed_signature_test PRIVATE ${CMAKE_SOURCE_DIR}/src)
   target_link_libraries(feed_signature_test PRIVATE mmdx_core winhttp)
+endif()
+if(EXISTS ${CMAKE_SOURCE_DIR}/tools/updater_feed_test.cpp AND NOT MMDX12_FEED_TEST_KEY)
+  # What FetchFeed accepts (app/Updater.cpp without the whole app), against a key of its own: not in an E2E test build,
+  # whose key would define the same macro.
+  add_executable(updater_feed_test tools/updater_feed_test.cpp src/app/Updater.cpp)
+  target_include_directories(updater_feed_test PRIVATE ${CMAKE_SOURCE_DIR}/src)
+  target_compile_definitions(updater_feed_test PRIVATE MMDX12_FEED_TEST_KEY="zllVPcyxvPXQDQ9fDcmmextQ1f94Qse5DkqMzaXK+ga8GbWycnoIawGGJ5UYecq3Gg7XhKwt27Iz1gVGED6PNI1BFkaGXjI/SpzCScIdqRlx2ZIQdHjIEURpkuPsuFd/jiBDvBlz2pAv8ONGGl3VO+ZWUJNXEAE5feHZHDMwOU72xfjc6Lx5hSN3w09igb+Sxqi6ZLVRDfJ542EJCOW6cdg+KSTGrxSFbA+5fPDbucCRFnF7DDVAU898WwomtPDa0BIJrRnbo0lcMz/df1vmbAzdioCLMv917qJqs2Bp06WwgoYjTkAtK7Si+SNmJbWH9TRVbUv8ThWv59Wpsc3trw==")
+  target_link_libraries(updater_feed_test PRIVATE mmdx_core winhttp)
 endif()
 if(EXISTS ${CMAKE_SOURCE_DIR}/tools/pack_guard_test.cpp)
   add_executable(pack_guard_test tools/pack_guard_test.cpp src/render/PackCrashGuard.cpp)

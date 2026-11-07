@@ -23,21 +23,34 @@ progress.md is the session log. Read its latest entry first.
   for that, `BeginOffline` and `Shutdown` block on it (`EnsureOffline`). Re-creating the pipelines for another MSAA
   count (`Render`) stays serial: a pass may then release resources through the context (`WaitForGpu`, `DeferRelease`).
 - Upscaler runtime DLLs are git-ignored: run `tools/fetch_sdks.ps1` once (DLSS 310.9.16, XeSS 3.0.2, FidelityFX 2.3.0), then rebuild. Missing DLLs only disable that upscaler. The script checks their SHA-256 (a new SDK version updates its list).
-- Release channels: stable = the tagged releases as before. Nightly = `.github/workflows/nightly.yml`, one build per master
+- Release channels: stable = the tagged releases. Nightly = `.github/workflows/nightly.yml`, one build per master
   commit that passed CI (`tools/package_release.ps1 -NightlyBuild <n>`: version = next minor of CMakeLists' + `-nightly.<n>`,
   e.g. `3.4.0-nightly.12`; CMake `MMDX12_NIGHTLY_VERSION` -> `MMDX12_NIGHTLY`). The channel is fixed at build time
   (`updater::kNightlyBuild`, `kDefaultFeedUrl`), so another channel = another folder. A nightly cannot submit to the
   leaderboard, tells a new install once that its projects may not open in a stable version, and never fetches optional
-  components (its zip has them; that path's manifest has no signed hash). Zips: the `nightly` prerelease (the tag stays
-  put; the feed's `commit` says which build is live). Update store: `/updates/nightly/` on the site.
-  Security model: nothing a user installs may depend on the update server being honest. The publish job signs the feed
-  (`core/FeedSignature.h`, RSA-PSS over the exact feed bytes, secret `NIGHTLY_SIGN_KEY`, never on the server) and a nightly
-  exe only reads a feed that verifies against `updater::kFeedPublicKey`; the feed's hashes cover the zip, the manifest and
-  every object. Stable feeds are NOT signed yet. Build job: no secrets, no compile cache, hash-pinned downloads. Publish job:
-  runs no repository code, actions pinned to commits, deploy environment limited to master. The gate job only passes a
-  master push by the repository owner (`workflow_run` also fires for a fork's branch named master) and sends a range
-  holding anyone else's pull request to the `nightly-review` environment for approval. Keep server names, paths and
-  accounts out of this repository, the workflow and its logs: they live in Secrets and in CLAUDE.local.md.
+  components (its zip has them). Zips: the `nightly` prerelease (the tag stays put; the feed's `commit` says which build
+  is live). Update store: `/updates/nightly/` on the site.
+  Security model: nothing a user installs may depend on the update server being honest. Every feed is signed away from the
+  server (`core/FeedSignature.h`, RSA-PSS over the exact feed bytes, one key per channel, the public half in
+  `updater::kFeedPublicKey`), the exe reads only a feed that verifies, and it refuses a feed without the hashes: they cover
+  the zip, the manifest and every object. A lite install's component fetch checks the installed version's manifest
+  against the signed feed's `manifests` map (version -> hash), so that map keeps every version out there. Old versions
+  read the plain fields next to the signed bytes. Nightly signing: the publish job (secret `NIGHTLY_SIGN_KEY`). Stable signing:
+  the website repo's `sign-feed` workflow (its own key, secret `STABLE_SIGN_KEY`; a new key also changes `PUBLIC_MODULUS` there and
+  `kFeedPublicKey` here; losing it means restoring the secret from the offline copy). Nightly build job: no
+  secrets, no compile cache, hash-pinned downloads. Publish job: runs no repository code, actions pinned to commits, deploy
+  environment limited to master. The gate job only passes a master push by the repository owner (`workflow_run` also
+  fires for a fork's branch named master) and sends a range holding anyone else's pull request to the `nightly-review`
+  environment for approval. Keep server names, paths and accounts out of this repository, the workflow and its logs: they
+  live in Secrets and in CLAUDE.local.md.
+  Stable release order: `package_release.ps1 -Version x.y.z` -> `make_update.py` + upload the store -> GitHub release -> in
+  the website repo commit the manifest hash in `src/data/update_manifests.json` -> run its `sign-feed` workflow with the version
+  (it refuses a feed the app would refuse, or a key that is not the app's, and commits `src/data/update_signature.json`) ->
+  pull + deploy (the site's build fails when the signature is not for the latest release). The zip and store go first:
+  the signed feed that names them must never be live before them.
+  Tests: `tools/update_e2e.py` / `tools/components_e2e.py` run a real exe against honest and lying stores; they need a
+  build that trusts a throwaway key (`-DMMDX12_FEED_TEST_KEY=`, `tools/sign_feed.py new-test-key`, see update_e2e.py's
+  header), which `package_release.ps1` refuses. `updater_feed_test` (CI) checks what `FetchFeed` accepts.
 - Render path / upscaler from the CLI: `--render raster|rt|pt`, `--rtao-rays <n>` (1..64), `--studio-renderer raster|rt|pt|gi` (studio viewport: lit single view), `--upscaler none|dlss|fsr|xess`, `--upscale-quality native|quality|balanced|performance|ultra`,
   `--dlss-model auto|cnn|transformer|transformer2`, `--dlss-rr 0|1` (DLSS Ray Reconstruction on the RayTraced / PathTraced
   paths with DLSS; it replaces the RT AO / reflection filtering and the PT denoiser, and runs instead of TAA),
@@ -231,9 +244,10 @@ progress.md is the session log. Read its latest entry first.
     strictly sequential, backs up/restores `mmdx12.ini`. Captures use `--capture-scene 1` (the rendered scene only, no
     play bar / stats overlay; works for any `--capture` in a scene) and `--classic` (vanilla-MMD look for one run).
   - `make_update.py <stage> --version X --out d [--base-url u]`: delta-update manifest + content-addressed objects (+ .gz)
-    for the smart updater (feed `manifest` / `manifestSha256`); `update_e2e.py`: headless updater E2E (delta + corrupt-object fallback);
+    for the smart updater (feed `manifest` / `manifestSha256`); `sign_feed.py`: prints a key's modulus, makes a test key, signs
+    for the E2E tests; `update_e2e.py`: updater E2E (delta, corrupt-object fallback, a lying server);
     `components_e2e.py`: headless optional-component (app/Components.h) fetch E2E - the lite zip's upscaler DLLs / CJK fonts,
-    fetched from the installed version's manifest via `--component <id> --download-component`
+    fetched from the installed version's manifest via `--component <id> --download-component`, and a lying server
   - `mcp_pipe.py` / `mcp_x.py`: talk to a running app's pipe without the bridge (`python tools/mcp_x.py "click 플레이" "wait 30" "shot out.png" "items 셰이더"`)
   - `run_capture.py`: the only supported way to launch `MMDX12.exe` (pre-flight refusals + log watchdog + report;
     see "Running MMDX12.exe from the CLI")

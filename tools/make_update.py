@@ -8,8 +8,9 @@ MMDX12-<ver>-win64/ holding MMDX12.exe, DLLs, shaders/, assets/, licenses/), thi
     <out>/objects/<aa>/<sha>          raw file bytes, content-addressed by SHA-256
     <out>/objects/<aa>/<sha>.gz       the same bytes gzip -9 (for nginx gzip_static)
 
-and prints the "manifest" / "manifestSha256" values to add to latest.json next to the zip
-fields. Objects are shared across versions: existing objects are left alone.
+and prints the "manifest" / "manifestSha256" values of the update feed, which holds them next to the zip fields and
+is signed afterwards (stable: the website repo's src/data/update_manifests.json + its sign-feed workflow). Objects are shared
+across versions: existing objects are left alone.
 
 The install folder is the *content* of the top folder: `path` in the manifest is relative to
 that folder (no leading MMDX12-<ver>-win64/). library/ and runtime leftovers are skipped.
@@ -175,7 +176,7 @@ def main():
           f"({new_objects} new objects, {len(files) - new_objects} reused)")
     print(f"wrote {manifest_path}")
     print()
-    print("latest.json fields:")
+    print("update feed fields:")
     print(f'  "manifest": "{manifest_url}",')
     print(f'  "manifestSha256": "{manifest_sha}",')
 

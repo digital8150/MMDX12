@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <string>
+#include <string_view>
 
 namespace mmdx::net {
 
@@ -41,6 +42,7 @@ bool DownloadToFileResumable(const std::string& url, const std::filesystem::path
                              std::atomic<uint64_t>* total, std::atomic<bool>* cancel, std::string& error);
 // SHA-256 of a file as lower-case hex (progress in bytes, may be null). Empty on failure.
 std::string Sha256OfFile(const std::filesystem::path& file, std::atomic<uint64_t>* progress);
+std::string Sha256OfBytes(std::string_view bytes);
 // Extracts a zip with Windows' tar.exe (bsdtar, Windows 10 1803+), hidden.
 bool ExtractZip(const std::filesystem::path& zip, const std::filesystem::path& destDir, std::string& error);
 // Dotted version compare ("1.10.0" > "1.9", leading v ignored): -1, 0, 1.

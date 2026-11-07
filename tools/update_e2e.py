@@ -1,25 +1,31 @@
 #!/usr/bin/env python3
-"""Headless end-to-end test for the delta (smart) updater.
+"""Headless end-to-end test for the updater: the delta path, the full zip fallback, and a server that lies.
 
-Imitates the 2026-10-06 (2) auto-update E2E, but exercises the delta path:
+Runs against a test build that trusts a throwaway key, because a feed must be signed for the exe to read it:
 
-  * build an "old" install = a copy of dist/MMDX12-1.9.1-win64 with the newly built
-    build/bin/MMDX12.exe dropped in, plus a dummy library file, an ini and a recovery file;
-  * build a mock "new" version 9.9.9 from that tree (one changed shader, one new file, one
-    removed file in a subfolder, a VERSION.txt change); run tools/make_update.py on it into a
-    local object store and also zip it (for the full fallback); write a local feed json;
-  * scenario 1: run the old exe --update-feed <feed> --ui-script <updateinstall>,
-    wait for the applier + the relaunched app to quit, then assert the delta install;
-  * scenario 2: corrupt one object in the store, re-run from a fresh old install and assert it
-    falls back to the zip and still installs correctly.
-
-Run:
+    python tools/sign_feed.py new-test-key build_feedtest/feed_test.pem     (prints the CMake option)
+    cmake -S . -B build_feedtest -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo -DMMDX12_FEED_TEST_KEY=<modulus>
+    build.cmd build_feedtest --target MMDX12
     python tools/update_e2e.py [--keep]
 
-Requires a prior `build.cmd build` (build/bin/MMDX12.exe) and dist/MMDX12-1.9.1-win64.
-Standard library only.
+Other build dir / key: the environment variables MMDX12_BUILD and MMDX12_FEED_TEST_PEM.
+
+  * builds an "old" install from the build's program files, plus a dummy library file, an ini and a recovery file;
+  * builds a mock "new" version 9.9.9 from that tree (one changed shader, one new file, one removed file in a subfolder, a
+    VERSION.txt change), runs tools/make_update.py on it into a local object store, zips it, and signs a local feed;
+  * every scenario runs the old exe --update-feed <feed> --ui-script <updateinstall> from a fresh or unchanged install:
+
+      1 delta path                     the signed feed, everything honest
+      2 corrupt object                 falls back to the zip, installs the real 9.9.9
+      3 evil fields outside the feed   the signed bytes are all that count: installs the real 9.9.9
+      4 evil manifest in the store     falls back to the zip, installs the real 9.9.9
+      5 refused feeds                  unsigned, changed payload, another key, no zip hash: nothing starts
+      6 every server file swapped      manifest, objects and zip: nothing is installed
+
+Each run opens a window, one at a time. Standard library only (+ the openssl command, through tools/sign_feed.py).
 """
 import argparse
+import base64
 import hashlib
 import json
 import os
@@ -30,12 +36,19 @@ import time
 import zipfile
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.join(ROOT, "tools"))
+import sign_feed  # noqa: E402
+
 TMP = os.path.join(os.environ.get("TEMP", os.environ.get("TMP", ".")), "opencode", "delta_e2e")
-DIST = os.path.join(ROOT, "dist", "MMDX12-1.9.1-win64")
-EXE = os.path.join(ROOT, "build", "bin", "MMDX12.exe")
+BUILD = os.path.join(ROOT, os.environ.get("MMDX12_BUILD", "build_feedtest"))
+BIN = os.path.join(BUILD, "bin")
+EXE = os.path.join(BIN, "MMDX12.exe")
+KEY = os.environ.get("MMDX12_FEED_TEST_PEM", os.path.join(BUILD, "feed_test.pem"))
 MAKE_UPDATE = os.path.join(ROOT, "tools", "make_update.py")
-OLD_VER = "1.9.1"
+OLD_VER = "old"
 NEW_VER = "9.9.9"
+EVIL_FILE = "EVIL_FROM_THE_SERVER.txt"
+EVIL_MARKER = "// evil from the server"
 
 failures = []
 
@@ -77,18 +90,22 @@ def force_dirs_ok(path):
         shutil.rmtree(path, onerror=onerror)
 
 
+def read(path):
+    if not os.path.exists(path):
+        return ""
+    with open(path, encoding="utf-8", errors="replace") as f:
+        return f.read()
+
+
 def make_old_install(dest):
-    """A copy of the 1.9.1 dist with the new exe, plus user data that must survive."""
+    """The build's program files, plus user data that must survive."""
     force_dirs_ok(dest)
-    shutil.copytree(DIST, dest)
-    # Runtime leftovers that must never be part of the manifest / must stay untouched.
-    for d in ("shader_cache", "cache"):
-        force_dirs_ok(os.path.join(dest, d))
-    for f in os.listdir(dest):
-        if f.endswith(".log") or f.lower() == "mmdx12.ini":
-            os.remove(os.path.join(dest, f))
-    # The new exe (the one under test), as an install would already have a version of it.
-    shutil.copyfile(EXE, os.path.join(dest, "MMDX12.exe"))
+    os.makedirs(dest)
+    for name in os.listdir(BIN):
+        if name == "MMDX12.exe" or name.lower().endswith(".dll"):
+            shutil.copyfile(os.path.join(BIN, name), os.path.join(dest, name))
+    shutil.copytree(os.path.join(BIN, "shaders"), os.path.join(dest, "shaders"))
+    shutil.copytree(os.path.join(BIN, "assets"), os.path.join(dest, "assets"))
     # User data that the swap must leave alone.
     with open(os.path.join(dest, "mmdx12.ini"), "w", encoding="utf-8") as f:
         f.write("nickname=TestUser\nupdateFeedUrl=\n")
@@ -116,141 +133,116 @@ def make_new_tree(old, dest):
     for d in ("shader_cache", "cache", "update_tmp", "recovery"):
         force_dirs_ok(os.path.join(dest, d))
     for f in os.listdir(dest):
-        if f.endswith(".log") or f.lower() == "mmdx12.ini":
+        if f.endswith(".log") or f.lower() in ("mmdx12.ini", "dummy_library_file.txt"):
             os.remove(os.path.join(dest, f))
-    # Change one shader (append a line so its hash changes).
     with open(os.path.join(dest, "shaders", "mmd.hlsl"), "a", encoding="utf-8") as f:
         f.write("\n// 9.9.9 marker\n")
-    # New file.
     with open(os.path.join(dest, "NEW_IN_999.txt"), "w", encoding="utf-8") as f:
         f.write("brand new in 9.9.9\n")
-    # Removed file in a subfolder.
     os.remove(os.path.join(dest, "shaders", "old", "gone.hlsl"))
     os.rmdir(os.path.join(dest, "shaders", "old"))
-    # VERSION.txt change.
     with open(os.path.join(dest, "VERSION.txt"), "w", encoding="utf-8") as f:
         f.write(NEW_VER + "\n")
     return dest
 
 
-def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--keep", action="store_true", help="do not delete the temp workspace")
-    args = ap.parse_args()
-
-    if not os.path.exists(EXE):
-        sys.exit(f"build/bin/MMDX12.exe missing - run build.cmd build first")
-    if not os.path.isdir(DIST):
-        sys.exit(f"{DIST} missing")
-    python = sys.executable
-
-    force_dirs_ok(TMP)
-    os.makedirs(TMP, exist_ok=True)
-    store = os.path.join(TMP, "store")
-    os.makedirs(store, exist_ok=True)
-
-    log("== building old install + new 9.9.9 tree ==")
-    old = make_old_install(os.path.join(TMP, "old_1.9.1"))
-    newtree = make_new_tree(old, os.path.join(TMP, "new_9.9.9"))
-
-    # make_update.py on the new tree -> local manifest + object store. No --base-url: the
-    # manifest's objects field stays "../objects/", resolved relative to the manifest file.
-    res = run([python, MAKE_UPDATE, newtree, "--version", NEW_VER, "--out", store])
-    log(res.stdout.strip())
-    if res.returncode != 0:
-        sys.exit("make_update.py failed")
-    manifest_path = os.path.join(store, "manifests", NEW_VER + ".json")
-    manifest_sha = sha256_file(manifest_path)
-
-    # Full zip (fallback path) + feed.
-    zip_path = os.path.join(TMP, f"MMDX12-{NEW_VER}-win64.zip")
-    log("== zipping the full fallback ==")
-    parent = os.path.dirname(newtree)
+def zip_tree(tree, zip_path):
     with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as z:
-        for dp, dns, fns in os.walk(newtree):
+        for dp, dns, fns in os.walk(tree):
             for fn in fns:
                 full = os.path.join(dp, fn)
-                z.write(full, os.path.join(os.path.basename(newtree), os.path.relpath(full, newtree)))
-    zip_size = os.path.getsize(zip_path)
-    zip_sha = sha256_file(zip_path)
-
-    feed = {
-        "version": NEW_VER,
-        "url": zip_path.replace("\\", "/"),
-        "size": zip_size,
-        "sha256": zip_sha,
-        "page": "https://mmdx.codingbot.kr/releases/",
-        "manifest": manifest_path.replace("\\", "/"),
-        "manifestSha256": manifest_sha,
-        "notes": {"ko": "9.9.9 테스트", "en": "9.9.9 test"},
-    }
-    feed_path = os.path.join(TMP, "latest.json")
-    with open(feed_path, "w", encoding="utf-8") as f:
-        json.dump(feed, f, ensure_ascii=False, indent=1)
-
-    log(f"  full zip: {zip_size} bytes; manifest: {manifest_path}")
-
-    ok1 = scenario(1, old, newtree, feed_path, store, expect_delta=True)
-    # Scenario 2 needs a fresh old install (scenario 1 installed 9.9.9 into it) and a corrupted
-    # object in a *copy* of the store (keep the good store for the manifest itself).
-    old2 = make_old_install(os.path.join(TMP, "old_1.9.1_b"))
-    ok2 = scenario(2, old2, newtree, feed_path, store, expect_delta=False, corrupt=True)
-
-    log("")
-    if failures:
-        log(f"FAILED ({len(failures)}):")
-        for f in failures:
-            log("  - " + f)
-    else:
-        log("ALL CHECKS PASSED")
-    if args.keep:
-        log(f"workdir kept: {TMP}")
-    return 1 if failures else 0
+                z.write(full, os.path.join(os.path.basename(tree), os.path.relpath(full, tree)))
 
 
-def scenario(n, old, newtree, feed_path, store, expect_delta, corrupt=False, changed=3):
-    log(f"\n== scenario {n} ({'delta' if expect_delta else 'fallback'}) ==")
-    work = old  # the app runs from the old install dir
-    store2 = store
-    if corrupt:
-        store2 = os.path.join(TMP, f"store_corrupt_{n}")
-        force_dirs_ok(store2)
-        shutil.copytree(store, store2)
-        # Corrupt one object: the changed shader's object (pick any file's hash from the manifest).
-        with open(os.path.join(store, "manifests", NEW_VER + ".json"), encoding="utf-8") as f:
-            m = json.load(f)
-        # Corrupt the object of shaders/mmd.hlsl specifically.
-        target = next(f["sha256"] for f in m["files"] if f["path"] == "shaders/mmd.hlsl")
-        obj = os.path.join(store2, "objects", target[:2], target)
-        with open(obj, "r+b") as f:
-            f.write(b"CORRUPT!")            # same size kept? if not, size mismatch triggers anyway
-        # Rebuild the feed pointing the manifest at the corrupted store's manifest copy.
-        shutil.copyfile(os.path.join(store, "manifests", NEW_VER + ".json"),
-                        os.path.join(store2, "manifests", NEW_VER + ".json"))
-        manifest2 = os.path.join(store2, "manifests", NEW_VER + ".json")
-        with open(feed_path, encoding="utf-8") as f:
-            feed = json.load(f)
-        feed["manifest"] = manifest2.replace("\\", "/")
-        feed["manifestSha256"] = sha256_file(manifest2)
-        # Point the object store at the corrupted copy: make_update wrote "../objects/" relative to
-        # the manifest, so the manifest copy in store2/manifests already resolves to store2/objects.
-        feed_path2 = os.path.join(TMP, f"latest_corrupt_{n}.json")
-        with open(feed_path2, "w", encoding="utf-8") as f:
-            json.dump(feed, f, ensure_ascii=False, indent=1)
-        feed_path = feed_path2
+def clone_store(store, name):
+    """A copy of the object store that shares its bytes; replace a file with replace_file, never in place."""
+    dest = os.path.join(TMP, name)
+    force_dirs_ok(dest)
+    shutil.copytree(store, dest, copy_function=os.link)
+    return dest
 
-    script = os.path.join(TMP, f"update_{n}.script")
+
+def replace_file(path, data):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    if os.path.exists(path):
+        os.remove(path)
+    with open(path, "wb") as f:
+        f.write(data)
+    return hashlib.sha256(data).hexdigest()
+
+
+def make_evil_manifest(store2):
+    """What a taken-over server would publish: a well-formed manifest with its own, matching objects."""
+    path = os.path.join(store2, "manifests", NEW_VER + ".json")
+    manifest = json.loads(read(path))
+    shader = (read(os.path.join(TMP, "new_9.9.9", "shaders", "mmd.hlsl")) + EVIL_MARKER + "\n").encode()
+    evil = b"evil\n"
+    for entry in manifest["files"]:
+        if entry["path"] == "shaders/mmd.hlsl":
+            entry["sha256"] = hashlib.sha256(shader).hexdigest()
+            entry["size"] = len(shader)
+            replace_file(os.path.join(store2, "objects", entry["sha256"][:2], entry["sha256"]), shader)
+    sha = hashlib.sha256(evil).hexdigest()
+    replace_file(os.path.join(store2, "objects", sha[:2], sha), evil)
+    manifest["files"].append({"path": EVIL_FILE, "size": len(evil), "sha256": sha})
+    replace_file(path, json.dumps(manifest, indent=1).encode())
+    return path
+
+
+def write_signed(feed, path, key=KEY, outer=None):
+    """The signed feed file: the plain fields (or `outer`, a server's own idea of them) + the signed bytes."""
+    data = json.dumps(feed, ensure_ascii=False, indent=1).encode("utf-8")
+    signed_feed, signature = sign_feed.sign_bytes(data, key)
+    body = dict(outer if outer is not None else feed)
+    body["signedFeed"] = signed_feed
+    body["signature"] = signature
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(body, f, ensure_ascii=False, indent=1)
+    return path
+
+
+def start_app(work, feed_path, script_name, extra=()):
+    script = os.path.join(TMP, script_name)
     with open(script, "w", encoding="utf-8") as f:
         f.write("10 updateinstall\n")
-
     log_path = os.path.join(work, "mmdx12.log")
     if os.path.exists(log_path):
         os.remove(log_path)
-
-    cmd = [os.path.join(work, "MMDX12.exe"), "--update-feed", feed_path,
-           "--ui-script", script, "--screen", "select", "--update-relaunch-frames", "60"]
+    cmd = [os.path.join(work, "MMDX12.exe"), "--update-feed", feed_path, "--ui-script", script, "--screen", "select", *extra]
     log("  launching: " + " ".join(cmd))
-    proc = subprocess.Popen(cmd, cwd=work, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+    return subprocess.Popen(cmd, cwd=work, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+
+
+def installed_real_version(top):
+    """The install holds the real 9.9.9 and the user's files, and nothing from a lying server."""
+    check(read(os.path.join(top, "VERSION.txt")).strip() == NEW_VER, f"VERSION.txt is {NEW_VER}")
+    check(os.path.exists(os.path.join(top, "NEW_IN_999.txt")), "NEW_IN_999.txt landed")
+    mmd = read(os.path.join(top, "shaders", "mmd.hlsl"))
+    check("9.9.9 marker" in mmd, "changed shader installed")
+    check(EVIL_MARKER not in mmd, "the server's shader is not installed")
+    check(not os.path.exists(os.path.join(top, EVIL_FILE)), "the server's extra file is not installed")
+    check(not os.path.exists(os.path.join(top, "shaders", "old", "gone.hlsl")), "removed file is gone")
+    check(os.path.exists(os.path.join(top, "shaders", "common.hlsli")), "unchanged file intact (shaders/common.hlsli)")
+    check("nickname=TestUser" in read(os.path.join(top, "mmdx12.ini")), "mmdx12.ini intact")
+    check(os.path.exists(os.path.join(top, "dummy_library_file.txt")), "dummy library file intact")
+    check(os.path.exists(os.path.join(top, "recovery", "recover.bin")), "recovery file intact")
+    check(os.path.exists(os.path.join(top, "library", "user_model.txt")), "library/ intact")
+    check(not os.path.exists(os.path.join(top, "update_tmp")), "update_tmp cleaned")
+
+
+def install_untouched(top):
+    check(read(os.path.join(top, "VERSION.txt")).strip() == OLD_VER, "VERSION.txt is still the old one")
+    check(not os.path.exists(os.path.join(top, "NEW_IN_999.txt")), "no new file landed")
+    check(EVIL_MARKER not in read(os.path.join(top, "shaders", "mmd.hlsl")), "the server's shader is not installed")
+    check(not os.path.exists(os.path.join(top, EVIL_FILE)), "the server's extra file is not installed")
+    check(not os.path.exists(os.path.join(top, "update_tmp", "state.json")), "no update is staged")
+
+
+def scenario(n, title, old, feed_path, expect_delta, expect_log=()):
+    """One update that must end with the real 9.9.9 installed."""
+    log(f"\n== scenario {n}: {title} ==")
+    work = old  # the app runs from the old install dir
+    proc = start_app(work, feed_path, f"update_{n}.script", ["--update-relaunch-frames", "60"])
     # Sample the updater's log while it runs: the pre-update log is archived on success, and the
     # relaunched app overwrites mmdx12.log, so read the live file before both.
     sampled = []
@@ -290,19 +282,13 @@ def scenario(n, old, newtree, feed_path, store, expect_delta, corrupt=False, cha
     log_path = os.path.join(work, "mmdx12.log")
     deadline = time.time() + 150
     while time.time() < deadline:
-        txt = read(log_path)
-        if "quit after" in txt:
+        if "quit after" in read(log_path):
             break
         time.sleep(1)
     time.sleep(1)
-    # Pick up the rest of the relaunched app's log (and any lines after the last sample).
-    try:
-        with open(log_path, encoding="utf-8", errors="replace") as f:
-            for line in f.read().splitlines():
-                if line not in sampled:
-                    sampled.append(line)
-    except FileNotFoundError:
-        pass
+    for line in read(log_path).splitlines():
+        if line not in sampled:
+            sampled.append(line)
     # CleanupUpdateLeftovers removes update_tmp on the relaunched start; wait for it.
     deadline = time.time() + 30
     while time.time() < deadline and os.path.exists(os.path.join(work, "update_tmp")):
@@ -313,53 +299,168 @@ def scenario(n, old, newtree, feed_path, store, expect_delta, corrupt=False, cha
     # the delta lines), any .previous log and the final log.
     logtext = "\n".join(sampled)
     for name in ("mmdx12.previous.log", "mmdx12.log"):
-        p = os.path.join(work, name)
-        if os.path.exists(p):
-            with open(p, encoding="utf-8", errors="replace") as f:
-                logtext += f"\n--- {name} ---\n" + f.read()
-    if n == 1:
-        with open(os.path.join(TMP, "scenario1.log"), "w", encoding="utf-8") as f:
-            f.write(logtext)
+        logtext += f"\n--- {name} ---\n" + read(os.path.join(work, name))
+    with open(os.path.join(TMP, f"scenario{n}.log"), "w", encoding="utf-8") as f:
+        f.write(logtext)
 
     if expect_delta:
-        check(f"update: delta {changed} files changed" in logtext, f"{changed} files changed, delta path used")
+        check("update: delta 3 files changed" in logtext, "3 files changed, delta path used")
         check("update: delta staged" in logtext, "'update: delta staged' logged")
         check("update: delta failed" not in logtext, "no fallback to zip in the delta run")
     else:
         check("update: delta failed" in logtext and "falling back to the full zip" in logtext,
               "delta failure fell back to the full zip")
+    for text in expect_log:
+        check(text in logtext, f"logged: {text}")
 
-    # Installed state.
-    top = work  # the swap replaces top-level entries under the install root
-    v = read(os.path.join(top, "VERSION.txt"))
-    check(v.strip() == NEW_VER, f"VERSION.txt is {NEW_VER} (got {v.strip()!r})")
-    check(os.path.exists(os.path.join(top, "NEW_IN_999.txt")), "NEW_IN_999.txt landed")
-    mmd = read(os.path.join(top, "shaders", "mmd.hlsl"))
-    check("9.9.9 marker" in mmd, "changed shader installed")
-    check(not os.path.exists(os.path.join(top, "shaders", "old", "gone.hlsl")),
-          "removed file is gone")
-    check(os.path.exists(os.path.join(top, "shaders", "common.hlsli")),
-          "unchanged file intact (shaders/common.hlsli)")
-    check("nickname=TestUser" in read(os.path.join(top, "mmdx12.ini")), "mmdx12.ini intact")
-    check(os.path.exists(os.path.join(top, "dummy_library_file.txt")), "dummy library file intact")
-    check(os.path.exists(os.path.join(top, "recovery", "recover.bin")), "recovery file intact")
-    check(os.path.exists(os.path.join(top, "library", "user_model.txt")), "library/ intact")
-    check(not os.path.exists(os.path.join(top, "update_tmp")), "update_tmp cleaned")
-    prev = read(os.path.join(top, "mmdx12.previous.log"))
+    installed_real_version(work)
+    prev = read(os.path.join(work, "mmdx12.previous.log"))
     check("staged, spawning the applier" in prev and "installed - restarting" in prev,
           "mmdx12.previous.log keeps the updating app's + applier's log")
-    # The breadcrumb is logged by the restarted app on its next start.
-    check("installed (this run started after the update)" in logtext,
-          "'update: 9.9.9 installed' breadcrumb logged")
-
+    check("installed (this run started after the update)" in logtext, "'update: 9.9.9 installed' breadcrumb logged")
     return not failures
 
 
-def read(path):
-    if not os.path.exists(path):
-        return ""
-    with open(path, encoding="utf-8", errors="replace") as f:
-        return f.read()
+def refused_scenario(n, title, work, feed_path, expect_log, extra=()):
+    """One run that must leave the install exactly as it was."""
+    log(f"\n== scenario {n}: {title} ==")
+    proc = start_app(work, feed_path, f"update_{n}.script", extra)
+    try:
+        proc.wait(timeout=240)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        proc.wait()
+        check(False, "the app did not exit")
+        return
+    text = read(os.path.join(work, "mmdx12.log"))
+    check(expect_log in text, f"logged: {expect_log}")
+    check("staged, spawning the applier" not in text, "no update was staged")
+    install_untouched(work)
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--keep", action="store_true", help="do not delete the temp workspace")
+    args = ap.parse_args()
+
+    if not os.path.exists(EXE):
+        sys.exit(f"{EXE} missing: see this script's header for the test build")
+    if not os.path.exists(KEY):
+        sys.exit(f"{KEY} missing: see this script's header for the test key")
+
+    force_dirs_ok(TMP)
+    os.makedirs(TMP, exist_ok=True)
+    store = os.path.join(TMP, "store")
+    os.makedirs(store, exist_ok=True)
+
+    log("== building the old install + new 9.9.9 tree ==")
+    old = make_old_install(os.path.join(TMP, "old_a"))
+    newtree = make_new_tree(old, os.path.join(TMP, "new_9.9.9"))
+
+    # make_update.py on the new tree -> local manifest + object store. No --base-url: the
+    # manifest's objects field stays "../objects/", resolved relative to the manifest file.
+    res = run([sys.executable, MAKE_UPDATE, newtree, "--version", NEW_VER, "--out", store])
+    log(res.stdout.strip())
+    if res.returncode != 0:
+        sys.exit("make_update.py failed")
+    manifest_path = os.path.join(store, "manifests", NEW_VER + ".json")
+    manifest_sha = sha256_file(manifest_path)
+
+    log("== zipping the full fallback ==")
+    zip_path = os.path.join(TMP, f"MMDX12-{NEW_VER}-win64.zip")
+    zip_tree(newtree, zip_path)
+
+    feed = {
+        "version": NEW_VER,
+        "url": zip_path.replace("\\", "/"),
+        "size": os.path.getsize(zip_path),
+        "sha256": sha256_file(zip_path),
+        "page": "https://example.invalid/releases/",
+        "manifest": manifest_path.replace("\\", "/"),
+        "manifestSha256": manifest_sha,
+        "manifests": {NEW_VER: manifest_sha},
+        "notes": {"ko": "9.9.9 테스트", "en": "9.9.9 test"},
+    }
+
+    def feed_at(store2):
+        """The genuine feed, signed for a store at another path: the hashes stay the real ones."""
+        return dict(feed, manifest=os.path.join(store2, "manifests", NEW_VER + ".json").replace("\\", "/"))
+
+    # 1: everything honest.
+    scenario(1, "delta path", old, write_signed(feed, os.path.join(TMP, "feed_1.json")), True)
+
+    # 2: one object corrupted in the store.
+    store2 = clone_store(store, "store_corrupt")
+    target = next(f["sha256"] for f in json.loads(read(manifest_path))["files"] if f["path"] == "shaders/mmd.hlsl")
+    replace_file(os.path.join(store2, "objects", target[:2], target), b"CORRUPT!")
+    scenario(2, "corrupt object", make_old_install(os.path.join(TMP, "old_b")),
+             write_signed(feed_at(store2), os.path.join(TMP, "feed_2.json")), False, ["object hash mismatch"])
+
+    # 3: the server rewrites every field outside the signed bytes; they point at its own zip and manifest.
+    store3 = clone_store(store, "store_evil_outer")
+    evil_manifest = make_evil_manifest(store3)
+    evil_zip = os.path.join(TMP, "evil.zip")
+    with zipfile.ZipFile(evil_zip, "w") as z:
+        z.writestr(f"MMDX12-99.0.0-win64/{EVIL_FILE}", "evil\n")
+    outer = dict(feed, version="99.0.0", url=evil_zip.replace("\\", "/"), sha256=sha256_file(evil_zip),
+                 size=os.path.getsize(evil_zip), manifest=evil_manifest.replace("\\", "/"),
+                 manifestSha256=sha256_file(evil_manifest))
+    scenario(3, "evil fields outside the signed bytes", make_old_install(os.path.join(TMP, "old_c")),
+             write_signed(feed, os.path.join(TMP, "feed_3.json"), outer=outer), True)
+
+    # 4: the server replaces the manifest; the signed feed names the real one's hash.
+    store4 = clone_store(store, "store_evil_manifest")
+    make_evil_manifest(store4)
+    scenario(4, "evil manifest", make_old_install(os.path.join(TMP, "old_d")),
+             write_signed(feed_at(store4), os.path.join(TMP, "feed_4.json")), False, ["manifest checksum mismatch"])
+
+    # 5 + 6: nothing may start. One install serves them all: its first run warms the shader cache.
+    untouched = make_old_install(os.path.join(TMP, "old_e"))
+
+    unsigned = os.path.join(TMP, "feed_unsigned.json")
+    with open(unsigned, "w", encoding="utf-8") as f:
+        json.dump(outer, f, indent=1)
+    refused_scenario("5a", "an unsigned feed", untouched, unsigned, "UPDATEINSTALL ok=0 error='feed is not signed'")
+
+    changed = os.path.join(TMP, "feed_changed.json")
+    body = json.loads(read(write_signed(feed, changed)))
+    body["signedFeed"] = base64.b64encode(json.dumps(outer).encode()).decode()
+    with open(changed, "w", encoding="utf-8") as f:
+        json.dump(body, f, indent=1)
+    refused_scenario("5b", "a changed payload", untouched, changed, "UPDATEINSTALL ok=0 error='feed signature is not valid'")
+
+    other_key = os.path.join(TMP, "other.pem")
+    sign_feed.openssl("genpkey", "-algorithm", "RSA", "-pkeyopt", "rsa_keygen_bits:2048", "-out", other_key,
+                      stderr=subprocess.DEVNULL)
+    refused_scenario("5c", "another key's signature", untouched,
+                     write_signed(outer, os.path.join(TMP, "feed_other_key.json"), key=other_key),
+                     "UPDATEINSTALL ok=0 error='feed signature is not valid'")
+
+    no_hash = {k: v for k, v in feed.items() if k != "sha256"}
+    refused_scenario("5d", "a signed feed without a zip hash", untouched,
+                     write_signed(no_hash, os.path.join(TMP, "feed_no_hash.json")),
+                     "UPDATEINSTALL ok=0 error='feed has no zip hash'")
+
+    # 6: manifest, objects and zip all swapped. The feed's hashes hold: both paths fail, nothing is staged.
+    store6 = clone_store(store, "store_evil_all")
+    make_evil_manifest(store6)
+    evil6 = dict(feed_at(store6), url=evil_zip.replace("\\", "/"), size=os.path.getsize(evil_zip))
+    refused_scenario(6, "every server file swapped", untouched,
+                     write_signed(evil6, os.path.join(TMP, "feed_6.json")), "update: checksum mismatch",
+                     ["--frames", "600"])
+
+    log("")
+    if failures:
+        log(f"FAILED ({len(failures)}):")
+        for f in failures:
+            log("  - " + f)
+    else:
+        log("ALL CHECKS PASSED")
+    if args.keep:
+        log(f"workdir kept: {TMP}")
+    else:
+        force_dirs_ok(TMP)
+    return 1 if failures else 0
 
 
 if __name__ == "__main__":

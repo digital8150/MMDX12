@@ -7,8 +7,8 @@
 // in sync. Paths are forward-slash, relative to the install root (the folder holding MMDX12.exe),
 // exactly like Updater.h manifest paths.
 //
-// The app fetches a component from the manifest of the INSTALLED version (see
-// updater::ComponentFetcher, src/app/Updater.*): the bytes always match this exe.
+// The app fetches a component from the manifest of the INSTALLED version, whose hash the signed
+// feed names (see updater::ComponentFetcher, src/app/Updater.*): the bytes always match this exe.
 #include <filesystem>
 #include <string>
 
