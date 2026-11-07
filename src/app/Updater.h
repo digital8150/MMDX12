@@ -7,11 +7,15 @@
 // Feed: GET https://mmdx.codingbot.kr/latest.json ->
 //   { "version": "1.0.1", "url": "<zip>", "size": 1, "sha256": "<hex>", "page": "<releases>",
 //     "manifest": "<manifest url>", "manifestSha256": "<hex>",
-//     "notes": { "ko": "...", "en": "...", ... } }
-// `url` may be https/http, a file: URL or a local path (testing); `size` and `sha256` are
-// verified before the zip is trusted. `notes` falls back to "en", then the first entry.
-// `manifest` / `manifestSha256` are optional: when present and valid the download uses the delta
-// path (only changed/new files), otherwise it falls back to the full zip. Old apps ignore them.
+//     "manifests": { "<version>": "<hex of that version's manifest>", ... },
+//     "notes": { "ko": "...", "en": "...", ... },
+//     "signedFeed": "<base64>", "signature": "<base64>" }
+// The app reads only the signed bytes (core/FeedSignature.h); the same plain fields outside them are for versions from
+// before signing. `url` may be https/http, a file: URL or a local path (testing); `size` and `sha256` are verified before
+// the zip is trusted, and a feed without `sha256` is refused. `notes` falls back to "en", then the first entry.
+// `manifest` + `manifestSha256` are optional as a pair: when present the download uses the delta path (only changed/new
+// files), and any delta failure falls back to the full zip. `manifests` names the manifest of every version that may
+// still fetch an optional component, because the installed version is usually not the feed's.
 //
 // Delta path: the manifest lists every program file of the new version (path under the install
 // root, size, SHA-256) and an object store base url. The app hashes its own matching-size files,
@@ -54,8 +58,16 @@ namespace mmdx::updater {
 #ifdef MMDX12_NIGHTLY
 constexpr bool kNightlyBuild = true;
 constexpr const char* kDefaultFeedUrl = "https://mmdx.codingbot.kr/updates/nightly/nightly.json";
-// The public half of the nightly signing key (modulus, core/FeedSignature.h). Its private half is only a secret of the
-// workflow's publish job, never on the update server: a taken-over server cannot make this build install anything.
+#else
+constexpr bool kNightlyBuild = false;
+constexpr const char* kDefaultFeedUrl = "https://mmdx.codingbot.kr/latest.json";
+#endif
+// The public half of the channel's signing key (modulus, core/FeedSignature.h). The private halves are CI secrets that never
+// reach the update server, and every feed is checked against this key: a taken-over server cannot make the app install
+// anything. A new stable key also goes into the website repo's sign-feed workflow.
+#if defined(MMDX12_FEED_TEST_KEY)  // test builds only (tools/sign_feed.py new-test-key); package_release.ps1 refuses it
+constexpr const char* kFeedPublicKey = MMDX12_FEED_TEST_KEY;
+#elif defined(MMDX12_NIGHTLY)
 constexpr const char* kFeedPublicKey =
     "tG/O+zvNyVa1IT5RT9IFx/G+pq2sfp2rfzWCRMH9mWZBOCOO4HmyD3YpOt+PifdSuNOJBG2N1BUVIBh0w45V846goGrRDDSHx9hcNjNI6g8+DGYj"
     "REXU3PSfyK7bhWfxOff3wpQW+5AgkhAwCIYh9UdZk5loudvgnp7KCfyen+Mc/U379MQRpUHu7Vpj8NdU7xO1WlA3QDSBt4R7U1S9HyZS6oRQgAXs"
@@ -63,9 +75,12 @@ constexpr const char* kFeedPublicKey =
     "J+SZG4OFOHZP63j314QkdiDSeZ1eENvmKGGA/T6RwmFv0YSGgraByYaWzxdLyOix3/NpHvEJ7I4frAB/Alb4AkRhNm2uq9rRJvaR0en/qbiqfikZ"
     "ebGpVf2f+7w52SYUUbD5nvzqM7gzrNmQ1LobTn3KBLoll3l7yCM1G1muuyGrMgY7";
 #else
-constexpr bool kNightlyBuild = false;
-constexpr const char* kDefaultFeedUrl = "https://mmdx.codingbot.kr/latest.json";
-constexpr const char* kFeedPublicKey = nullptr;  // stable feeds are not signed (yet): the feed's hashes are all it has
+constexpr const char* kFeedPublicKey =
+    "mTTIQD+OHE65FLhV25jj+eu9HfrTsSQKPxx9TTX9/t1+ik/cL8vUj6Q1Rerr5Hfygw8Z4wzmy+VaMK+b9NCf8qYzNyfR1xxJHAS4mtrbHjm0hi2yZ9"
+    "5l942zOw3tbqwjTN9iRBN2brMsHCLVpKBcKt5MNOpXG+7wpMSBbFhBJRqA+gLoqlT9x8YFoWyGcClR8/MmpomJlDEqIZgorTcH5WM0jrpRgIjaRAcN"
+    "0hxAwQtZIuAMsgcsIfb1Ke5PB6n7vmVMABiN3oAl/LsK5/vDhZU7UqYVQLUpWVGihoSpn6J7AFbeOexpBnVo0T2jkH6z0qBWgJdHmfo2Bn3CA2hJvv"
+    "7dCMd7oRAd3AoeQ8dDCN3mjh4Jwmy74M2+5exGFBSydSDKReOL/KhlBI2aOGJUn+z/gXRkKQNEq6r6bmOzHzdvLDqklBp6v367oPm1/Ug/aV3Xnx6J"
+    "kQb3syx949+/X/5CN6Cz4sygBJ4LoQDpPk1zVhr8DVF1emiycCZL/jsd";
 #endif
 constexpr const char* kUpdateDirName = "update_tmp";  // staging + journal, next to the exe
 
@@ -80,6 +95,7 @@ struct Feed {
     // both are present and valid the update only downloads the files whose SHA-256 changed.
     std::string manifest;         // manifest URL (https / http / file: / local path)
     std::string manifestSha256;   // lowercase hex of the manifest file
+    std::map<std::string, std::string> manifests;  // version -> lowercase hex of that version's manifest file
     std::map<std::string, std::string> notes;  // language code -> short plain text
     std::string error;     // !ok: human readable
 };
@@ -109,8 +125,8 @@ bool ParseManifest(const std::string& json, Manifest& out, std::string& error);
 // This fetches one component on demand from the update object store, using the manifest of the
 // INSTALLED version so the bytes always match this exe. It reuses the feed / manifest / object
 // helpers above; the manifest URL is derived from the feed's `manifest` (same folder,
-// "<current version>.json"). SHA-256 per file is verified; downloads land in a .part file and are
-// renamed into place. One background job at a time, polled from the UI thread (no callbacks).
+// "<current version>.json") and it must hash to the feed's `manifests` entry for this version. SHA-256
+// per file is verified; downloads land in a .part file and are renamed into place. One background job at a time, polled from the UI thread (no callbacks).
 class ComponentFetcher {
 public:
     ComponentFetcher() = default;

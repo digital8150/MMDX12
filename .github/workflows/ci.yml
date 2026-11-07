@@ -135,7 +135,7 @@ jobs:
             'studio_focus_test', 'restpose_retarget_test', 'rest_pose_test', 'shader_choice_test', 'look_preset_test',
             'world_track_test', 'gallery_index_test', 'stage_store_test', 'pack_guard_test', 'mme_parse_test --selftest',
             'mme_script_test', 'dds_test', 'raymat_test', 'pack_suggest_test', 'spot_shadow_pick_test',
-            'feed_signature_test'
+            'feed_signature_test', 'updater_feed_test'
           )
           $failed = @()
           foreach ($t in $tests) {

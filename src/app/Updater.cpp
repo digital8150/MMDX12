@@ -432,12 +432,10 @@ Feed FetchFeed(const std::string& feedUrlOrPath) {
         out.error = error;
         return out;
     }
-    if (kFeedPublicKey) {  // only the signed bytes count from here on; nothing outside them is ever read
-        std::string payload;
-        if (!net::OpenSignedFeed(body, kFeedPublicKey, payload, out.error)) return out;
-        body = std::move(payload);
-    }
-    const nlohmann::json j = nlohmann::json::parse(body, nullptr, false);
+    // Only the signed bytes count from here on; nothing outside them is ever read.
+    std::string payload;
+    if (!net::OpenSignedFeed(body, kFeedPublicKey, payload, out.error)) return out;
+    const nlohmann::json j = nlohmann::json::parse(payload, nullptr, false);
     if (j.is_discarded() || !j.is_object()) {
         out.error = "invalid feed response";
         return out;
@@ -449,6 +447,9 @@ Feed FetchFeed(const std::string& feedUrlOrPath) {
     out.size = j.value("size", (uint64_t)0);
     out.manifest = Trimmed(j.value("manifest", std::string()));
     out.manifestSha256 = LowerAsciiOf(Trimmed(j.value("manifestSha256", std::string())));
+    if (j.contains("manifests") && j["manifests"].is_object())
+        for (auto it = j["manifests"].begin(); it != j["manifests"].end(); ++it)
+            if (it.value().is_string()) out.manifests[it.key()] = LowerAsciiOf(Trimmed(it.value().get<std::string>()));
     if (j.contains("notes") && j["notes"].is_object())
         for (auto it = j["notes"].begin(); it != j["notes"].end(); ++it)
             if (it.value().is_string()) out.notes[it.key()] = it.value().get<std::string>();
@@ -458,6 +459,15 @@ Feed FetchFeed(const std::string& feedUrlOrPath) {
     }
     if (out.url.empty()) {
         out.error = "feed has no download url";
+        return out;
+    }
+    // Every file the updater takes is checked against these two, so a feed without them promises nothing.
+    if (out.sha256.size() != 64) {
+        out.error = "feed has no zip hash";
+        return out;
+    }
+    if (!out.manifest.empty() && out.manifestSha256.size() != 64) {
+        out.error = "feed has no manifest hash";
         return out;
     }
     out.ok = true;
@@ -685,12 +695,10 @@ std::string Controller::StageDelta(const Feed& feed, int& changedFiles, uint64_t
     }
     const fs::path manifestFile = root / L"manifest.json";
     if (!WriteSmallFile(manifestFile, body)) return std::string("cannot write the manifest");
-    if (!feed.manifestSha256.empty()) {
-        const std::string got = LowerAsciiOf(Sha256OfFile(manifestFile, nullptr));
-        if (got != feed.manifestSha256) {
-            LOG_WARN("update: manifest sha256 mismatch (%s...)", got.substr(0, 12).c_str());
-            return "manifest checksum mismatch";
-        }
+    const std::string got = LowerAsciiOf(Sha256OfFile(manifestFile, nullptr));
+    if (got != feed.manifestSha256) {
+        LOG_WARN("update: manifest sha256 mismatch (%s...)", got.substr(0, 12).c_str());
+        return "manifest checksum mismatch";
     }
     Manifest m;
     if (!ParseManifest(body, m, error)) {
@@ -862,11 +870,11 @@ std::string Controller::UpdateWorker(Feed feed) {
             LOG_WARN("update: cannot hash the download");
             return std::string("cannot hash the download");
         }
-        if (!feed.sha256.empty() && digest != feed.sha256) {
+        if (digest != feed.sha256) {
             LOG_WARN("update: checksum mismatch (%s...)", digest.substr(0, 12).c_str());
             return "checksum mismatch (" + digest.substr(0, 12) + "...)";
         }
-        if (!feed.sha256.empty()) LOG_INFO("update: sha256 ok (%s...)", digest.substr(0, 12).c_str());
+        LOG_INFO("update: sha256 ok (%s...)", digest.substr(0, 12).c_str());
         if (feed.size > 0 && fs::file_size(zip, ec) != feed.size) {
             LOG_WARN("update: size mismatch (%llu/%llu)", (unsigned long long)fs::file_size(zip, ec),
                      (unsigned long long)feed.size);
@@ -1022,25 +1030,25 @@ const ComponentFetcher::State& ComponentFetcher::Get() {
 }
 
 std::string ComponentFetcher::Worker(components::Def comp) {
-    // The installed version's manifest below has no signed hash: a signed build (whose zip holds every component
-    // anyway) must not take DLLs on the server's word.
-    if (kFeedPublicKey) return std::string("not available in this build");
+    // A nightly's zip holds every component, and its feed names no older manifests.
+    if (kNightlyBuild) return std::string("not available in this build");
 
-    // 1. the feed (only to locate the object store).
+    // 1. the signed feed: where the manifests live, and the hash of this version's.
     const Feed feed = FetchFeed(feedUrl_);
     if (!feed.ok) return "feed: " + feed.error;
     if (feed.manifest.empty()) return std::string("feed has no manifest url");
+    const auto manifestHash = feed.manifests.find(currentVersion_);
+    if (manifestHash == feed.manifests.end()) return std::string("feed has no manifest hash for this version");
 
     // 2. the INSTALLED version's manifest: same folder as the feed's manifest, "<current version>.json".
     //    Never the new version's manifest: the upscaler DLLs / fonts must match this exe.
     const std::string manifestUrl = ResolveRelative(feed.manifest, currentVersion_ + ".json");
     std::string body, error;
     if (!FetchBytes(manifestUrl, 1u << 24, body, error)) return "manifest: " + error;
+    if (net::Sha256OfBytes(body) != manifestHash->second) return std::string("manifest: checksum mismatch");
     Manifest m;
     if (!ParseManifest(body, m, error)) return "manifest: " + error;
-    if (m.version != currentVersion_)
-        LOG_WARN("component: manifest version %s differs from this build %s", m.version.c_str(),
-                 currentVersion_.c_str());
+    if (m.version != currentVersion_) return "manifest: for version " + m.version + ", not this build";
     const std::string objects = ResolveRelative(manifestUrl, m.objects);
     if (objects.empty()) return std::string("manifest has no objects base");
 

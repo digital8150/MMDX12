@@ -156,6 +156,12 @@ std::string Sha256OfFile(const fs::path& file, std::atomic<uint64_t>* progress) 
     return s.Finish();
 }
 
+std::string Sha256OfBytes(std::string_view bytes) {
+    Sha256 s;
+    s.Update((const uint8_t*)bytes.data(), bytes.size());
+    return s.Finish();
+}
+
 
 // --- version compare -----------------------------------------------------------------------
 
