@@ -1088,6 +1088,7 @@ void App::DrawStudioLightInspector(float w) {
         ImGui::Dummy(ImVec2(w, Dp(4.0f)));
         ImGui::PushStyleColor(ImGuiCol_Text, ImGui::ColorConvertU32ToFloat4(p.ink3));
         PushFont(Font::Regular, size::Caption);
+        ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + w);
         ImGui::TextWrapped("%s", Tr("하늘 조명은 배경, 안개 색과 태양 색을 함께 정합니다. 태양 조명이 있으면 그 방향을 씁니다."));
         PopFont();
         ImGui::PopStyleColor();
