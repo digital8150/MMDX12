@@ -194,6 +194,8 @@ struct StudioDoc {
     float audioEndFrame = 0;          // timeline frame where the audio ends (includes audioOffset)
     double audioOffset = 0;           // seconds: the audio starts at this timeline time (may be negative)
     bool showWaveform = true;         // show the timeline's audio lane (clip + waveform, drag = offset)
+    bool audioLocked = false;         // the audio's position is fixed: the lane shows it but cannot drag it, the menu's
+                                      // offset controls are disabled (saved in the project's "audio" object)
     // Background AVI (背景AVI): an absolute video path (empty = none) whose current frame feeds screen.bmp materials
     // and, with bgVideoAsBackground, is also drawn as the screen background. bgVideoOffset is seconds: the video
     // starts at this timeline time (may be negative, like audioOffset).
@@ -763,6 +765,7 @@ struct StudioPackage {
     std::vector<StudioCamera> cameras;
     std::filesystem::path audioPath;
     double audioOffset = 0;
+    bool audioLocked = false;                // a project's audio position lock
     // Background AVI (背景AVI), from a project or PMM import.
     std::filesystem::path bgVideoPath;
     double bgVideoOffset = 0;

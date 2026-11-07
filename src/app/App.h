@@ -823,6 +823,7 @@ private:
     void DrawStudioAddMenu();                         // the outliner's "+" popup (library / file)
     void DrawStudioModelMenu(int index);              // outliner row context menu
     void DrawStudioAudioMenuItems();                  // the audio menu's items (outliner audio row, timeline audio lane)
+    void StudioSetAudioLocked(bool locked);  // the audio position lock (project setting, marks the project dirty)
     void StudioCommitAudioOffset(double from, double to);  // one undo step (the offset is already `to`), re-seeks
     // --- physics bake (P2.2, UiStudioBake.cpp): turn a character's live physics into bone keys
     void StudioOpenBakeDialog();                      // model menu: open the options modal (range / step / bones / off)

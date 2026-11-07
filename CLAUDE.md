@@ -195,7 +195,7 @@ progress.md is the session log. Read its latest entry first.
     part; arm rest-pose correction is `studiorestpose <deg> [both|left|right]` (selected model, one undo step) and
     `studiorestposeanswer <accept|keep> [deg]` (presses the import modal's button); `studiostate` also logs `STUDIOPOSE`, `STUDIOPROJ` (including `aspect=`) and one `STUDIOMODEL` line per model). Projects/models
     without dialogs: `studionew`, `studiosave`/`studioopen <file>`, `studioautosave`, `studioadd <character|stage|prop> <file>`,
-    `studioaddlib <character|stage> <substr>`, `studiosong <substr>`, `studioaudio <file|none> [offset]`,
+    `studioaddlib <character|stage> <substr>`, `studiosong <substr>`, `studioaudio <file|none> [offset]`, `studioaudiolock 0|1` (the audio position lock: the lane's lock button / the audio menu switch, saved as the project's `"audio"."locked"`; `STUDIOPROJ` logs `audioLocked=`),
     `studiobgvideo <file|none>`, `studiobgvideoopt <offsetSeconds> <asBackground 0|1>`,
     `studioselect`/`studioremove <index>`, `studioreplace <index> <file>` / `studioreplacelib <index> <substr>` (swap a model's file), `studiorename <text>`, `studiomaterial <default|ray> [emd path]` (PBR material source of the selected model), `studioattach <parent|-1> <bone|-> tx ty tz rx ry rz s`,
     `studioaspect <w:h>` (frame aspect preset, e.g. `9:16`, `16:9`, `2.39:1`), `studiorenderer <raster|rt|pt|gi>` (viewport renderer),

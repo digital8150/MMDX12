@@ -209,6 +209,7 @@ ProjectData App::StudioProjectData() const {
     }
     if (d.hasAudio) pd.audioPath = d.audioPath;
     pd.audioOffset = d.audioOffset;
+    pd.audioLocked = d.audioLocked;
     pd.bgVideoPath = d.bgVideoPath;
     pd.bgVideoOffset = d.bgVideoOffset;
     pd.bgVideoAsBackground = d.bgVideoAsBackground;
@@ -1374,11 +1375,24 @@ void App::StudioCommitAudioOffset(double from, double to) {
     StudioSeekAudio();
 }
 
+// The audio position lock (the timeline lane's lock button, the audio menu): a project setting, not an undo step.
+void App::StudioSetAudioLocked(bool locked) {
+    StudioDoc& d = *studio_;
+    if (d.audioLocked == locked) return;
+    d.audioLocked = locked;
+    ++d.projectVersion;
+}
+
 // The audio menu (the outliner's audio row, a click on the timeline's audio lane): offset, placement shortcuts, the
 // lane switch, replace / remove. Inside an open popup.
 void App::DrawStudioAudioMenuItems() {
     using namespace ui;
     StudioDoc& d = *studio_;
+    bool locked = d.audioLocked;
+    if (Switch("##audiolock", Tr("음원 위치 고정"), &locked)) StudioSetAudioLocked(locked);
+    Tooltip(Tr("켜면 타임라인에서 음원을 드래그해도 움직이지 않아요 (오프셋 변경도 막힘)"));
+    Gap(6.0f);
+    ImGui::BeginDisabled(d.audioLocked);
     SectionLabel(Tr("음원 오프셋 (초)"));
     float off = (float)d.audioOffset;
     ImGui::SetNextItemWidth(-1.0f);
@@ -1403,6 +1417,7 @@ void App::DrawStudioAudioMenuItems() {
         StudioCommitAudioOffset(d.audioOffset, 0.0);
     }
     ImGui::EndDisabled();
+    ImGui::EndDisabled();  // the lock
     Gap(6.0f);
     Switch("##showwaveform", Tr("타임라인에 음원 행 표시"), &d.showWaveform);
     Gap(8.0f);

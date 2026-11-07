@@ -101,6 +101,8 @@ struct TimelineView {
     float audioDurationSeconds = 0.0f;      // track length
     float audioOffsetSeconds = 0.0f;        // the audio starts at this timeline time (may be negative)
     float audioFps = 30.0f;                 // timeline frames per second
+    bool audioLocked = false;               // the position is fixed: the clip does not drag (the label's lock button
+                                            // toggles it through `TimelineEvents::audioLockToggle`)
     // transient clip drag state (dragMode 6), written/read only by the widget:
     float audioDragFromOffset = 0.0f;       // offset when the drag started
     bool audioDragMoved = false;            // the pointer moved past the drag threshold
@@ -138,6 +140,7 @@ struct TimelineEvents {
     bool audioOffset = false; float audioOffsetSeconds = 0.0f;
     bool audioOffsetEnd = false; float audioOffsetFrom = 0.0f;
     bool audioMenu = false;
+    bool audioLockToggle = false;                      // the lock button in the lane's label was clicked
 };
 
 // Draws the timeline into the current ImGui window at the cursor, filling `size` (x or y <= 0 means "remaining space").

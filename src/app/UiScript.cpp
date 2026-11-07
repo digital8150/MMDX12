@@ -245,10 +245,10 @@ bool App::ExecuteUiCommand(const std::string& cmd, const std::vector<std::string
                 LOG_INFO("STUDIOBAKE bones=%zu keys=%zu physicsOff=%d", driven.size(), bakedKeys, (int)m->physicsOff);
             }
             // project + every model (save / reopen comparisons, prop following)
-            LOG_INFO("STUDIOPROJ path=%s dirty=%d aspect=%s models=%zu jobs=%zu audio=%s offset=%.3f end=%d camKeys=%zu "
+            LOG_INFO("STUDIOPROJ path=%s dirty=%d aspect=%s models=%zu jobs=%zu audio=%s offset=%.3f audioLocked=%d end=%d camKeys=%zu "
                      "lightKeys=%zu shadowKeys=%zu bgvideo=%s bgoffset=%.3f bgasbg=%d",
                      PathToUtf8(d.projectPath.filename()).c_str(), (int)d.Dirty(), d.AspectLabel(), d.models.size(), studioJobs_.size(),
-                     d.hasAudio ? PathToUtf8(d.audioPath.filename()).c_str() : "-", d.audioOffset, d.EndFrame(),
+                     d.hasAudio ? PathToUtf8(d.audioPath.filename()).c_str() : "-", d.audioOffset, (int)d.audioLocked, d.EndFrame(),
                      d.camera.camera.size(), d.camera.light.size(), d.camera.shadow.size(),
                      d.bgVideoPath.empty() ? "-" : PathToUtf8(d.bgVideoPath.filename()).c_str(), d.bgVideoOffset,
                      (int)d.bgVideoAsBackground);
@@ -737,6 +737,9 @@ bool App::ExecuteUiCommand(const std::string& cmd, const std::vector<std::string
             if (args.size() > 1) studio_->audioOffset = num(1);
             StudioSetAudio(args[0] == "none" ? std::filesystem::path() : std::filesystem::absolute(Utf8ToPath(args[0])));
         }
+    } else if (cmd == "studioaudiolock") {  // studioaudiolock 0|1
+        if (!args.empty() && (args[0] == "0" || args[0] == "1")) { if (studio_) StudioSetAudioLocked(args[0] == "1"); }
+        else LOG_WARN("ui script: studioaudiolock expects 0 or 1, got '%s'", args.empty() ? "" : args[0].c_str());
     } else if (cmd == "studiobgvideo") {  // studiobgvideo <file|none>: the WHOLE rest of the line is the path
         if (studio_) {
             std::string path;
