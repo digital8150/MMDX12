@@ -14,8 +14,9 @@ object store, using the manifest of the INSTALLED version (never a newer one). T
   * asserts the deleted DLL is back and its bytes match the staged file;
   * a second run confirms an already-present component is fetched (idempotent), and an unknown id
     fails cleanly;
+  * a feed for a newer version still installs this version's bytes, never the newer manifest's;
   * a server that lies is refused and installs nothing: an evil manifest, a changed object, an unsigned feed, a changed
-    payload, a signed feed that does not name this version.
+    payload, a signed feed that does not name this version or has a broken hash.
 
 Run against a test build that trusts a throwaway key (the header of tools/update_e2e.py has the commands):
     python tools/components_e2e.py [--keep]
@@ -147,10 +148,10 @@ def write_signed(feed, path, key=KEY):
     return path
 
 
-def refused(title, install, feed_path, expect_error):
-    """A fetch that must fail with `expect_error` and leave the component missing."""
+def refused(title, install, feed_path, expect_error, untouched=COMPONENT_FILE):
+    """A fetch that must fail with `expect_error` and leave the file `untouched` missing."""
     log(f"\n== {title} ==")
-    dst = os.path.join(install, COMPONENT_FILE)
+    dst = os.path.join(install, untouched)
     for name in COMPONENT_FILES:
         if os.path.exists(os.path.join(install, name)):
             os.remove(os.path.join(install, name))
@@ -158,7 +159,7 @@ def refused(title, install, feed_path, expect_error):
     logtext = read_log(install)
     check(proc is not None and proc.returncode != 0, "the app exited non-zero")
     check("COMPONENT ok=0" in logtext and expect_error in logtext, f"refused: {expect_error}")
-    check(not os.path.exists(dst), f"{COMPONENT_FILE} was not installed")
+    check(not os.path.exists(dst), f"{untouched} was not installed")
     check(not os.path.exists(dst + ".component.part"), "no partial download left")
 
 
@@ -214,9 +215,14 @@ def main():
     manifest_sha = sha256_file(manifest_path)
 
     # The staged component bytes (must equal what lands in the install).
-    stage_component = os.path.join(stage, COMPONENT_FILE)
-    expect_sha = sha256_file(stage_component)
+    expected = {name: sha256_file(os.path.join(stage, name)) for name in COMPONENT_FILES}
+    expect_sha = expected[COMPONENT_FILE]
     log(f"  staged {COMPONENT_FILE}: sha256 {expect_sha[:12]}...")
+
+    def check_component(install):
+        for name, digest in expected.items():
+            path = os.path.join(install, name)
+            check(os.path.exists(path) and sha256_file(path) == digest, f"{name} holds the staged bytes (SHA-256)")
 
     # 2. The feed. `manifest` points at the installed version's manifest; the component fetcher
     #    derives <current>.json as its sibling (== the same file here) and checks it against `manifests`.
@@ -256,10 +262,7 @@ def main():
     check(proc is not None and proc.returncode == 0, "the app exited 0")
     check("COMPONENT ok=1" in logtext, "logged COMPONENT ok=1")
     dst = os.path.join(install, COMPONENT_FILE)
-    for name in COMPONENT_FILES:
-        check(os.path.exists(os.path.join(install, name)), f"{name} landed in the install")
-    if os.path.exists(dst):
-        check(sha256_file(dst) == expect_sha, "the fetched bytes match the staged file (SHA-256)")
+    check_component(install)
 
     # 5. Idempotent: fetching again (already present) still succeeds.
     log("\n== fetch an already-present component ==")
@@ -267,8 +270,7 @@ def main():
     logtext = read_log(install)
     check(proc is not None and proc.returncode == 0, "the app exited 0 again")
     check("COMPONENT ok=1" in logtext, "logged COMPONENT ok=1 again")
-    if os.path.exists(dst):
-        check(sha256_file(dst) == expect_sha, "the bytes are unchanged")
+    check_component(install)
 
     # 6. An unknown component id fails cleanly (exit != 0, logged).
     log("\n== unknown component id ==")
@@ -277,7 +279,36 @@ def main():
     check(proc is not None and proc.returncode != 0, "the app exited non-zero")
     check("COMPONENT ok=0" in logtext, "logged COMPONENT ok=0")
 
-    # 7. A server that lies. The evil store: a well-formed manifest whose component entry names the server's own DLL.
+    # 7. The usual case: the feed is for a newer version, whose manifest lists other component bytes. This install must
+    #    still take its own version's bytes, through the feed's `manifests` entry for it.
+    log("\n== a feed for a newer version ==")
+    newer = "9.9.9"
+    newer_bytes = b"MZ the next version's DLL"
+    newer_sha = hashlib.sha256(newer_bytes).hexdigest()
+    os.makedirs(os.path.join(store, "objects", newer_sha[:2]), exist_ok=True)
+    with open(os.path.join(store, "objects", newer_sha[:2], newer_sha), "wb") as f:
+        f.write(newer_bytes)
+    with open(manifest_path, encoding="utf-8") as f:
+        newer_manifest = json.load(f)
+    newer_manifest["version"] = newer
+    for entry in newer_manifest["files"]:
+        if entry["path"] in COMPONENT_FILES:
+            entry["sha256"] = newer_sha
+            entry["size"] = len(newer_bytes)
+    newer_manifest_path = os.path.join(store, "manifests", newer + ".json")
+    with open(newer_manifest_path, "w", encoding="utf-8") as f:
+        json.dump(newer_manifest, f, indent=1)
+    newer_hash = sha256_file(newer_manifest_path)
+    newer_feed = dict(feed, version=newer, manifest=newer_manifest_path.replace("\\", "/"), manifestSha256=newer_hash,
+                      manifests={VERSION: manifest_sha, newer: newer_hash})
+    for name in COMPONENT_FILES:
+        os.remove(os.path.join(install, name))
+    proc = run_app(["--update-feed", write_signed(newer_feed, os.path.join(TMP, "feed_newer.json")),
+                    "--component", COMPONENT, "--download-component"], install)
+    check(proc is not None and proc.returncode == 0 and "COMPONENT ok=1" in read_log(install), "logged COMPONENT ok=1")
+    check_component(install)
+
+    # 8. A server that lies. The evil store: a well-formed manifest whose component entry names the server's own DLL.
     evil_dll = b"MZ evil from the server"
     evil_sha = hashlib.sha256(evil_dll).hexdigest()
     evil_store = os.path.join(TMP, "store_evil")
@@ -312,6 +343,19 @@ def main():
                          os.path.join(TMP, "feed_evil_object.json")),
             f"checksum mismatch for {COMPONENT_FILE}")
 
+    # A later file of the same component: its own check holds too.
+    last = COMPONENT_FILES[-1]
+    last_store = os.path.join(TMP, "store_evil_last_object")
+    shutil.copytree(store, last_store, copy_function=os.link)
+    target = os.path.join(last_store, "objects", expected[last][:2], expected[last])
+    os.remove(target)
+    with open(target, "wb") as f:
+        f.write(evil_dll)
+    refused("another file's object swapped", install,
+            write_signed(dict(feed, manifest=os.path.join(last_store, "manifests", VERSION + ".json").replace("\\", "/")),
+                         os.path.join(TMP, "feed_evil_last_object.json")),
+            f"checksum mismatch for {last}", untouched=last)
+
     evil_fields = dict(feed, manifest=evil_url, manifestSha256=sha256_file(evil_manifest_path),
                        manifests={VERSION: sha256_file(evil_manifest_path)})
     unsigned = os.path.join(TMP, "feed_unsigned.json")
@@ -331,6 +375,14 @@ def main():
     refused("a signed feed that does not name this version", install,
             write_signed(dict(feed, manifests={"0.0.1": manifest_sha}), os.path.join(TMP, "feed_other_version.json")),
             "no manifest hash for this version")
+
+    refused("a signed feed whose zip hash is not hex", install,
+            write_signed(dict(feed, sha256="z" * 64), os.path.join(TMP, "feed_bad_zip_hash.json")),
+            "feed has no zip hash")
+
+    refused("a signed feed whose manifest hash is not hex", install,
+            write_signed(dict(feed, manifestSha256="z" * 64), os.path.join(TMP, "feed_bad_manifest_hash.json")),
+            "feed has no manifest hash")
 
     log("")
     if failures:

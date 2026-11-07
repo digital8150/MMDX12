@@ -297,8 +297,9 @@ if(EXISTS ${CMAKE_SOURCE_DIR}/tools/feed_signature_test.cpp)
   target_include_directories(feed_signature_test PRIVATE ${CMAKE_SOURCE_DIR}/src)
   target_link_libraries(feed_signature_test PRIVATE mmdx_core winhttp)
 endif()
-if(EXISTS ${CMAKE_SOURCE_DIR}/tools/updater_feed_test.cpp)
-  # What FetchFeed accepts (app/Updater.cpp without the whole app), against a key of its own.
+if(EXISTS ${CMAKE_SOURCE_DIR}/tools/updater_feed_test.cpp AND NOT MMDX12_FEED_TEST_KEY)
+  # What FetchFeed accepts (app/Updater.cpp without the whole app), against a key of its own: not in an E2E test build,
+  # whose key would define the same macro.
   add_executable(updater_feed_test tools/updater_feed_test.cpp src/app/Updater.cpp)
   target_include_directories(updater_feed_test PRIVATE ${CMAKE_SOURCE_DIR}/src)
   target_compile_definitions(updater_feed_test PRIVATE MMDX12_FEED_TEST_KEY="zllVPcyxvPXQDQ9fDcmmextQ1f94Qse5DkqMzaXK+ga8GbWycnoIawGGJ5UYecq3Gg7XhKwt27Iz1gVGED6PNI1BFkaGXjI/SpzCScIdqRlx2ZIQdHjIEURpkuPsuFd/jiBDvBlz2pAv8ONGGl3VO+ZWUJNXEAE5feHZHDMwOU72xfjc6Lx5hSN3w09igb+Sxqi6ZLVRDfJ542EJCOW6cdg+KSTGrxSFbA+5fPDbucCRFnF7DDVAU898WwomtPDa0BIJrRnbo0lcMz/df1vmbAzdioCLMv917qJqs2Bp06WwgoYjTkAtK7Si+SNmJbWH9TRVbUv8ThWv59Wpsc3trw==")

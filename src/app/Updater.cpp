@@ -72,6 +72,10 @@ bool WriteSmallFile(const fs::path& file, const std::string& data) {
     return (bool)out;
 }
 
+bool IsSha256(const std::string& s) {
+    return s.size() == 64 && s.find_first_not_of("0123456789abcdef") == std::string::npos;
+}
+
 bool FileExists(const fs::path& p) {
     std::error_code ec;
     return fs::exists(p, ec);
@@ -462,11 +466,11 @@ Feed FetchFeed(const std::string& feedUrlOrPath) {
         return out;
     }
     // Every file the updater takes is checked against these two, so a feed without them promises nothing.
-    if (out.sha256.size() != 64) {
+    if (!IsSha256(out.sha256)) {
         out.error = "feed has no zip hash";
         return out;
     }
-    if (!out.manifest.empty() && out.manifestSha256.size() != 64) {
+    if (!out.manifest.empty() && !IsSha256(out.manifestSha256)) {
         out.error = "feed has no manifest hash";
         return out;
     }
@@ -513,7 +517,7 @@ bool ParseManifest(const std::string& json, Manifest& out, std::string& error) {
         if (f.path.empty()) continue;
         for (char& c : f.path)
             if (c == '\\') c = '/';
-        if (f.sha256.size() != 64) {
+        if (!IsSha256(f.sha256)) {
             error = "manifest file has a bad sha256: " + f.path;
             return false;
         }
