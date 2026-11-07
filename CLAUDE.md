@@ -42,7 +42,8 @@ progress.md is the session log. Read its latest entry first.
   environment limited to master. The gate job only passes a master push by the repository owner (`workflow_run` also
   fires for a fork's branch named master) and sends a range holding anyone else's pull request to the `nightly-review`
   environment for approval. It takes the range's start from the `nightly` release's notes (written last by the publish
-  job), never from the update server, and a missing start means review. Keep server names, paths and accounts out of this repository, the workflow and its logs: they
+  job), never from the update server, and a missing start or a failed comparison means review. The owner's manual
+  `workflow_dispatch` run checks no range and publishes without review. Keep server names, paths and accounts out of this repository, the workflow and its logs: they
   live in Secrets and in CLAUDE.local.md.
   Stable release order: `package_release.ps1 -Version x.y.z` -> `make_update.py` + upload the store -> GitHub release -> in
   the website repo commit the manifest hash in `src/data/update_manifests.json` -> run its `sign-feed` workflow with the version

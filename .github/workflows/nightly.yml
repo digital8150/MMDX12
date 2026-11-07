@@ -71,9 +71,10 @@ jobs:
           # The published commit, from the nightly release's notes and not from the update server's feed: a taken-over
           # server naming a later commit would hide a pull request from the range below, and the site's CDN turns runners
           # away. The publish job writes the notes last, so they are never newer than the feed: a failed publish only widens
-          # the range. Looked up on pull requests too (no effect there), so a dry run shows that it works.
-          prev=$(gh release view nightly -R "$REPO" --json body --jq .body |
-            sed -nE 's/^Latest: .* from ([0-9a-f]{40})\..*/\1/p' | head -n 1) || prev=
+          # the range. Looked up on pull requests too (no effect there), so a dry run shows that it works. Only the first
+          # line counts: the publish job writes it, anything below it is no published build.
+          prev=$(gh release view nightly -R "$REPO" --json body --jq .body | head -n 1 |
+            sed -nE 's/^Latest: .* from ([0-9a-f]{40})\..*/\1/p') || prev=
           echo "Published commit: ${prev:-unknown}"
           [ -n "$prev" ] || echo "::warning::No published commit in the nightly release's notes: a master build goes to review"
           if [ "$EVENT" = workflow_run ]; then
@@ -82,7 +83,10 @@ jobs:
             if [ -n "$prev" ]; then
               compare=$(gh api "repos/$REPO/compare/$prev...$sha") || compare='{"status":"unknown"}'
               status=$(jq -r .status <<< "$compare")
-              if [ "$status" != ahead ]; then
+              if [ "$status" = unknown ]; then
+                # A failed comparison is not "nothing new": build it and leave the range to the owner.
+                echo "::warning::Could not compare $sha with the published $prev: this build goes to review"
+              elif [ "$status" != ahead ]; then
                 echo "$sha is $status against the published $prev"
                 build=false
               elif [ "$(jq '.files | length' <<< "$compare")" -lt 300 ] && [ "$(jq .total_commits <<< "$compare")" -le 250 ]; then
