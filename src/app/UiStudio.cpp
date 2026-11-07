@@ -368,9 +368,12 @@ void App::StudioEnter(std::unique_ptr<StudioDoc> doc) {
     // are reproducible whatever the last interactive session left behind).
     studioRibbonTab_ = settings_.studioRibbonTab;
     studioRibbonCollapsed_ = settings_.studioRibbonCollapsed;
+    // Auto-key is remembered too (default off, MMD's feel); scripted runs start with it off (`studioautokey 0|1`).
+    studio_->autoKey = settings_.studioAutoKey;
     if (HeadlessRun()) {
         studioRibbonCollapsed_ = false;
         studioRibbonTab_ = 0;
+        studio_->autoKey = false;
     }
     if (uiScriptNext_ == 0) framesInScene_ = 0;  // a running ui script keeps its frame clock across project switches
     if (studio_->hasAudio) StudioSeekAudio();
@@ -4412,6 +4415,12 @@ void App::DrawStudio() {
     const ImVec2 ds = io.DisplaySize;
     const Palette& pal = P();
     const float top = Dp(App::kRibbonHeaderH + (studioRibbonCollapsed_ ? 0.0f : App::kRibbonToolsH));
+    // The auto-key switch lives in several places (ribbon, transport, camera / light inspectors): remember whichever
+    // flipped it last frame. Scripted runs never write the ini.
+    if (d.autoKey != settings_.studioAutoKey && !HeadlessRun()) {
+        settings_.studioAutoKey = d.autoKey;
+        settings_.Save(settingsPath_);
+    }
 
     // --- ribbon: a fixed window above the dock space
     ImGui::SetNextWindowPos(ImVec2(0, 0));

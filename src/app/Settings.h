@@ -53,6 +53,7 @@ struct AppSettings {
     // whether the tool row is collapsed. Scripted / --frames runs start expanded on the home tab.
     int studioRibbonTab = 0;
     bool studioRibbonCollapsed = false;
+    bool studioAutoKey = false;  // the studio's auto-key switch, remembered (off = MMD's explicit key registering)
     int upscaler = 0;          // UpscalerKind: 0 none, 1 DLSS, 2 FSR, 3 XeSS
     int upscalerQuality = 1;   // UpscalerQuality: 0 native AA, 1 quality, 2 balanced, 3 performance, 4 ultra performance
     // DLSS Frame Generation: 0 off, 2 / 3 / 4 (multiplier). Only applies to the live play scene.

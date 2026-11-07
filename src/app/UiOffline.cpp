@@ -1691,7 +1691,11 @@ void App::DrawToast() {
                      // a toast without its folder button lets clicks through (it sits over the studio viewport)
                      (toast_.path.empty() ? ImGuiWindowFlags_NoInputs : 0));
     ImDrawList* dl = ImGui::GetWindowDrawList();
+    // The window is exactly the card: its clip rect cut the soft shadow (which spreads past the rounded corners) into
+    // a hard rectangle, visible on the light theme. Draw the card unclipped.
+    dl->PushClipRectFullScreen();
     FrostedPanel(dl, a, b, Dp(16.0f), (ImTextureID)0, rect0);
+    dl->PopClipRect();
     Icon(dl, toast_.error ? icon::Warning : icon::Check, Dp(20.0f), ImVec2(a.x + Dp(20.0f) + Dp(10.0f), (a.y + b.y) * 0.5f),
          toast_.error ? p.danger : p.accent);
     const float tx = a.x + Dp(16.0f + 24.0f + 12.0f);

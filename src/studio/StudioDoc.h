@@ -284,7 +284,8 @@ struct StudioDoc {
     }
     bool showSafeFrames = false;    // title / action safe rectangles inside the frame
     bool showThirds = false;        // rule-of-thirds guides inside the frame
-    bool autoKey = true;           // editing a value in the inspector keys it at the playhead (Adobe / Blender style)
+    bool autoKey = false;          // editing a value keys it at the playhead (Adobe / Blender style); off = MMD's explicit
+                                    // registering. The app sets it from the ini (`studioAutoKey`) on entry.
 
     // editor
     int selectedModel = -1;     // index into models; -1 = camera (the camera VMD, or a scene light: selectedLightUid)
