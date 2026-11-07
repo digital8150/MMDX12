@@ -49,12 +49,39 @@ float4 PSComposite(FsOut i) : SV_Target {
     const bool cam = gP1.z <= 0.0 ||
                      (i.uv.x >= gP1.x && i.uv.x < gP1.x + gP1.z && i.uv.y >= gP1.y && i.uv.y < gP1.y + gP1.w);
 
-    // nt.z < 0: "no AO" (a shader pack's faces, translucent stage pixels: mmd.hlsl NormalTag, world / MME surfaces)
-    if (cam && gP0.x > 0.0 && nt.z >= 0.0) {
+    // nt.z = the reflection tag (common.hlsli). "No AO": a shader pack's faces, translucent stage pixels (mmd.hlsl
+    // NormalTag), world / MME surfaces.
+    if (cam && gP0.x > 0.0 && !ReflTagNoAo(nt.z)) {
         float ao = UpsampleAo(i.uv, z);
         c.rgb *= lerp(1.0, ao, gP0.x);
     }
-    if (cam && gP0.y > 0.0 && nt.z > 0.01) {
+    if (cam && gP0.y > 0.0 && ReflTagIsPbr(nt.z)) {
+        // PBR: the scene PS added W x sky (W = the split-sum DFG weight it tagged). Where the reflection found
+        // something (alpha = confidence; a miss is 0), replace that sky by the hit: + W x a x (hit - sky). Raw sample
+        // for DLSS-RR, else the same alpha-weighted 3x3 gather as below.
+        const float W = ReflTagPbrWeight(nt.z);
+        if (W > 0.0) {
+            float4 r = 0;
+            if (gP2.x > 0.5) {
+                r = gSsrTex.SampleLevel(gPoint, i.uv, 0);
+            } else {
+                [unroll] for (int y = -1; y <= 1; ++y)
+                [unroll] for (int x = -1; x <= 1; ++x) {
+                    float4 sr = gSsrTex.SampleLevel(gLinear, i.uv + float2(x, y) * gP0.zw * 1.2, 0);
+                    float w = (x == 0 && y == 0) ? 2.0 : 1.0;
+                    r.rgb += sr.rgb * sr.a * w;
+                    r.a += sr.a * w;
+                }
+                r.rgb /= max(r.a, 1e-4);
+                r.a /= 10.0;
+            }
+            if (r.a > 0.0) {
+                const float3 Vv = normalize(ViewPosFromDepth(i.uv, d));
+                const float3 Rw = normalize(mul(reflect(Vv, OctDecode(nt.xy)), (float3x3)gInvView));
+                c.rgb = max(c.rgb + W * saturate(r.a * nt.w) * (r.rgb - SkyColor(Rw)), 0.0);
+            }
+        }
+    } else if (cam && gP0.y > 0.0 && nt.z > 0.01) {
         if (nt.z > 1.5 && gP2.y > 0.5) {
             // Mirror pixel (mmd.hlsl MAT_MIRROR wrote reflectivity 2): the full-res ray-traced mirror is the whole
             // reflection, multiplied by the tint the material already drew (no Fresnel, no alpha, no gather).

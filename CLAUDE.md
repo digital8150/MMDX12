@@ -529,6 +529,10 @@ Agents keep misusing the CLI and then blaming the app. These rules are verified 
     Translucent stage pixels (alpha < 0.98, `MAT_STAGE`, not S2b glass) write nt.z = -1 (no AO / no SSR): SSAO no
     longer greys sheer curtains. Character / prop pixels keep their reflectivity (`NormalTag` in mmd.hlsl): the normal
     target is alpha-blended, so a faint face overlay (blush) took the face's AO away in the overlay's whole footprint.
+    PBR pixels with environment specular write nt.z = -(2 + W) (`kReflTagPbrBase`, helpers `ReflTag*` in common.hlsli),
+    W = the split-sum DFG weight x AO, faded out above perceptual roughness 0.3..0.65. The PS already added W x sky, so
+    RT reflections return alpha 0 on a miss and 1 on a hit, and the composite adds W x (hit - SkyColor(R)) instead of
+    lerping (a wet road reflected only the sky before: hits weighed luminance(f0) x (1 - rough), ~0.04).
     Bloom look (`RenderSettings::bloomLook`, `BloomLook` in RenderTypes.h; ini `bloom*=`, `--bloom-kernel/-blend/-depth-mask/
     -intensity/-threshold/-radius`, MCP `set_render_settings bloom_*`, UI `App::DrawBloomControls`): mip chain levels
     weighted falloff^j (radius) and normalised (`RenderTargets::bloomScale`); bloom alpha = luminance x linear depth through

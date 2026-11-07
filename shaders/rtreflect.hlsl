@@ -116,8 +116,11 @@ void CSReflect(uint3 id : SV_DispatchThreadID) {
     uint2 fp = p * 2;   // full-res source pixel, loaded without filtering
     float d = gDepthTex.Load(int3(fp, 0));
     float4 nt = gNormalTex.Load(int3(fp, 0));
-    // nt.z = reflectivity; mirror pixels (nt.z > 1.5) belong to CSReflectMirror
-    if (d >= 1.0 || nt.z <= 0.01 || nt.z > kMirrorReflectivity) { gReflOut[p] = float4(0, 0, 0, 0); return; }
+    // nt.z = the reflection tag (common.hlsli); mirror pixels (nt.z > 1.5) belong to CSReflectMirror
+    if (d >= 1.0 || ReflTagGate(nt.z) <= 0.01 || nt.z > kMirrorReflectivity) { gReflOut[p] = float4(0, 0, 0, 0); return; }
+    // PBR pixels already show the sky (the scene PS's environment specular): a miss adds nothing (alpha 0) and a hit
+    // is a full-confidence replacement of that sky (the composite subtracts it); the PS's DFG weight carries gloss.
+    const bool pbr = ReflTagIsPbr(nt.z);
 
     float2 uv = (fp + 0.5) * gInvViewportSize;
     float3 vp = ViewPosFromDepth(uv, d);
@@ -132,11 +135,11 @@ void CSReflect(uint3 id : SV_DispatchThreadID) {
     // Gloss is approximated instead by blurrier texture lookups and a weaker blend with distance.
     RtHit hit;
     if (!TraceClosest(OffsetRayOrigin(wp, wn), R, 0.0, gP0.z, 0.5, hit)) {
-        gReflOut[p] = float4(SkyColor(R), 0.6);
+        gReflOut[p] = pbr ? float4(0, 0, 0, 0) : float4(SkyColor(R), 0.6);
         return;
     }
 
-    gReflOut[p] = float4(ReflectHitRadiance(hit, R), lerp(0.8, 0.35, saturate(hit.t / 300.0)));
+    gReflOut[p] = float4(ReflectHitRadiance(hit, R), pbr ? 1.0 : lerp(0.8, 0.35, saturate(hit.t / 300.0)));
 }
 
 // Full-resolution mirror pixels: one sharp ray, fully opaque output, refraction-free mirror bounces. The caller
