@@ -163,6 +163,12 @@ void App::InitUpdater() {
 void App::StartUpdateCheck() {
     updateCheckQueued_ = true;  // one attempt per run
     if (HeadlessRun()) return;  // never block or race scripted/headless runs
+    if (updater::kNightlyBuild && !settings_.nightlyNoticeShown) {  // once per install; the 정보 popup keeps the text
+        settings_.nightlyNoticeShown = true;
+        settings_.Save(settingsPath_);
+        toast_ = {Tr("나이틀리 빌드입니다"), Tr("자동으로 만든 테스트 빌드예요. 여기서 저장한 프로젝트는 정식 버전에서 열리지 않을 수 있어요."),
+                  {}, false, timeSeconds_ + 10.0};
+    }
     update_.StartCheck();
 }
 

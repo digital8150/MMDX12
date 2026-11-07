@@ -17,6 +17,7 @@
 
 #include <json.hpp>
 #include "app/Components.h"
+#include "core/FeedSignature.h"
 #include "core/I18n.h"
 #include "core/NetUtil.h"
 #include "core/Log.h"
@@ -430,6 +431,11 @@ Feed FetchFeed(const std::string& feedUrlOrPath) {
     } else if (!HttpGet(feedUrlOrPath, body, error, 1u << 22)) {
         out.error = error;
         return out;
+    }
+    if (kFeedPublicKey) {  // only the signed bytes count from here on; nothing outside them is ever read
+        std::string payload;
+        if (!net::OpenSignedFeed(body, kFeedPublicKey, payload, out.error)) return out;
+        body = std::move(payload);
     }
     const nlohmann::json j = nlohmann::json::parse(body, nullptr, false);
     if (j.is_discarded() || !j.is_object()) {
@@ -1016,6 +1022,10 @@ const ComponentFetcher::State& ComponentFetcher::Get() {
 }
 
 std::string ComponentFetcher::Worker(components::Def comp) {
+    // The installed version's manifest below has no signed hash: a signed build (whose zip holds every component
+    // anyway) must not take DLLs on the server's word.
+    if (kFeedPublicKey) return std::string("not available in this build");
+
     // 1. the feed (only to locate the object store).
     const Feed feed = FetchFeed(feedUrl_);
     if (!feed.ok) return "feed: " + feed.error;

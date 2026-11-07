@@ -780,7 +780,7 @@ void App::DrawBenchResult() {
         const bool submitPending =
             submitFuture_.valid() && submitFuture_.wait_for(std::chrono::seconds(0)) != std::future_status::ready;
         const bool submitDone = submitResult_ && submitResult_->ok;
-        if (benchSubmittable_) {
+        if (benchSubmittable_ && !updater::kNightlyBuild) {
             TextField("##nick", Tr("닉네임"), nicknameEdit_, sizeof(nicknameEdit_), innerW / Dpi(), Tr("리더보드에 표시될 이름"));
             Gap(12.0f);
             const bool nicknameEmpty = nicknameEdit_[0] == '\0';
@@ -831,7 +831,9 @@ void App::DrawBenchResult() {
             PushFont(Font::Regular, size::Small);
             ImGui::PushStyleColor(ImGuiCol_Text, ImGui::ColorConvertU32ToFloat4(p.ink2));
             ImGui::PushTextWrapPos(sb.x - sp);
-            ImGui::TextUnformatted(Tr("기본 설정(4K · 4096 spp)으로 렌더한 결과만 리더보드에 제출할 수 있습니다."));
+            ImGui::TextUnformatted(updater::kNightlyBuild
+                                       ? Tr("나이틀리 빌드의 결과는 리더보드에 제출할 수 없습니다.")
+                                       : Tr("기본 설정(4K · 4096 spp)으로 렌더한 결과만 리더보드에 제출할 수 있습니다."));
             ImGui::PopTextWrapPos();
             ImGui::PopStyleColor();
             PopFont();

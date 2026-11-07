@@ -49,7 +49,24 @@
 
 namespace mmdx::updater {
 
+// The channel is fixed at build time: a stable install never sees a nightly and the other way round. Moving between
+// them means another install folder, so no downgrade path exists to get wrong.
+#ifdef MMDX12_NIGHTLY
+constexpr bool kNightlyBuild = true;
+constexpr const char* kDefaultFeedUrl = "https://mmdx.codingbot.kr/updates/nightly/nightly.json";
+// The public half of the nightly signing key (modulus, core/FeedSignature.h). Its private half is only a secret of the
+// workflow's publish job, never on the update server: a taken-over server cannot make this build install anything.
+constexpr const char* kFeedPublicKey =
+    "tG/O+zvNyVa1IT5RT9IFx/G+pq2sfp2rfzWCRMH9mWZBOCOO4HmyD3YpOt+PifdSuNOJBG2N1BUVIBh0w45V846goGrRDDSHx9hcNjNI6g8+DGYj"
+    "REXU3PSfyK7bhWfxOff3wpQW+5AgkhAwCIYh9UdZk5loudvgnp7KCfyen+Mc/U379MQRpUHu7Vpj8NdU7xO1WlA3QDSBt4R7U1S9HyZS6oRQgAXs"
+    "vIFDbOgLLsflH0QRBYbsizGpncIxaQjX1jghJ1weD0SMAZC7imHjDWGp6aFDm4wauoE1+mZLlYEtO5ZvyjpTccPwWy2cz4v/jETuyYqnwrsdA/oz"
+    "J+SZG4OFOHZP63j314QkdiDSeZ1eENvmKGGA/T6RwmFv0YSGgraByYaWzxdLyOix3/NpHvEJ7I4frAB/Alb4AkRhNm2uq9rRJvaR0en/qbiqfikZ"
+    "ebGpVf2f+7w52SYUUbD5nvzqM7gzrNmQ1LobTn3KBLoll3l7yCM1G1muuyGrMgY7";
+#else
+constexpr bool kNightlyBuild = false;
 constexpr const char* kDefaultFeedUrl = "https://mmdx.codingbot.kr/latest.json";
+constexpr const char* kFeedPublicKey = nullptr;  // stable feeds are not signed (yet): the feed's hashes are all it has
+#endif
 constexpr const char* kUpdateDirName = "update_tmp";  // staging + journal, next to the exe
 
 struct Feed {

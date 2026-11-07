@@ -300,6 +300,7 @@ bool AppSettings::Load(const std::filesystem::path& file) {
         }
         else if (key == "leaderboardUrl") leaderboardUrl = value;
         else if (key == "updateFeedUrl") updateFeedUrl = value;
+        else if (key == "nightlyNoticeShown") nightlyNoticeShown = value == "1";
         else if (key == "galleryIndex") {
             if (!value.empty()) galleryIndexes.push_back(value);
         }
@@ -731,6 +732,7 @@ bool AppSettings::Save(const std::filesystem::path& file) const {
         std::fprintf(f, "videoProbe=%llx:%.4f\n", (unsigned long long)pr.key, pr.secondsPerFrame);
     std::fprintf(f, "leaderboardUrl=%s\n", leaderboardUrl.c_str());
     std::fprintf(f, "updateFeedUrl=%s\n", updateFeedUrl.c_str());
+    if (nightlyNoticeShown) std::fprintf(f, "nightlyNoticeShown=1\n");
     for (const std::string& url : galleryIndexes) std::fprintf(f, "galleryIndex=%s\n", url.c_str());
     for (const auto& [id, scale] : characterScales) std::fprintf(f, "characterScale=%.3f|%s\n", scale, id.c_str());
     for (const auto& [id, c] : characterShaders) {

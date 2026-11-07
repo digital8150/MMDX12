@@ -355,6 +355,10 @@ void App::DrawAppBar(int activeNav) {
         Gap(2.0f);
         PushFont(Font::Regular, size::Caption);
         ImGui::PushStyleColor(ImGuiCol_Text, ImGui::ColorConvertU32ToFloat4(p.ink3));
+        if (updater::kNightlyBuild) {
+            ImGui::TextWrapped("%s", Tr("자동으로 만든 테스트 빌드예요. 여기서 저장한 프로젝트는 정식 버전에서 열리지 않을 수 있어요."));
+            Gap(6.0f);
+        }
         ImGui::TextWrapped("%s", Tr("MIT 라이선스. MikuMikuDance는 MikuMikuDance 개발팀의 저작물입니다."));
         ImGui::PopStyleColor();
         PopFont();

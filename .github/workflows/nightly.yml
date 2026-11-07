@@ -1,0 +1,249 @@
+# A nightly build for every master commit that passed CI. See CLAUDE.md "Release channels".
+#   gate     decides (no secrets): only a master push by the owner, newer than the published build, and not for docs alone.
+#   build    packages it (no secrets, no caches, pinned downloads): zip + delta manifest + new objects + feed.
+#   review   a build holding another author's pull request waits here for the owner's approval.
+#   publish  signs and uploads. It holds the keys, so it runs no repository code and only moves the build's artifact.
+# The signing key is what protects users from a taken-over update server: it never goes there, the app checks it.
+# Pull requests touching the packaging run gate + build as a dry run. Actions are pinned to commits.
+name: Nightly
+
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [master]
+  workflow_dispatch:
+    inputs:
+      full:
+        description: Upload every object (when the server lost some)
+        type: boolean
+        default: false
+  pull_request:
+    paths:
+      - .github/workflows/nightly.yml
+      - tools/package_release.ps1
+      - tools/make_update.py
+      - tools/fetch_sdks.ps1
+
+permissions:
+  contents: read
+
+env:
+  BASE_URL: https://mmdx.codingbot.kr/updates/nightly
+
+jobs:
+  gate:
+    # workflow_run also fires for a fork's pull request from a branch named master: the head must be a push to this
+    # repository, made by the owner.
+    if: >-
+      github.event_name == 'pull_request' ||
+      (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/master' &&
+       github.actor == github.repository_owner) ||
+      (github.event_name == 'workflow_run' &&
+       github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.event == 'push' &&
+       github.event.workflow_run.head_branch == 'master' &&
+       github.event.workflow_run.head_repository.full_name == github.repository &&
+       github.event.workflow_run.actor.login == github.repository_owner &&
+       github.event.workflow_run.triggering_actor.login == github.repository_owner)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      sha: ${{ steps.decide.outputs.sha }}
+      build: ${{ steps.decide.outputs.build }}
+      publish: ${{ steps.decide.outputs.publish }}
+      review: ${{ steps.decide.outputs.review }}
+    steps:
+      - id: decide
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          OWNER: ${{ github.repository_owner }}
+          EVENT: ${{ github.event_name }}
+          RUN_SHA: ${{ github.event.workflow_run.head_sha }}
+          EVENT_SHA: ${{ github.sha }}
+        run: |
+          sha=${RUN_SHA:-$EVENT_SHA}
+          build=true
+          publish=true
+          review=false
+          [ "$EVENT" = pull_request ] && publish=false
+          if [ "$EVENT" = workflow_run ]; then
+            # Anything unknown ends in review: a failed lookup must not skip the owner.
+            review=true
+            prev=$(curl -fsS "$BASE_URL/nightly.json" | jq -r '.commit // empty') || prev=
+            if [ -n "$prev" ]; then
+              compare=$(gh api "repos/$REPO/compare/$prev...$sha") || compare='{"status":"unknown"}'
+              status=$(jq -r .status <<< "$compare")
+              if [ "$status" != ahead ]; then
+                echo "$sha is $status against the published $prev"
+                build=false
+              elif [ "$(jq '.files | length' <<< "$compare")" -lt 300 ] && [ "$(jq .total_commits <<< "$compare")" -le 250 ]; then
+                code=false
+                while IFS= read -r f; do
+                  case "$f" in
+                    *.md|docs/*|.github/ISSUE_TEMPLATE/*) ;;
+                    *) echo "Needs a build: $f"; code=true; break ;;
+                  esac
+                done < <(jq -r '.files[] | .filename, (.previous_filename // empty)' <<< "$compare")
+                build=$code
+                # Commit authors can be forged; a pull request's author cannot.
+                external=false
+                while IFS= read -r commit; do
+                  authors=$(gh api "repos/$REPO/commits/$commit/pulls" --jq '.[].user.login') || { external=true; break; }
+                  while IFS= read -r who; do
+                    if [ -n "$who" ] && [ "$who" != "$OWNER" ]; then
+                      echo "$commit comes from a pull request by $who"
+                      external=true
+                    fi
+                  done <<< "$authors"
+                done < <(jq -r '.commits[].sha' <<< "$compare")
+                review=$external
+              fi
+            fi
+          fi
+          [ "$build" = true ] || publish=false
+          echo "sha=$sha build=$build publish=$publish review=$review"
+          { echo "sha=$sha"; echo "build=$build"; echo "publish=$publish"; echo "review=$review"; } >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: gate
+    if: ${{ needs.gate.outputs.build == 'true' }}
+    runs-on: windows-2025
+    timeout-minutes: 90
+    # A newer commit replaces a build still running; the publish job below is never cancelled.
+    concurrency:
+      group: nightly-build-${{ github.event_name }}-${{ github.ref }}
+      cancel-in-progress: true
+    outputs:
+      version: ${{ steps.package.outputs.version }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ needs.gate.outputs.sha }}
+          persist-credentials: false
+
+      - uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1
+        with:
+          arch: x64
+
+      - name: Ninja
+        run: |
+          'ninja==1.13.2 --hash=sha256:1293f4078278b70d0ee4b6cc8f3a9e030656c9b2f59909970343c4fe76070118' | Set-Content "$env:RUNNER_TEMP\ninja.txt"
+          pip install --require-hashes --no-deps -r "$env:RUNNER_TEMP\ninja.txt"
+
+      # No compile cache on purpose: what a user installs is compiled from this commit, and nothing an earlier run
+      # left in a cache can end up in it.
+      - name: Upscaler DLLs
+        run: ./tools/fetch_sdks.ps1
+
+      - name: Package
+        id: package
+        run: ./tools/package_release.ps1 -NightlyBuild ${{ github.run_number }}
+
+      - name: Delta manifest, objects and feed
+        env:
+          VERSION: ${{ steps.package.outputs.version }}
+          SHA: ${{ needs.gate.outputs.sha }}
+          REPO: ${{ github.repository }}
+          FULL: ${{ inputs.full }}
+        run: |
+          $short = $env:SHA.Substring(0, 7)
+          $known = if ($env:FULL -eq 'true') { @() } else { @('--known-feed', "$env:BASE_URL/nightly.json") }
+          $zipName = "MMDX12-$env:VERSION-win64.zip"
+          New-Item -ItemType Directory -Force publish/update | Out-Null
+          Move-Item "dist/$zipName" publish/
+          python -I tools/make_update.py "dist/MMDX12-$env:VERSION-win64" --version $env:VERSION --out publish/update `
+            --base-url $env:BASE_URL @known --feed publish/update/nightly.json --zip "publish/$zipName" `
+            --zip-url "https://github.com/$env:REPO/releases/download/nightly/$zipName" `
+            --page "https://github.com/$env:REPO/releases/tag/nightly" --commit $env:SHA --note "Automatic build of master ($short)"
+          if ($LASTEXITCODE -ne 0) { throw 'make_update failed' }
+          Get-Content publish/update/nightly.json
+          "{0:N1} MB of objects" -f ((Get-ChildItem publish/update/objects -Recurse -File | Measure-Object Length -Sum).Sum / 1MB)
+
+      # Already compressed; the artifact only crosses to the next job.
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: nightly
+          path: publish
+          compression-level: 0
+          retention-days: 7  # a build waiting in review stays publishable this long
+          if-no-files-found: error
+
+  review:
+    needs: [gate, build]
+    if: ${{ needs.gate.outputs.publish == 'true' && needs.gate.outputs.review == 'true' && needs.build.result == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    environment: nightly-review  # required reviewer: the owner
+    steps:
+      - run: echo "Approved"
+
+  publish:
+    needs: [gate, build, review]
+    if: >-
+      ${{ !cancelled() && needs.gate.outputs.publish == 'true' && needs.build.result == 'success' &&
+      (needs.review.result == 'success' || (needs.review.result == 'skipped' && needs.gate.outputs.review == 'false')) }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    environment: nightly  # deployment branch: master only
+    permissions:
+      contents: write
+    concurrency:
+      group: nightly-publish
+      cancel-in-progress: false
+    env:
+      GH_REPO: ${{ github.repository }}
+      VERSION: ${{ needs.build.outputs.version }}
+      SHA: ${{ needs.gate.outputs.sha }}
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: nightly
+
+      # Over the build's exact feed bytes; the app reads nothing but those (src/core/FeedSignature.h).
+      - name: Sign the feed
+        env:
+          SIGN_KEY: ${{ secrets.NIGHTLY_SIGN_KEY }}
+        run: |
+          umask 077
+          printf '%s\n' "$SIGN_KEY" > "$RUNNER_TEMP/sign.pem"
+          openssl dgst -sha256 -sigopt rsa_padding_mode:pss -sigopt rsa_pss_saltlen:32 \
+            -sign "$RUNNER_TEMP/sign.pem" -out "$RUNNER_TEMP/feed.sig" update/nightly.json
+          rm -f "$RUNNER_TEMP/sign.pem"
+          jq --arg feed "$(base64 -w0 update/nightly.json)" --arg sig "$(base64 -w0 "$RUNNER_TEMP/feed.sig")" \
+            '. + {signedFeed: $feed, signature: $sig}' update/nightly.json > "$RUNNER_TEMP/signed.json"
+          mv "$RUNNER_TEMP/signed.json" update/nightly.json
+
+      # The zip goes first: the feed that names it must never be live before it.
+      - name: Zip to the nightly release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload nightly "MMDX12-$VERSION-win64.zip" --clobber
+
+      # The server's receiver checks every hash, then moves objects -> manifest -> feed, and prunes old builds.
+      - name: Update store to the server
+        env:
+          KEY: ${{ secrets.NIGHTLY_SSH_KEY }}
+          KNOWN_HOSTS: ${{ secrets.NIGHTLY_SSH_KNOWN_HOSTS }}
+          HOST: ${{ secrets.NIGHTLY_SSH_HOST }}
+          PORT: ${{ secrets.NIGHTLY_SSH_PORT }}
+          LOGIN: ${{ secrets.NIGHTLY_SSH_USER }}
+        run: |
+          set -o pipefail
+          umask 077
+          printf '%s\n' "$KEY" > "$RUNNER_TEMP/key"
+          printf '%s\n' "$KNOWN_HOSTS" > "$RUNNER_TEMP/known_hosts"
+          tar -C update -cf - . | ssh -q -i "$RUNNER_TEMP/key" -p "$PORT" -o BatchMode=yes -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$RUNNER_TEMP/known_hosts" "$LOGIN@$HOST"
+          rm -f "$RUNNER_TEMP/key"
+
+      # Rollback material: the five newest zips stay.
+      - name: Release notes, old zips
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release edit nightly --prerelease --latest=false \
+            --notes "Latest: **$VERSION** from $SHA. Automatic build of master that passed the CPU tests; its rendering was not checked. Unzip into its own folder. Projects saved here may not open in a stable version."
+          gh release view nightly --json assets --jq '.assets | sort_by(.createdAt) | reverse | .[5:] | .[].name' |
+            while IFS= read -r name; do gh release delete-asset nightly "$name" --yes; done

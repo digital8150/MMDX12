@@ -2,24 +2,44 @@
 #   powershell -ExecutionPolicy Bypass -File tools\package_release.ps1 -Version 1.0.0
 # The zip holds MMDX12.exe, the shaders and fonts, the runtime DLLs (DXC, upscalers, the VC++ runtime,
 # app-local), the licences and a library\ folder skeleton. Run tools\fetch_sdks.ps1 first for the upscalers.
-param([Parameter(Mandatory = $true)][string]$Version)
+# A nightly (-NightlyBuild <n>, tools and CI: .github/workflows/nightly.yml) takes its version from CMakeLists.txt: the
+# next minor + "-nightly.<n>", so it always orders above the release it follows and meets a pack's minAppVersion for the
+# coming release. No lite zip, and a missing optional component is an error (a nightly has no store to fetch it from).
+# A shell that already has the VS environment (CI) skips VsDevCmd; -CMakeArgs are added to the configure line.
+param(
+    [string]$Version,
+    [int]$NightlyBuild = 0,
+    [string[]]$CMakeArgs = @()
+)
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
 $build = Join-Path $root 'build_release'
 $vsDevCmd = 'C:\Program Files\Microsoft Visual Studio\18\Community\Common7\Tools\VsDevCmd.bat'
 $pip = Join-Path $env:USERPROFILE 'miniconda3\Scripts'
 
+if ($NightlyBuild -gt 0) {
+    $m = Select-String -Path (Join-Path $root 'CMakeLists.txt') -Pattern 'project\(MMDX12 VERSION (\d+)\.(\d+)\.(\d+)' |
+         Select-Object -First 1
+    if (-not $m) { throw 'no project version in CMakeLists.txt' }
+    $Version = '{0}.{1}.0-nightly.{2}' -f $m.Matches[0].Groups[1].Value, ([int]$m.Matches[0].Groups[2].Value + 1), $NightlyBuild
+    $CMakeArgs += "-DMMDX12_NIGHTLY_VERSION=$Version"
+    if ($env:GITHUB_OUTPUT) { "version=$Version" | Add-Content $env:GITHUB_OUTPUT }
+} elseif (-not $Version) {
+    throw 'pass -Version x.y.z or -NightlyBuild n'
+}
+$vsSetup = if ($env:VCToolsRedistDir) { 'rem the calling shell has the VS environment' } else { "call `"$vsDevCmd`" -arch=x64 -host_arch=x64 >nul || exit /b 1" }
+
 # 1. Release build (no debug info: no PDB path in the exe). The VC++ redist folder comes from the VS environment.
 $script = Join-Path ([IO.Path]::GetTempPath()) 'mmdx12_release_build.cmd'
 @"
 @echo off
-call "$vsDevCmd" -arch=x64 -host_arch=x64 >nul || exit /b 1
+$vsSetup
 set PATH=$pip;%PATH%
 if exist "$build\CMakeCache.txt" del "$build\CMakeCache.txt"
 rem copy_shaders / copy_assets never delete: start from fresh copies so removed files (an old preview.png) don't ship
 if exist "$build\bin\shaders" rmdir /s /q "$build\bin\shaders"
 if exist "$build\bin\assets" rmdir /s /q "$build\bin\assets"
-cmake -S "$root" -B "$build" -G Ninja -DCMAKE_BUILD_TYPE=Release >nul || exit /b 1
+cmake -S "$root" -B "$build" -G Ninja -DCMAKE_BUILD_TYPE=Release $($CMakeArgs -join ' ') >nul || exit /b 1
 cmake --build "$build" --target MMDX12 pack_check mmdx12_mcp || exit /b 1
 echo VCREDIST=%VCToolsRedistDir%
 "@ | Set-Content -Encoding ascii $script
@@ -106,6 +126,12 @@ $optional = @(
     'assets/fonts/NotoSansCJKsc-Regular.otf',
     'assets/fonts/NotoSansCJKsc-Bold.otf'
 )
+if ($NightlyBuild -gt 0) {
+    foreach ($rel in $optional) {
+        if (-not (Test-Path (Join-Path $stage ($rel -replace '/', '\')))) { throw "optional component missing from the stage: $rel" }
+    }
+    return
+}
 $liteName = "$name-lite"
 $liteStage = Join-Path $dist $liteName
 if (Test-Path $liteStage) { Remove-Item -Recurse -Force $liteStage }
