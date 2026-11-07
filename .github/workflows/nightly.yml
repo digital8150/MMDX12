@@ -70,8 +70,9 @@ jobs:
           [ "$EVENT" = pull_request ] && publish=false
           # The published commit, from the nightly release's notes and not from the update server's feed: a taken-over
           # server naming a later commit would hide a pull request from the range below, and the site's CDN turns runners
-          # away. The publish job writes the notes last, so they are never newer than the feed: a failed publish only widens
-          # the range. Looked up on pull requests too (no effect there), so a dry run shows that it works. Only the first
+          # away. The publish job takes the commit out of the notes before it replaces the feed and writes the new one last,
+          # so the notes never name a commit the feed does not hold: a failed publish leaves none, which means review. Looked
+          # up on pull requests too (no effect there), so a dry run shows that it works. Only the first
           # line counts: the publish job writes it, anything below it is no published build.
           prev=$(gh release view nightly -R "$REPO" --json body --jq .body | head -n 1 |
             sed -nE 's/^Latest: .* from ([0-9a-f]{40})\..*/\1/p') || prev=
@@ -226,6 +227,14 @@ jobs:
             '. + {signedFeed: $feed, signature: $sig}' update/nightly.json > "$RUNNER_TEMP/signed.json"
           mv "$RUNNER_TEMP/signed.json" update/nightly.json
 
+      # The gate reads the published commit from the notes' first line. From here until the last step the feed may change,
+      # so the notes name no commit: a publish that stops halfway sends the next build to review instead of leaving the
+      # notes on a commit the feed no longer holds (an older build approved late, a manual run in between).
+      - name: Notes name no commit while publishing
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release edit nightly --notes "Publishing **$VERSION** from $SHA. Until this line changes the live build is unknown."
+
       # The zip goes first: the feed that names it must never be live before it.
       - name: Zip to the nightly release
         env:
@@ -250,7 +259,8 @@ jobs:
           rm -f "$RUNNER_TEMP/key"
 
       # Rollback material: the five newest zips stay. The gate job reads the published commit from these notes' first
-      # line, so keep its wording in step with the gate's sed and keep this after the upload to the server.
+      # line, so keep its wording in step with the gate's sed and keep this after the upload to the server (the step that
+      # clears the notes before it must never write a "Latest:" line).
       - name: Release notes, old zips
         env:
           GH_TOKEN: ${{ github.token }}
