@@ -95,7 +95,7 @@ public:
         bool additive = false;       // the model's own .emd effect is additive: ScenePass uses the additive PSO
         bool noDepthWrite = false;   // the model's own .emd effect draws with ZWriteEnable = false (no depth write)
         uint8_t sphereMode = 0;      // PMX sphere mode (0 none, 1 multiply, 2 add, 3 subtexture): MME UseSphereMap
-        bool screen = false;         // S5: shows a stage screen's texture (its alpha is the screen's: not known opaque)
+        bool textureBound = false;   // a screen's or a background video's texture replaced its own: the alpha is unknown
         bool opaqueAtLoad = false;   // no blending or discard from the data known at load (DepthPrepassMaterial)
         uint32_t cellFirst = 0, cellCount = 0;   // the material's part of DrawCells() (0 = draw it whole)
         float edgeSize = 0;
@@ -305,7 +305,7 @@ public:
     // Returns the number of draw calls.
     uint32_t DrawMaterial(ID3D12GraphicsCommandList* cmd, const Material& m, const CullFrustum* frustum) const;
     // The material can go into ScenePass's depth pre-pass: its pixels always write depth and are never discarded or
-    // blended, including the runtime state (stage rule overrides, studio opacity, screen binding, .emd blend hints).
+    // blended, including the runtime state (stage rule overrides, studio opacity, a bound texture, .emd blend hints).
     bool DepthPrepassMaterial(const Material& m) const;
     D3D12_GPU_VIRTUAL_ADDRESS BoneBuffer(uint64_t frame) const;      // StructuredBuffer<float4x4> (t0)
     D3D12_GPU_VIRTUAL_ADDRESS PrevBoneBuffer(uint64_t frame) const;  // previous frame (t4)

@@ -598,6 +598,8 @@ bool ScenePass::CreatePipelines(Dx12Context& ctx, const std::filesystem::path& s
         if (FAILED(device->CreateGraphicsPipelineState(&prepass, IID_PPV_ARGS(&psoPrepassNoCull_))))
             psoPrepassNoCull_.Reset();
     }
+    if (!psoPrepassBack_ || !psoPrepassNoCull_)
+        LOG_WARN("ScenePass: raster depth pre-pass unavailable, the camera view overdraws");
 
     // DLSS-RR guides (RayTraced): the lit MRT layout with PSGuides, compiled like PSMain (DXC when available).
     // Built only here; ScenePass::DrawGuides runs only while RR is active, so RR-off frames have no extra cost.

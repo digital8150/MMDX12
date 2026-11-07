@@ -122,8 +122,8 @@ static bool MaterialBlends(const PmxModel& pmx, size_t mi, const std::vector<Ima
 
 // Sorts the triangles of a large static stage's opaque materials by world xz cell (the draw order inside an opaque
 // material does not matter: the depth test decides) and returns the cells. Only a model with one bone and no vertex
-// morphs: its cells' bounds stay valid under the root transform. Blending materials keep their authored order and draw
-// whole. Empty `sorted` = nothing to do.
+// morphs: its cells' bounds stay valid under the root transform. Blending materials and material morph targets (a morph
+// can make them translucent) keep their authored order and draw whole. Empty `sorted` = nothing to do.
 static void BuildDrawCells(const PmxModel& pmx, ModelRole role, const std::vector<ImageRGBA8>& textures,
                            const PbrModelData& pbr, const std::vector<CompressedImage>* compressed,
                            std::vector<uint32_t>& sorted, std::vector<GpuModel::DrawCell>& cells,
@@ -134,8 +134,15 @@ static void BuildDrawCells(const PmxModel& pmx, ModelRole role, const std::vecto
     if (role != ModelRole::Stage || pmx.bones.size() > 1 || pmx.indices.size() / 3 < kMinTriangles ||
         pmx.vertices.empty())
         return;
-    for (const PmxMorph& mo : pmx.morphs)
+    std::vector<bool> morphTarget(pmx.materials.size(), false);
+    for (const PmxMorph& mo : pmx.morphs) {
         if (mo.type == PmxMorphType::Vertex) return;
+        if (mo.type != PmxMorphType::Material) continue;
+        for (const auto& o : mo.materialOffsets) {
+            if (o.material < 0) morphTarget.assign(morphTarget.size(), true);
+            else if ((size_t)o.material < morphTarget.size()) morphTarget[(size_t)o.material] = true;
+        }
+    }
     float minX = FLT_MAX, maxX = -FLT_MAX, minZ = FLT_MAX, maxZ = -FLT_MAX;
     for (const PmxVertex& v : pmx.vertices) {
         minX = std::min(minX, v.position.x);
@@ -154,7 +161,7 @@ static void BuildDrawCells(const PmxModel& pmx, ModelRole role, const std::vecto
         const uint32_t count = pmx.materials[mi].indexCount;
         const uint32_t materialStart = start;
         start += count;
-        if (count < 3 || materialStart + count > pmx.indices.size() ||
+        if (count < 3 || materialStart + count > pmx.indices.size() || morphTarget[mi] ||
             MaterialBlends(pmx, mi, textures, pbr, compressed))
             continue;
         tris.resize(count / 3);
@@ -1212,7 +1219,7 @@ uint32_t GpuModel::DrawMaterial(ID3D12GraphicsCommandList* cmd, const Material& 
 }
 
 bool GpuModel::DepthPrepassMaterial(const Material& m) const {
-    if (!m.opaqueAtLoad || !m.visible || m.indexCount == 0 || m.additive || m.noDepthWrite || m.screen ||
+    if (!m.opaqueAtLoad || !m.visible || m.indexCount == 0 || m.additive || m.noDepthWrite || m.textureBound ||
         opacity_ != 1.0f)
         return false;
     return PbrTransmission((size_t)(&m - materials_.data())) <= 0.0f;   // a stage rule may turn a material into glass
@@ -1590,6 +1597,8 @@ void GpuModel::BindScreenTexture(Dx12Context& ctx, ID3D12Resource* tex) {
 
 void GpuModel::BindMaterialTexture(Dx12Context& ctx, size_t materialIndex, ID3D12Resource* tex) {
     if (!ctx_ || materialIndex >= materials_.size() || materialIndex >= materialOrigTex_.size()) return;
+    // a video texture is transparent until its first frame is uploaded, and its pixels are discarded meanwhile
+    materials_[materialIndex].textureBound = tex != nullptr;
     ID3D12Device* device = ctx.Device();
     ID3D12Resource* res = tex ? tex : materialOrigTex_[materialIndex];
     if (!res) return;   // no own texture and no bound one: the white fallback stays
@@ -1650,7 +1659,6 @@ float GpuModel::EmitEstimate(size_t material) const {
 
 void GpuModel::SetMaterialScreen(size_t materialIndex, bool on, float brightness) {
     if (materialIndex >= materials_.size()) return;
-    materials_[materialIndex].screen = on;
     if (materialOrigReflect_.size() < materials_.size()) return;   // the model was not created through Create
     for (MaterialConstants* c : {materialIndex < baseConsts_.size() ? &baseConsts_[materialIndex] : nullptr,
                                  materialIndex < materialConsts_.size() ? &materialConsts_[materialIndex] : nullptr}) {

@@ -106,11 +106,11 @@ progress.md is the session log. Read its latest entry first.
 - Stage draw cost (neon_plaza 45 -> 21 ms, RTX 4070 Ti): screens with the same camera + size are one feed (`StageScreens`:
   it renders once, the others `CopyResource`; `kMaxFeedsPerFrame` counts distinct cameras). A static stage (one bone, no
   vertex morph, >= 50k triangles) sorts its opaque materials' triangles by xz cell at load (`BuildDrawCells`,
-  `STAGECELLS` log line; blending materials keep their order) and `GpuModel::DrawMaterial` draws only the cells inside a
+  `STAGECELLS` log line; blending materials and material morph targets keep their order) and `GpuModel::DrawMaterial` draws only the cells inside a
   `CullFrustum` (sun cascades x / y planes, camera / feed / mirror views all six), since a baked stage's material spans
   the whole set and a whole-material test culls nothing. The raster camera view has a depth pre-pass
   (`ScenePass::DrawDepthPrepass`: `GpuModel::DepthPrepassMaterial`, no PS, DSV only; models with a surface pack or MME
-  skip it), which is why VSMain's clip position is `precise` (the two PSOs must rasterise the same depth).
+  and materials with a bound screen / video texture skip it), which is why VSMain's clip position is `precise` (the two PSOs must rasterise the same depth).
 - Spot gobos (S7b, docs/stage_format.md "`gobo`"): a spot may carry a projected stencil (`SceneLight::gobo` = a file
   path + `goboRotation` / `goboScale` / `goboSpin` / `goboFocus`; a stage light's path is relative to the stage folder and
   `app/StageRuntime` resolves it). `GpuLight` stays 112 B: the per-light gobo data is a second raw buffer
