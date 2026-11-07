@@ -199,6 +199,7 @@ progress.md is the session log. Read its latest entry first.
     `studiobgvideo <file|none>`, `studiobgvideoopt <offsetSeconds> <asBackground 0|1>`,
     `studioselect`/`studioremove <index>`, `studioreplace <index> <file>` / `studioreplacelib <index> <substr>` (swap a model's file), `studiorename <text>`, `studiomaterial <default|ray> [emd path]` (PBR material source of the selected model), `studioattach <parent|-1> <bone|-> tx ty tz rx ry rz s`,
     `studioaspect <w:h>` (frame aspect preset, e.g. `9:16`, `16:9`, `2.39:1`), `studiorenderer <raster|rt|pt|gi>` (viewport renderer),
+    `studioautokey 0|1` (the auto-key switch: default off, remembered as ini `studioAutoKey=`, scripted runs start off),
     `studioribbon <home|anim|camera|light|render|view>` / `studioribbon collapse 0|1` (ribbon tab / fold;
     `studiostate` logs a `STUDIORIBBON tab=<id> collapsed=<0|1>` line),
     `studiogravity <acceleration> [x y z]` / `studiowind <strength> [gust frequency jitter [x z]]` (the physics popup's

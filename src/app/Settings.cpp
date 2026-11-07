@@ -208,6 +208,7 @@ bool AppSettings::Load(const std::filesystem::path& file) {
         else if (key == "studioRenderer" && ParseInt(value, i)) studioRenderer = i;
         else if (key == "studioRibbonTab" && ParseInt(value, i)) studioRibbonTab = i;
         else if (key == "studioRibbonCollapsed" && ParseBool(value, b)) studioRibbonCollapsed = b;
+        else if (key == "studioAutoKey" && ParseBool(value, b)) studioAutoKey = b;
         else if (key == "upscaler" && ParseInt(value, i)) upscaler = i;
         else if (key == "upscalerQuality" && ParseInt(value, i)) upscalerQuality = i;
         else if (key == "dlssFrameGen" && ParseInt(value, i)) dlssFrameGen = i;

@@ -467,6 +467,8 @@ bool App::ExecuteUiCommand(const std::string& cmd, const std::vector<std::string
                 return false;
             }
         }
+    } else if (cmd == "studioautokey") {  // studioautokey 0|1
+        if (studio_) studio_->autoKey = !args.empty() && std::atoi(args[0].c_str()) != 0;
     } else if (cmd == "studiolightpreset") {  // studiolightpreset <0-3>
         if (studio_ && !args.empty()) {
             const int p = std::clamp(std::atoi(args[0].c_str()), 0, 3);

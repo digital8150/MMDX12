@@ -402,10 +402,19 @@ bool App::DrawStudioCameraKeyFields(float w, RowKind kind, int frame, bool live)
         struct PopId { ~PopId() { ImGui::PopID(); } } popId;
         std::vector<CameraKf>& camKeys = d.SelectedCameraTrack().camera;  // S4: the selected camera's keys
         CameraKf* k = FindKey(camKeys, frame);
-        // live: the fields of the playhead. They always show the camera in effect (a key or the interpolated / free
-        // view); editing one keys it here when auto-key is on (or the key already exists), like Adobe / Blender.
+        // live: the fields of the playhead. They show the camera track's own value there (a key or the interpolated
+        // one; an empty track = MMD's default camera), never the free view: the free view is an editor viewpoint, not
+        // a camera property, and editing a field must not key it. Editing one keys it here when auto-key is on (or
+        // the key already exists), like Adobe / Blender. "현재 시점을 키로 등록" is the way to key the free view.
         CameraKf cur;
-        if (live) cur = StudioViewedCamera(frame);
+        if (live) {
+            if (!camKeys.empty()) {
+                cur = SampleCamera(camKeys, frame);
+            } else {
+                FillLinearCameraInterp(cur.interp);
+                cur.frame = frame;
+            }
+        }
         else if (k) cur = *k;
         else { StudioEndKeyEdit(); return false; }
         const bool editable = !live || k || d.autoKey;
