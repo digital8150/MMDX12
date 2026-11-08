@@ -4422,15 +4422,25 @@ void App::DrawStudio() {
         settings_.studioAutoKey = d.autoKey;
         settings_.Save(settingsPath_);
     }
-    // A field edit lasts while its value is typed. A field that went away before it saw its own end (a press elsewhere
-    // changed the panel first, e.g. a click in the outliner) leaves its edit open, and the next edit would join it with
-    // a stale "before". Nothing is active between gestures: such an edit ends here. Camera possession keeps its undo
+    // A field edit lasts while its value is typed. A field that went away before it saw its own end (a press
+    // elsewhere changed the panel first, e.g. a click in the outliner; Escape deselecting the bone mid-drag) leaves its
+    // edit open, and the next edit would join it with a stale "before". Nothing is active between gestures: such an
+    // edit ends here, its change so far one undo step of the model it was made on. Camera possession keeps its undo
     // step open over idle frames on purpose (StudioNavEditTick ends it).
     if (!ImGui::IsAnyItemActive()) {
         if (studioKeyEdit_ && !(studioKeyLive_ && d.possessCamera)) StudioEndKeyEdit();
-        studioPoseFieldEdit_ = false;   // its "before" may be another model's pose layer: dropped, not registered
+        if (studioPoseFieldEdit_) {
+            studioPoseFieldEdit_ = false;
+            // StudioSetPose registers the selected model's layer: never another model's
+            if (d.Selected() && d.Selected()->uid == studioPoseFieldModel_)
+                StudioSetPose(Tr("본 값 편집"), studioPoseBefore_);
+        }
         studioFixedAxisActive_ = false;
-        if (studioViewDrag_ != 6) studioPlaceDragging_ = false;  // 6 = the gizmo's placement drag (commits itself)
+        if (studioPlaceDragging_ && studioViewDrag_ != 6) {  // 6 = the gizmo's placement drag (commits itself)
+            studioPlaceDragging_ = false;
+            if (const int i = d.IndexOfUid(studioPlaceModel_); i >= 0)
+                StudioCommitPlace(studioPlaceModel_, studioPlaceBefore_, d.models[(size_t)i]->place);
+        }
     }
 
     // --- ribbon: a fixed window above the dock space

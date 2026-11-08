@@ -1745,6 +1745,13 @@ void App::DrawStudioPlacePanel(float w) {
     }
     PropAttach a = m->place;
     bool dragEnded = false;
+    // a gesture starts from this placement of this model (DrawStudio commits one whose field goes away)
+    const auto beginGesture = [&] {
+        if (studioPlaceDragging_) return;
+        studioPlaceDragging_ = true;
+        studioPlaceBefore_ = m->place;
+        studioPlaceModel_ = m->uid;
+    };
     const auto dragRow = [&](const char* label, auto&& widget) {
         const ImVec2 c = ImGui::GetCursorScreenPos();
         Text(cdl, Font::Regular, size::Small, ImVec2(c.x, c.y + Dp(5.0f)), p.ink3, label);
@@ -1753,10 +1760,7 @@ void App::DrawStudioPlacePanel(float w) {
         PushFont(Font::Regular, size::Small);
         widget();
         PopFont();
-        if (ImGui::IsItemActivated() && !studioPlaceDragging_) {
-            studioPlaceDragging_ = true;
-            studioPlaceBefore_ = m->place;
-        }
+        if (ImGui::IsItemActivated()) beginGesture();
         if (ItemEditEnded()) dragEnded = true;
         ImGui::Dummy(ImVec2(w, Dp(4.0f)));
     };
@@ -1766,10 +1770,7 @@ void App::DrawStudioPlacePanel(float w) {
     a.scale = std::clamp(a.scale, 0.01f, 100.0f);
     if (!(a == m->place)) {
         // a change opens the gesture when none is open: a field activated as another field's gesture ends only joins it
-        if (!studioPlaceDragging_) {
-            studioPlaceDragging_ = true;
-            studioPlaceBefore_ = m->place;
-        }
+        beginGesture();
         m->place = a;
     }
     if (dragEnded && studioPlaceDragging_ && studioViewDrag_ != 6) {

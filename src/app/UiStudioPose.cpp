@@ -112,6 +112,15 @@ void App::StudioSetPose(const char* undoName, const PoseLayer& before) {
     d.history.Push(std::make_unique<PoseEditCommand>(d, d.selectedModel, undoName, std::move(b), std::move(a)));
 }
 
+// The layer an undo of the gesture restores, and the model it is made on: a gesture whose field goes away before it
+// sees its end is registered there (DrawStudio).
+void App::StudioBeginPoseFieldEdit(const StudioModel& m) {
+    if (studioPoseFieldEdit_) return;
+    studioPoseBefore_ = m.pose;
+    studioPoseFieldModel_ = m.uid;
+    studioPoseFieldEdit_ = true;
+}
+
 void App::StudioSelectAllBones() {
     StudioDoc& d = *studio_;
     StudioModel* m = StudioPoseModel();
@@ -520,6 +529,7 @@ void App::StudioViewportPose(float x0, float y0, float x1, float y1, bool hovere
             if (studioGizmoDrag_.part != GizmoPart::None && modelTool) {
                 studioViewDrag_ = 6;  // model placement drag
                 studioPlaceBefore_ = mm->place;
+                studioPlaceModel_ = mm->uid;
                 studioPlaceDragging_ = true;
             } else if (studioGizmoDrag_.part != GizmoPart::None) {
                 const int bone = d.activeBone;
@@ -841,10 +851,7 @@ void App::DrawStudioViewportAxisControls(float x0, float y0, float x1, float y1)
                 dl->AddTriangleFilled(ImVec2(bx1 + Dp(6.0f), yf + fieldH * 0.5f),
                                       ImVec2(bx1 + Dp(0.0f), yf + fieldH * 0.5f - Dp(4.0f)),
                                       ImVec2(bx1 + Dp(0.0f), yf + fieldH * 0.5f + Dp(4.0f)), chevron);
-                if (started && !studioPoseFieldEdit_) {
-                    studioPoseBefore_ = m->pose;
-                    studioPoseFieldEdit_ = true;
-                }
+                if (started) StudioBeginPoseFieldEdit(*m);
                 rowCh |= ch; rowEnd |= ended;
             }
             return std::pair<bool, bool>{rowCh, rowEnd};
@@ -889,10 +896,7 @@ void App::DrawStudioViewportAxisControls(float x0, float y0, float x1, float y1)
                     studioFixedAxisBaseR_ = cur.r;
                     studioFixedAxisDelta_ = 0.0f;
                     studioFixedAxisActive_ = true;
-                    if (!studioPoseFieldEdit_) {
-                        studioPoseBefore_ = m->pose;
-                        studioPoseFieldEdit_ = true;
-                    }
+                    StudioBeginPoseFieldEdit(*m);
                 }
                 if (ch) {
                     const XMVECTOR q = XMQuaternionRotationAxis(XMVector3Normalize(XMLoadFloat3(&axWf)),
@@ -918,10 +922,7 @@ void App::DrawStudioViewportAxisControls(float x0, float y0, float x1, float y1)
 
         if (anyChanged) {
             // a change opens the edit when none is open: a field activated as another field's edit ends only joins it
-            if (!studioPoseFieldEdit_) {
-                studioPoseBefore_ = m->pose;
-                studioPoseFieldEdit_ = true;
-            }
+            StudioBeginPoseFieldEdit(*m);
             PoseLayer& pose = m->pose;
             if (pose.frame != frame) pose = PoseLayer{};
             pose.frame = frame;
@@ -1864,10 +1865,7 @@ void App::DrawStudioBoneTab(float w) {
             const bool started = ImGui::IsItemActivated(), ended = ItemEditEnded();
             ImGui::EndDisabled();
             ImGui::Dummy(ImVec2(w, Dp(4.0f)));
-            if (started && !studioPoseFieldEdit_) {
-                studioPoseBefore_ = m->pose;
-                studioPoseFieldEdit_ = true;
-            }
+            if (started) StudioBeginPoseFieldEdit(*m);
             return std::pair<bool, bool>{changed, ended};
         };
         float t[3] = {cur.t.x, cur.t.y, cur.t.z};
@@ -1876,10 +1874,7 @@ void App::DrawStudioBoneTab(float w) {
         const auto [tChanged, tEnded] = field("##bonet", Tr("위치"), t, b.flags & PmxBone_Movable, 0.02f, "%.2f");
         const auto [rChanged, rEnded] = field("##boner", Tr("회전"), r, b.flags & PmxBone_Rotatable, 0.25f, "%.1f°");
         // a change opens the field edit when none is open: a field activated as another field's edit ends only joins it
-        if ((tChanged || rChanged) && !studioPoseFieldEdit_) {
-            studioPoseBefore_ = m->pose;
-            studioPoseFieldEdit_ = true;
-        }
+        if (tChanged || rChanged) StudioBeginPoseFieldEdit(*m);
         // stopwatch rule: an animated bone (or auto-key) ends the edit as a key at the playhead; a bone that is not
         // animated edits its constant (a single frame-0 key flagged static) directly, without the pose layer. A bone
         // already edited in the pose layer (gizmo / VPD) keeps that path.
@@ -2087,10 +2082,7 @@ void App::DrawStudioMorphTab(float w) {
                     if (ImGui::IsItemActivated()) {
                         StudioSelectMorph(i);
                         if (edited) {
-                            if (!studioPoseFieldEdit_) {
-                                studioPoseBefore_ = m->pose;
-                                studioPoseFieldEdit_ = true;
-                            }
+                            StudioBeginPoseFieldEdit(*m);
                         } else if (!studioKeyEdit_) {
                             studioKeyBefore_ = {CaptureTrack(d, d.selectedModel, RowKind::Morph, mname)};
                             studioKeyEdit_ = true;
