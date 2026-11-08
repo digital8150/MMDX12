@@ -1757,14 +1757,21 @@ void App::DrawStudioPlacePanel(float w) {
             studioPlaceDragging_ = true;
             studioPlaceBefore_ = m->place;
         }
-        if (ImGui::IsItemDeactivated()) dragEnded = true;
+        if (ItemEditEnded()) dragEnded = true;
         ImGui::Dummy(ImVec2(w, Dp(4.0f)));
     };
     dragRow(Tr("위치"), [&] { ImGui::DragFloat3("##placet", &a.translation.x, 0.05f, 0.0f, 0.0f, "%.2f"); });
     dragRow(Tr("회전"), [&] { ImGui::DragFloat3("##placer", &a.rotationDeg.x, 0.5f, 0.0f, 0.0f, "%.1f°"); });
     dragRow(Tr("크기"), [&] { ImGui::DragFloat("##places", &a.scale, 0.005f, 0.01f, 100.0f, "%.3f"); });
     a.scale = std::clamp(a.scale, 0.01f, 100.0f);
-    if (!(a == m->place)) m->place = a;
+    if (!(a == m->place)) {
+        // a change opens the gesture when none is open: a field activated as another field's gesture ends only joins it
+        if (!studioPlaceDragging_) {
+            studioPlaceDragging_ = true;
+            studioPlaceBefore_ = m->place;
+        }
+        m->place = a;
+    }
     if (dragEnded && studioPlaceDragging_ && studioViewDrag_ != 6) {
         studioPlaceDragging_ = false;
         StudioCommitPlace(m->uid, studioPlaceBefore_, m->place);

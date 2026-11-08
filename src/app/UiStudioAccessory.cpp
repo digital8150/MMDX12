@@ -74,7 +74,7 @@ bool App::DrawStudioAccessoryKeyFields(float w, int frame) {
         const bool changed = widget();
         PopFont();
         if (ImGui::IsItemActivated()) begin();
-        ended |= ImGui::IsItemDeactivated();
+        ended |= ItemEditEnded();
         ImGui::Dummy(ImVec2(w, Dp(4.0f)));
         return changed;
     };
@@ -123,23 +123,29 @@ bool App::DrawStudioAccessoryKeyFields(float w, int frame) {
         }
     }
 
+    // a change opens an edit when none is open (begin() joins an open one): a field activated as another field's edit
+    // ends only joins it
     float t[3] = {k->translation.x, k->translation.y, k->translation.z};
     if (row(Tr("위치"), [&] { return ImGui::DragFloat3("##acct", t, 0.02f, 0.0f, 0.0f, "%.2f"); })) {
+        begin();
         k->translation = {t[0], t[1], t[2]};
         studioKeyChanged_ = true;
     }
     float r[3] = {k->rotationDeg.x, k->rotationDeg.y, k->rotationDeg.z};
     if (row(Tr("회전"), [&] { return ImGui::DragFloat3("##accr", r, 0.25f, 0.0f, 0.0f, "%.1f°"); })) {
+        begin();
         k->rotationDeg = {r[0], r[1], r[2]};
         studioKeyChanged_ = true;
     }
     float s = k->scale;
     if (row(Tr("크기"), [&] { return ImGui::DragFloat("##accs", &s, 0.005f, 0.01f, 100.0f, "%.3f"); })) {
+        begin();
         k->scale = std::clamp(s, 0.01f, 100.0f);
         studioKeyChanged_ = true;
     }
     float op = k->opacity;
     if (row(Tr("불투명도"), [&] { return ImGui::SliderFloat("##accop", &op, 0.0f, 1.0f, "%.2f"); })) {
+        begin();
         k->opacity = std::clamp(op, 0.0f, 1.0f);
         studioKeyChanged_ = true;
     }

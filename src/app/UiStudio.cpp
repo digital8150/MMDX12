@@ -4422,6 +4422,16 @@ void App::DrawStudio() {
         settings_.studioAutoKey = d.autoKey;
         settings_.Save(settingsPath_);
     }
+    // A field edit lasts while its value is typed. A field that went away before it saw its own end (a press elsewhere
+    // changed the panel first, e.g. a click in the outliner) leaves its edit open, and the next edit would join it with
+    // a stale "before". Nothing is active between gestures: such an edit ends here. Camera possession keeps its undo
+    // step open over idle frames on purpose (StudioNavEditTick ends it).
+    if (!ImGui::IsAnyItemActive()) {
+        if (studioKeyEdit_ && !(studioKeyLive_ && d.possessCamera)) StudioEndKeyEdit();
+        studioPoseFieldEdit_ = false;   // its "before" may be another model's pose layer: dropped, not registered
+        studioFixedAxisActive_ = false;
+        if (studioViewDrag_ != 6) studioPlaceDragging_ = false;  // 6 = the gizmo's placement drag (commits itself)
+    }
 
     // --- ribbon: a fixed window above the dock space
     ImGui::SetNextWindowPos(ImVec2(0, 0));
@@ -5236,6 +5246,8 @@ void App::DrawStudioInspector(float x0, float y0, float x1, float y1) {
                 studioKeyChanged_ = false;
             };
             bool colorRow = false;  // the color field reports its own activation (its popup outlives the swatch item)
+            // the edit ends after this frame's change is written: a typed value arrives in the frame its field is left
+            bool ended = false;
             const auto row = [&](const char* lbl, auto&& widget) {
                 const ImVec2 c = ImGui::GetCursorScreenPos();
                 Text(cdl, Font::Regular, size::Small, ImVec2(c.x, c.y + Dp(5.0f)), p.ink3, lbl);
@@ -5244,9 +5256,9 @@ void App::DrawStudioInspector(float x0, float y0, float x1, float y1) {
                 PushFont(Font::Regular, size::Small);
                 bool ch = widget();
                 PopFont();
-                if (!colorRow) {  // one undo step per drag
+                if (!colorRow) {  // one undo step per drag / typed value
                     if (ImGui::IsItemActivated()) beginLightKeyEdit();
-                    if (ImGui::IsItemDeactivated()) StudioEndKeyEdit();
+                    ended |= ItemEditEnded();
                 }
                 ImGui::Dummy(ImVec2(w, Dp(4.0f)));
                 return ch;
@@ -5305,7 +5317,7 @@ void App::DrawStudioInspector(float x0, float y0, float x1, float y1) {
                 }
             }
             if (changed) studioKeyChanged_ = true;
-            if (colorEnded) StudioEndKeyEdit();
+            if (ended || colorEnded) StudioEndKeyEdit();
         }
         ImGui::EndChild();
         return;
@@ -5560,6 +5572,16 @@ void App::DrawStudioInspector(float x0, float y0, float x1, float y1) {
     if (kind == RowKind::Bone) {
         BoneKf* k = m ? FindKey(m->motion.bones[name], first->second) : nullptr;
         if (k) {
+            // One undo step per drag / typed value. An activation joins an open edit, a change opens one when none is
+            // open (a field activated as another field's edit ends only joins it), and the edit ends after this
+            // frame's change is written (a typed value arrives in the frame its field is left).
+            const auto begin = [&] {
+                if (studioKeyEdit_) return;
+                studioKeyBefore_ = {CaptureTrack(d, d.selectedModel, kind, name)};
+                studioKeyEdit_ = true;
+                studioKeyChanged_ = false;
+            };
+            bool ended = false;
             const auto row = [&](const char* lbl, auto&& widget) {
                 const ImVec2 c = ImGui::GetCursorScreenPos();
                 Text(cdl, Font::Regular, size::Small, ImVec2(c.x, c.y + Dp(5.0f)), p.ink3, lbl);
@@ -5568,18 +5590,15 @@ void App::DrawStudioInspector(float x0, float y0, float x1, float y1) {
                 PushFont(Font::Regular, size::Small);
                 bool ch = widget();
                 PopFont();
-                if (ImGui::IsItemActivated()) {
-                    studioKeyBefore_ = {CaptureTrack(d, d.selectedModel, kind, name)};
-                    studioKeyEdit_ = true;
-                    studioKeyChanged_ = false;
-                }
-                if (ImGui::IsItemDeactivated()) StudioEndKeyEdit();
+                if (ImGui::IsItemActivated()) begin();
+                ended |= ItemEditEnded();
                 ImGui::Dummy(ImVec2(w, Dp(4.0f)));
                 return ch;
             };
             {
                 float pos[3] = {k->t.x, k->t.y, k->t.z};
                 if (row(Tr("위치"), [&] { return ImGui::DragFloat3("##bonekeypos", pos, 0.02f, 0.0f, 0.0f, "%.2f"); })) {
+                    begin();
                     k->t = {pos[0], pos[1], pos[2]};
                     studioKeyChanged_ = true;
                     ++m->motionVersion;
@@ -5590,11 +5609,13 @@ void App::DrawStudioInspector(float x0, float y0, float x1, float y1) {
                 const DirectX::XMFLOAT3 e = StudioKeyEulerDeg(k->r);
                 float rot[3] = {e.x, e.y, e.z};
                 if (row(Tr("회전"), [&] { return ImGui::DragFloat3("##bonekeyrot", rot, 0.25f, 0.0f, 0.0f, "%.1f°"); })) {
+                    begin();
                     k->r = StudioKeyQuatFromEulerDeg({rot[0], rot[1], rot[2]});
                     studioKeyChanged_ = true;
                     ++m->motionVersion;
                 }
             }
+            if (ended) StudioEndKeyEdit();
             d.curveChannel = std::clamp(d.curveChannel, 0, 3);
             GetBoneCurve(k->interp, d.curveChannel, curve);
             for (int ch = 0; ch < 4; ++ch) GetBoneCurve(k->interp, ch, channelCurves[ch]);
