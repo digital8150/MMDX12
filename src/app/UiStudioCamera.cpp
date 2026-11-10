@@ -376,6 +376,13 @@ bool App::DrawStudioCameraKeyFields(float w, RowKind kind, int frame, bool live)
     ImDrawList* cdl = ImGui::GetWindowDrawList();
     if (kind == RowKind::Focus) return DrawStudioFocusKeyFields(w, frame);
     bool changed = false, ended = false;
+    // a change opens an edit when none is open: a field activated in the frame another field's edit ends (a click
+    // from one typed field straight into the next, Tab) only joins that edit as it closes
+    const auto ensureEdit = [&] {
+        if (studioKeyEdit_) return;
+        StudioBeginKeyEdit(kind);
+        studioKeyLive_ = live;
+    };
     // label + full-width widget row
     const auto row = [&](const char* label, auto&& widget) {
         const ImVec2 c = ImGui::GetCursorScreenPos();
@@ -393,7 +400,7 @@ bool App::DrawStudioCameraKeyFields(float w, RowKind kind, int frame, bool live)
             StudioBeginKeyEdit(kind);
             studioKeyLive_ = live;
         }
-        ended |= ImGui::IsItemDeactivated();
+        ended |= ItemEditEnded();
         ImGui::Dummy(ImVec2(w, Dp(4.0f)));
     };
 
@@ -439,6 +446,7 @@ bool App::DrawStudioCameraKeyFields(float w, RowKind kind, int frame, bool live)
         }
         ImGui::EndDisabled();
         if (changed && editable) {
+            ensureEdit();
             cur.target = {target[0], target[1], target[2]};
             cur.rotation = {DirectX::XMConvertToRadians(rot[0]), DirectX::XMConvertToRadians(rot[1]), DirectX::XMConvertToRadians(rot[2])};
             cur.distance = dist;
@@ -495,6 +503,7 @@ bool App::DrawStudioCameraKeyFields(float w, RowKind kind, int frame, bool live)
             ImGui::Dummy(ImVec2(w, Dp(6.0f)));
         }
         if (changed) {
+            ensureEdit();
             k->color = {std::clamp(rgb[0], 0, 255) / 256.0f, std::clamp(rgb[1], 0, 255) / 256.0f, std::clamp(rgb[2], 0, 255) / 256.0f};
             k->direction = {dir[0], dir[1], dir[2]};
             studioKeyChanged_ = true;
@@ -524,6 +533,7 @@ bool App::DrawStudioCameraKeyFields(float w, RowKind kind, int frame, bool live)
     float ui = ShadowUiFromVmd(k->distance);
     row(Tr("거리"), [&] { return ImGui::DragFloat("##shadowdist", &ui, 5.0f, 0.0f, 9999.0f, "%.0f"); });
     if (changed) {
+        ensureEdit();
         k->distance = ShadowVmdFromUi(std::clamp(std::round(ui), 0.0f, 9999.0f));
         studioKeyChanged_ = true;
     }

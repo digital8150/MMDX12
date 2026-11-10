@@ -1745,6 +1745,13 @@ void App::DrawStudioPlacePanel(float w) {
     }
     PropAttach a = m->place;
     bool dragEnded = false;
+    // a gesture starts from this placement of this model (DrawStudio commits one whose field goes away)
+    const auto beginGesture = [&] {
+        if (studioPlaceDragging_) return;
+        studioPlaceDragging_ = true;
+        studioPlaceBefore_ = m->place;
+        studioPlaceModel_ = m->uid;
+    };
     const auto dragRow = [&](const char* label, auto&& widget) {
         const ImVec2 c = ImGui::GetCursorScreenPos();
         Text(cdl, Font::Regular, size::Small, ImVec2(c.x, c.y + Dp(5.0f)), p.ink3, label);
@@ -1753,18 +1760,19 @@ void App::DrawStudioPlacePanel(float w) {
         PushFont(Font::Regular, size::Small);
         widget();
         PopFont();
-        if (ImGui::IsItemActivated() && !studioPlaceDragging_) {
-            studioPlaceDragging_ = true;
-            studioPlaceBefore_ = m->place;
-        }
-        if (ImGui::IsItemDeactivated()) dragEnded = true;
+        if (ImGui::IsItemActivated()) beginGesture();
+        if (ItemEditEnded()) dragEnded = true;
         ImGui::Dummy(ImVec2(w, Dp(4.0f)));
     };
     dragRow(Tr("위치"), [&] { ImGui::DragFloat3("##placet", &a.translation.x, 0.05f, 0.0f, 0.0f, "%.2f"); });
     dragRow(Tr("회전"), [&] { ImGui::DragFloat3("##placer", &a.rotationDeg.x, 0.5f, 0.0f, 0.0f, "%.1f°"); });
     dragRow(Tr("크기"), [&] { ImGui::DragFloat("##places", &a.scale, 0.005f, 0.01f, 100.0f, "%.3f"); });
     a.scale = std::clamp(a.scale, 0.01f, 100.0f);
-    if (!(a == m->place)) m->place = a;
+    if (!(a == m->place)) {
+        // a change opens the gesture when none is open: a field activated as another field's gesture ends only joins it
+        beginGesture();
+        m->place = a;
+    }
     if (dragEnded && studioPlaceDragging_ && studioViewDrag_ != 6) {
         studioPlaceDragging_ = false;
         StudioCommitPlace(m->uid, studioPlaceBefore_, m->place);

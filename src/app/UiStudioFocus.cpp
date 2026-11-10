@@ -271,8 +271,9 @@ bool App::DrawStudioFocusKeyFields(float w, int frame) {
         PushFont(Font::Regular, size::Small);
         const bool changed = widget();
         PopFont();
-        if (ImGui::IsItemActivated()) StudioBeginKeyEdit(RowKind::Focus);
-        ended |= ImGui::IsItemDeactivated();
+        // a change opens an edit when none is open: a field activated as another field's edit ends only joins it
+        if (ImGui::IsItemActivated() || changed) StudioBeginKeyEdit(RowKind::Focus);
+        ended |= ItemEditEnded();
         ImGui::Dummy(ImVec2(w, Dp(4.0f)));
         return changed;
     };

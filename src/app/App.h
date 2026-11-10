@@ -592,6 +592,7 @@ private:
     void StudioCommitPlace(uint32_t uid, const studio::PropAttach& before, const studio::PropAttach& after);  // one undo step
     bool studioPlaceDragging_ = false;               // a transform field / gizmo drag is in progress ...
     studio::PropAttach studioPlaceBefore_;                   // ... that started from this placement
+    uint32_t studioPlaceModel_ = 0;                          // ... of this model (uid)
     void DrawStudioFrameMask(float x0, float y0, float x1, float y1);  // dims outside the render frame + guides
     struct FreeCamera;                               // orbit camera (defined below)
     void StudioViewportNavigate(bool hovered, bool active);  // viewport mouse / fly navigation (free or possessed camera)
@@ -737,6 +738,7 @@ private:
     void StudioSelectMorph(int morph);               // morph slider / stopwatch: select the morph's timeline row and reveal it
     std::vector<studio::PoseBone> StudioCurrentPose(const studio::StudioModel& m) const;  // effective anim values
     void StudioSetPose(const char* undoName, const studio::PoseLayer& before);  // push the selected model's layer edit
+    void StudioBeginPoseFieldEdit(const studio::StudioModel& m);  // a pose field / morph slider gesture starts on m
     // keys for the edited bones/morphs (all: every listed bone). layerBefore: the layer an undo restores (auto-key)
     void StudioRegisterPose(bool allBones, const studio::PoseLayer* layerBefore = nullptr, const char* undoName = nullptr);
     void StudioResetPose();                          // drop the unregistered edits
@@ -1593,7 +1595,8 @@ private:
     int studioDragBone_ = -1;
     studio::AutoIkDrag studioAutoIkDrag_;   // auto-IK chain state captured when a wrist drag started
     bool studioAutoIkActive_ = false;       // the current gizmo drag is an auto-IK solve
-    bool studioPoseFieldEdit_ = false;    // a numeric pose field / morph slider is being edited
+    bool studioPoseFieldEdit_ = false;    // a numeric pose field / morph slider is being edited ...
+    uint32_t studioPoseFieldModel_ = 0;   // ... on this model (uid)
     int studioHoverBone_ = -1;
     // camera inspector / path
     bool studioKeyEdit_ = false;                     // a camera/light/shadow key field is being edited

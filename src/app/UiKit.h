@@ -98,6 +98,14 @@ int KeyNav(const char* id, bool hasPrev, bool keyedHere, bool hasNext, float siz
 void ProgressBar(ImDrawList* dl, ImVec2 a, ImVec2 b, float fraction);
 void Badge(ImDrawList* dl, ImVec2 pos, const char* text, ImU32 bg, ImU32 fg, ImVec2* outSize = nullptr);
 void Tooltip(const char* text);  // after an item, when hovered
+// After an edited item: its gesture ended (a drag released, a typed value entered or cancelled, another field of the
+// same group taken over). A drag field turns into its text input on a plain click (io.ConfigDragClickToInputText),
+// and in that frame ImGui reports the item as deactivated although the same id is active again: not an end, while
+// ImGui::IsItemDeactivated() alone ends the edit before the value is typed. A group (DragFloat3) deactivated and
+// activated anew in one frame moved to another of its fields: an end.
+inline bool ItemEditEnded() {
+    return ImGui::IsItemDeactivated() && (!ImGui::IsItemActive() || ImGui::IsItemActivated());
+}
 void Gap(float px);              // vertical spacing
 void SectionLabel(const char* text);
 
