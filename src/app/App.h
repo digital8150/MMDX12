@@ -593,6 +593,12 @@ private:
     bool studioPlaceDragging_ = false;               // a transform field / gizmo drag is in progress ...
     studio::PropAttach studioPlaceBefore_;                   // ... that started from this placement
     uint32_t studioPlaceModel_ = 0;                          // ... of this model (uid)
+    void StudioEndPropGesture();                             // records a prop field gesture whose field went away
+    bool studioPropDragging_ = false;                        // a prop placement field gesture is in progress ...
+    bool studioPropDragKey_ = false;                         // ... editing the accessory key at the playhead
+    uint32_t studioPropDragModel_ = 0;                       // ... of this prop (uid)
+    studio::PropAttach studioPropDragBefore_;                // ... that started from this attach
+    studio::PropAttach studioPropDragValue_;                 // ... and holds this value so far (key path: written at the end)
     void DrawStudioFrameMask(float x0, float y0, float x1, float y1);  // dims outside the render frame + guides
     struct FreeCamera;                               // orbit camera (defined below)
     void StudioViewportNavigate(bool hovered, bool active);  // viewport mouse / fly navigation (free or possessed camera)

@@ -510,7 +510,9 @@ void App::DrawStudioLightInspector(float w) {
         bool changed = row(label, [&] { return widget(); });
         if (locked) ImGui::EndDisabled();
 
-        if (ImGui::IsItemActivated()) {
+        // One undo step per drag / typed value. A change opens an edit when none is open (a field activated as another
+        // field's edit ends only joins it), and the edit ends after this frame's value is written.
+        if (ImGui::IsItemActivated() || changed) {
             StudioBeginLightEdit(light->uid, willKey);
         }
         if (changed) {
@@ -529,7 +531,7 @@ void App::DrawStudioLightInspector(float w) {
             }
             d.rowsKey = ~0ull;
         }
-        if (ImGui::IsItemDeactivated()) {
+        if (ItemEditEnded()) {
             StudioEndLightEdit(light->uid);
         }
         return changed;
@@ -541,7 +543,7 @@ void App::DrawStudioLightInspector(float w) {
         if (locked) ImGui::BeginDisabled(true);
         bool changed = row(label, [&] { return widget(); });
         if (locked) ImGui::EndDisabled();
-        if (ImGui::IsItemActivated()) {
+        if (ImGui::IsItemActivated() || changed) {  // as keyedEdit: a change opens an edit when none is open
             StudioBeginLightEdit(light->uid, false);
         }
         if (changed) {
@@ -549,7 +551,7 @@ void App::DrawStudioLightInspector(float w) {
             apply(*light);
             d.rowsKey = ~0ull;
         }
-        if (ImGui::IsItemDeactivated()) {
+        if (ItemEditEnded()) {
             StudioEndLightEdit(light->uid);
         }
         return changed;
