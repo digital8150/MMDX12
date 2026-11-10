@@ -4436,6 +4436,9 @@ void App::DrawStudio() {
                 StudioSetPose(Tr("본 값 편집"), studioPoseBefore_);
         }
         studioFixedAxisActive_ = false;
+        if (studioLightEdit_ && studioViewDrag_ != 8)  // 8 = the light gizmo's drag (ends itself)
+            StudioEndLightEdit(studioLightEditingUid_);
+        StudioEndPropGesture();
         if (studioPlaceDragging_ && studioViewDrag_ != 6) {  // 6 = the gizmo's placement drag (commits itself)
             studioPlaceDragging_ = false;
             if (const int i = d.IndexOfUid(studioPlaceModel_); i >= 0)
