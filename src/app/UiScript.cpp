@@ -152,8 +152,9 @@ bool App::ExecuteUiCommand(const std::string& cmd, const std::vector<std::string
             for (const studio::StudioStage& st : d.stages) {
                 if (!st.manifest) continue;
                 const studio::StudioStageOverrides ov = studio::StageOverridesAt(st, (float)d.Frame());
+                const StageSignals sig = StageAudioSignals(d.time - d.audioOffset);
                 const StageEvalResult eval =
-                    EvaluateStage(*st.manifest, st.variant, ov.values, d.time, ov.skipCues);
+                    EvaluateStage(*st.manifest, st.variant, ov.values, d.time, ov.skipCues, &sig);
                 for (const StageScreenState& s : StudioStageScreenStates(st, eval)) {
                     const char* detail = s.source == StageScreenSource::Camera ? s.camera.c_str() : s.file.c_str();
                     LOG_INFO("STUDIOSCREEN stage=%u id=%s source=%s detail=%s w=%u h=%u brightness=%.3f",

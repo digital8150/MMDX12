@@ -1,5 +1,5 @@
 // The MMDX stage evaluator (see StageEval.h): pure, deterministic, no I/O.
-// Precedence per param: defaults < the chosen variant < cue tracks (at `time`) < the caller's overrides.
+// Precedence per param: defaults < the chosen variant < cue tracks (at `time`) < the caller's overrides < drivers.
 #include "asset/StageEval.h"
 
 #include <algorithm>
@@ -96,9 +96,36 @@ StageValue ApplyStageBinding(const StageBinding& binding, const StageValue& in) 
     return MapValue(in, binding.remap, binding.scale, binding.offset);
 }
 
+bool SampleStageDriver(const StageDriver& driver, double timeSeconds, const StageSignals* signals, double& out) {
+    const bool audio = StageDriverIsAudio(driver.input);
+    if (audio && (!signals || !signals->audioValid)) return false;
+    if (StageDriverIsLevel(driver.input)) {
+        const float raw = driver.input == StageDriverInput::Onset    ? signals->onset
+                          : driver.input == StageDriverInput::Energy ? signals->energy
+                                                                     : signals->section;
+        const double v = std::clamp((double)raw, 0.0, 1.0);
+        out = driver.hasPower ? std::pow(v, (double)driver.power) : v;
+        return true;
+    }
+    const double count = driver.input == StageDriverInput::Beat  ? signals->beatCount
+                         : driver.input == StageDriverInput::Bar ? signals->barCount
+                                                                 : std::max(0.0, timeSeconds);
+    const double u = count / (double)driver.every + (double)driver.phase;
+    const double f = u - std::floor(u);
+    switch (driver.shape) {
+    case StageDriverShape::Saw: out = f; break;
+    case StageDriverShape::Pulse: out = std::pow(1.0 - f, (double)driver.power); break;
+    case StageDriverShape::Sine: out = 0.5 - 0.5 * std::cos(2.0 * 3.14159265358979323846 * f); break;
+    case StageDriverShape::Triangle: out = 1.0 - std::abs(2.0 * f - 1.0); break;
+    case StageDriverShape::Square: out = f < (double)driver.duty ? 1.0 : 0.0; break;
+    case StageDriverShape::Ramp: out = u; break;
+    }
+    return true;
+}
+
 StageEvalResult EvaluateStage(const StageManifest& manifest, const std::string& variantId,
                               const StageParamValues& overrides, double timeSeconds,
-                              const std::set<std::string>& skipCues) {
+                              const std::set<std::string>& skipCues, const StageSignals* signals) {
     StageEvalResult result;
     const StageVariant* variant = variantId.empty() ? manifest.DefaultVariant() : manifest.FindVariant(variantId);
     if (!variantId.empty() && !variant)
@@ -134,7 +161,47 @@ StageEvalResult EvaluateStage(const StageManifest& manifest, const std::string& 
         result.params[key] = ClampStageParamValue(*p, value);
     }
 
-    // 4. bindings -> target assignments
+    // 4. drivers, in list order, each on the previous result; `amount` reads the value before any driver
+    if (!manifest.drivers.empty()) {
+        const StageParamValues before = result.params;
+        for (const StageDriver& driver : manifest.drivers) {
+            const StageParam* p = manifest.FindParam(driver.param);
+            if (!p) {
+                result.warnings.push_back("driver for unknown param \"" + driver.param + "\"");
+                continue;
+            }
+            const bool color = p->type == StageParamType::Color;
+            if (p->type == StageParamType::Bool || p->type == StageParamType::Enum ||
+                (color && driver.blend != StageDriverBlend::Mul))
+                continue;   // a validation error; never applied
+            double s = 0.0;
+            if (!SampleStageDriver(driver, timeSeconds, signals, s)) continue;
+            const float v = (float)((double)driver.min + ((double)driver.max - (double)driver.min) * s);
+            StageValue& slot = result.params[driver.param];
+            const StageValue base = slot;
+            StageValue driven = base;
+            if (color) {
+                driven.x *= v;
+                driven.y *= v;
+                driven.z *= v;
+            } else if (driver.blend == StageDriverBlend::Set) {
+                driven.x = v;
+            } else if (driver.blend == StageDriverBlend::Add) {
+                driven.x = base.x + v;
+            } else {
+                driven.x = base.x * v;
+            }
+            if (!driver.amount.empty()) {
+                const auto a = before.find(driver.amount);
+                const float t = a != before.end() ? std::clamp(a->second.x, 0.0f, 1.0f) : 1.0f;
+                driven = LerpValue(base, driven, t);
+                driven.w = base.w;
+            }
+            slot = ClampStageParamValue(*p, driven);
+        }
+    }
+
+    // 5. bindings -> target assignments
     for (const StageBinding& binding : manifest.bindings) {
         const StageParam* param = manifest.FindParam(binding.param);
         if (!param) {
@@ -153,7 +220,25 @@ StageEvalResult EvaluateStage(const StageManifest& manifest, const std::string& 
         }
         const auto it = result.params.find(binding.param);
         if (it == result.params.end()) continue;
-        const StageValue mapped = ApplyStageBinding(binding, it->second);
+        StageValue mapped = ApplyStageBinding(binding, it->second);
+        if (!binding.gain.empty()) {
+            // the gain param's resolved value (after drivers): numbers x g, colour / vec3 rgb (xyz) x g, alpha kept
+            const StageParam* gainParam = manifest.FindParam(binding.gain);
+            const auto g = result.params.find(binding.gain);
+            if (!gainParam || g == result.params.end() ||
+                (gainParam->type != StageParamType::Float && gainParam->type != StageParamType::Int) ||
+                spec.type == StageTargetSpec::ValueType::Bool || spec.type == StageTargetSpec::ValueType::String) {
+                result.warnings.push_back("binding " + binding.param + " -> " + binding.target + ": bad gain \"" +
+                                          binding.gain + "\" (ignored)");
+            } else {
+                const float gv = g->second.x;
+                mapped.x *= gv;
+                if (mapped.type == StageValue::Type::Color) {
+                    mapped.y *= gv;
+                    mapped.z *= gv;
+                }
+            }
+        }
         StageAssignment assignment;
         assignment.target = binding.target;
         assignment.value = mapped;

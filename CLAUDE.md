@@ -90,6 +90,10 @@ progress.md is the session log. Read its latest entry first.
   lights are scene lights tagged with the stage and are replayed every frame (editor and offline), the fields a binding
   drives are read-only in the light inspector. Script: `studiostageparam` / `studiostagekey` / `studiostagecues`,
   `studiostate` logs one `STUDIOSTAGE` line per stage.
+  L0 `drivers` (stage.json) modulate float / int / colour params from `audio.beat|bar|onset|energy|section` or `time`
+  (shapes pulse / saw / sine / triangle / square / ramp, blend set / add / mul, optional `amount` param), applied last in
+  `EvaluateStage` (after overrides); the app passes `StageSignals` (`App::StageAudioSignals`: the beat analysis at the
+  frame's audio time, `audioValid` false = audio drivers skipped). Bindings take an optional `gain` param (`out * g`).
 - Stage gallery (S12, docs/stage_format.md "Distribution"): `app/StageStore.*` (the shader-pack store's rules: index
   sources, SHA-256, revoked, `minEngine`) fetches `stages/index.json`, downloads a stage zip **resumably**
   (`net::DownloadToFileResumable`, `<exe>/cache/stage_downloads/<id>-<version>.zip.part`, `Range: bytes=` + 206 / 200 /
@@ -778,11 +782,14 @@ Agents keep misusing the CLI and then blaming the app. These rules are verified 
   clipped where there is none), `world.overlay` (premultiplied over the lit scene, negative slope bias, normal / velocity
   untouched; keep it ~2 cm above the ground), `world.body` (body colliders: head r 0.9, upper body 2 / upper body r 1.2,
   left / right shoulder / arm r 0.7, lower body r 1.3, flag `kColliderBody = 8`; packs without it see only the old
-  feet / hands colliders in the old order), `world.lights` (the scene's sun + punctual direct lighting and shadows through
+  feet / hands colliders in the old order), `inputs.audio` (the `pack_inputs.hlsli` audio helpers incl.
+  `PackAudioBeatCount`, from the scene constants; screen packs get the same through the pass constants gP1 / gP2;
+  `NeedsAudioInputs` also counts world entries, stage packs and stage audio drivers), `world.lights` (the scene's sun + punctual direct lighting and shadows through
   `PackSunLight` / `PackPunctualLight` / `PackDirectDiffuse` / `PackDirectThin`: shadow maps in raster, one TLAS ray per
   light in RT / PT / offline GI; non-lights packs keep the old bindings and zero cost). Built-in `shaders/packs/snow` 2.0 ("눈"): snow in the camera box, cover on
   every upward ground surface, performer-anchored footprints, landing particles that thin out on trodden snow. No world
-  gizmo / transform keys yet. Zero cost without worlds.
+  gizmo / transform keys yet. Zero cost without worlds. `PackBillboardRight()` / `PackBillboardUp()` (no capability) = the camera axes particle quads
+  are expanded along (`drawn pos + (uv - 0.5) * size * axes`, uv.y up).
 - Stage-bundled packs (S6, docs/stage_format.md `packs`): a stage folder may bundle packs of three roles, registered by
   `RegisterStagePacks` (play-mode scene load, studio add / open) as `stage:<stage id>/<pack folder>` through
   `ShaderPackRegistry::RegisterStagePack` (`PackSource::Stage`, the installed `LoadPackFolder` parser, one `[W]` and the

@@ -79,8 +79,10 @@ public:
     bool Empty() const { return !manifest_; }
 
     // Evaluates the stage at `timeSeconds` (song time) for GPU frame `frame` and applies the results: the light targets
-    // into Lights(), the material targets into the parts' GPU models (only when a value changed).
-    const std::vector<studio::SceneLight>& Apply(double timeSeconds, uint64_t frame);
+    // into Lights(), the material targets into the parts' GPU models (only when a value changed). `signals` feeds the
+    // manifest's audio.* drivers (nullptr = skipped).
+    const std::vector<studio::SceneLight>& Apply(double timeSeconds, uint64_t frame,
+                                                 const StageSignals* signals = nullptr);
 
     // S2a: the parts' glTF punctual lights (asset/StageLights.h PartGltfLights), appended to the rig when the manifest
     // opts in with "gltfLights": true. Called once at load; empty = none.
@@ -188,7 +190,8 @@ struct StageModelOverridePart {
 };
 // Applies one manifest's material targets at `timeSeconds` to `parts` (studio per-frame pass).
 void ApplyStageMaterialTargets(const StageManifest& manifest, const std::string& variant, double timeSeconds,
-                               uint64_t frame, const std::vector<StageModelOverridePart>& parts);
+                               uint64_t frame, const std::vector<StageModelOverridePart>& parts,
+                               const StageSignals* signals = nullptr);
 
 // The variant a stage shows: `cliVariant` (--stage-variant) wins, then the saved per-stage choice, then the manifest's
 // default variant (an empty manifest default = the first variant / the plain defaults).

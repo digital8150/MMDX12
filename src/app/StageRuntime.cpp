@@ -149,7 +149,8 @@ void StageRuntime::Init(std::shared_ptr<const StageManifest> manifest, std::stri
     packs_.clear();
 }
 
-const std::vector<studio::SceneLight>& StageRuntime::Apply(double timeSeconds, uint64_t frame) {
+const std::vector<studio::SceneLight>& StageRuntime::Apply(double timeSeconds, uint64_t frame,
+                                                               const StageSignals* signals) {
     if (!manifest_) {
         lights_.clear();
         return lights_;
@@ -158,7 +159,7 @@ const std::vector<studio::SceneLight>& StageRuntime::Apply(double timeSeconds, u
     // the same frame: evaluate once per frame.
     if (appliedFrame_ == frame) return lights_;
     appliedFrame_ = frame;
-    const StageEvalResult eval = EvaluateStage(*manifest_, variant_, StageParamValues{}, timeSeconds);
+    const StageEvalResult eval = EvaluateStage(*manifest_, variant_, StageParamValues{}, timeSeconds, {}, signals);
 
     // Lights: the manifest's rig (plus the parts' glTF lights when "gltfLights") with the evaluator's light targets
     // replayed in assignment order (cues animate the params the targets read, so the rig follows the song).
@@ -219,8 +220,9 @@ void StageRuntime::ApplyMaterials(const std::vector<StageMaterialRule>& rules, u
 }
 
 void ApplyStageMaterialTargets(const StageManifest& manifest, const std::string& variant, double timeSeconds,
-                               uint64_t frame, const std::vector<StageModelOverridePart>& parts) {
-    const StageEvalResult eval = EvaluateStage(manifest, variant, {}, timeSeconds);
+                               uint64_t frame, const std::vector<StageModelOverridePart>& parts,
+                               const StageSignals* signals) {
+    const StageEvalResult eval = EvaluateStage(manifest, variant, {}, timeSeconds, {}, signals);
     const std::vector<StageMaterialRule> rules = ResolvedStageMaterialRules(manifest, eval);
     for (const StageModelOverridePart& p : parts) {
         if (!p.gpu || !p.binding) continue;

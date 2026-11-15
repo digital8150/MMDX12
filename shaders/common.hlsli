@@ -69,7 +69,7 @@ cbuffer SceneCB : register(b0) {
     // Shader pack typed inputs (PACK_CAP_INPUTS_SCENE / PACK_CAP_INPUTS_AUDIO)
     GpuPackInputRoleHLSL gPackRoles[8];
     float4 gPackAudio0;          // x: beat, y: downbeat, z: onset, w: energy
-    float4 gPackAudio1;          // x: section, y: bpm, z: valid, w: unused
+    float4 gPackAudio1;          // x: section, y: bpm, z: valid, w: beat count (beat index + phase)
     // S7a: the punctual-light CDF (Renderer::FillLightCdf): x = SrvHeap index of the raw ByteAddressBuffer of floats
     // (negative = none, use the uniform pick), y = light count.
     float4 gLightCdf;

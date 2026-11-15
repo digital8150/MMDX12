@@ -5,6 +5,7 @@
 #include "core/Log.h"
 #include "core/TextUtil.h"
 #include "render/ShaderPack.h"
+#include "studio/StudioDoc.h"
 #include <algorithm>
 #include <cmath>
 #include <chrono>
@@ -20,6 +21,23 @@ static std::string AudioAnalysisKey(const std::filesystem::path& audioPath) {
     key += ec ? std::string("0") : std::to_string((long long)writeTime.time_since_epoch().count());
     return key;
 }
+
+// Continuous mark count at t: index of the mark at or before t + the phase toward the next one. Before the first
+// mark it runs negative with `period`; after the last it keeps counting with the same period the phase inputs use.
+static double ContinuousCount(const std::vector<double>& marks, double t, double period) {
+    if (marks.empty() || !(period > 0.0)) return 0.0;
+    if (t < marks.front()) return (t - marks.front()) / period;
+    auto it = std::upper_bound(marks.begin(), marks.end(), t);
+    const size_t idx = (size_t)(it - marks.begin()) - 1;
+    const double start = marks[idx];
+    if (idx + 1 < marks.size()) {
+        const double next = marks[idx + 1];
+        return next > start ? (double)idx + std::clamp((t - start) / (next - start), 0.0, 1.0) : (double)idx;
+    }
+    return (double)idx + (t - start) / period;
+}
+
+static double BeatPeriod(const BeatAnalysis& beats) { return beats.bpm > 0.0 ? 60.0 / beats.bpm : 0.5; }
 
 static void SampleAudioInputs(const BeatAnalysis& beats, double audioSeconds, GpuPackInputs& out) {
     if (!beats.ok) {
@@ -88,10 +106,40 @@ static void SampleAudioInputs(const BeatAnalysis& beats, double audioSeconds, Gp
     }
 
     out.audio0 = {beatVal, downbeatVal, onsetVal, energyVal};
-    out.audio1 = {sectionVal, bpmVal, 1.0f, 0.0f}; // valid = 1.0f
+    const float beatCount = (float)ContinuousCount(beats.beats, t, BeatPeriod(beats));
+    out.audio1 = {sectionVal, bpmVal, 1.0f, beatCount}; // valid = 1.0f
+}
+
+static bool PackNeedsAudio(const std::string& id) {
+    const ShaderPack* p = ShaderPacks().Find(id);
+    return p && p->HasCap("inputs.audio");
+}
+
+// A loaded MMDX stage needs the analysis for an audio.* driver or for one of its bundled packs (packs[] folders and
+// the folders of "program" screens, registered as stage:<id>/<folder>) that requires inputs.audio.
+static bool StageNeedsAudio(const StageManifest& m) {
+    if (StageUsesAudio(m)) return true;
+    for (const StagePackRef& ref : m.packs)
+        if (PackNeedsAudio(StagePackId(m.id, ref.folder))) return true;
+    for (const StageScreen& s : m.screens)
+        if (s.source == StageScreenSource::Program && !s.file.empty() && PackNeedsAudio(StagePackId(m.id, s.file)))
+            return true;
+    return false;
 }
 
 bool App::NeedsAudioInputs() const {
+    // World entries (play: the world stack; studio: the project's world entities) and the loaded stages
+    if (studio_) {
+        for (const studio::StudioWorld& w : studio_->worlds)
+            if (w.fx.entry.enabled && PackNeedsAudio(w.fx.entry.pack)) return true;
+        for (const studio::StudioStage& st : studio_->stages)
+            if (st.manifest && StageNeedsAudio(*st.manifest)) return true;
+    }
+    if (scene_) {
+        for (const EffectStackEntry& e : settings_.worldStack)
+            if (e.enabled && PackNeedsAudio(e.pack)) return true;
+        if (scene_->stage && scene_->stage->Manifest() && StageNeedsAudio(*scene_->stage->Manifest())) return true;
+    }
     // Enabled effect stack entries (the studio project's own stack while the studio is open)
     if (studio_) {
         for (const auto& e : studio_->effects) {
@@ -244,26 +292,42 @@ void App::FillPackInputs(FrameView& view, const ModelInstance* performer, double
     }
 
     // Role 8: Audio inputs
+    if (const BeatAnalysis* beats = CurrentAudioAnalysis()) {
+        SampleAudioInputs(*beats, audioSeconds, view.packInputs);
+    } else {
+        view.packInputs.audio0 = {0.0f, 0.0f, 0.0f, 0.0f};
+        view.packInputs.audio1 = {0.0f, 0.0f, 0.0f, 0.0f};
+    }
+}
+
+const BeatAnalysis* App::CurrentAudioAnalysis() {
     std::filesystem::path currentAudio;
     if (scene_ && !scene_->audioPath.empty()) {
         currentAudio = scene_->audioPath;
     } else if (studio_ && studio_->hasAudio && !studio_->audioPath.empty()) {
         currentAudio = studio_->audioPath;
     }
-
     // Only the analysis of the audio that plays now (the cache may still hold another song's).
-    bool ready = false;
-    if (!currentAudio.empty() && NeedsAudioInputs()) {
-        EnsureAudioAnalysis(currentAudio);
-        ready = studioBeats_ && studioBeats_->ok && studioBeatsKey_ == AudioAnalysisKey(currentAudio);
-    }
+    if (currentAudio.empty() || !NeedsAudioInputs()) return nullptr;
+    EnsureAudioAnalysis(currentAudio);
+    const bool ready = studioBeats_ && studioBeats_->ok && studioBeatsKey_ == AudioAnalysisKey(currentAudio);
+    return ready ? studioBeats_.get() : nullptr;
+}
 
-    if (ready) {
-        SampleAudioInputs(*studioBeats_, audioSeconds, view.packInputs);
-    } else {
-        view.packInputs.audio0 = {0.0f, 0.0f, 0.0f, 0.0f};
-        view.packInputs.audio1 = {0.0f, 0.0f, 0.0f, 0.0f};
-    }
+StageSignals App::StageAudioSignals(double audioSeconds) {
+    StageSignals s;
+    const BeatAnalysis* beats = CurrentAudioAnalysis();
+    if (!beats) return s;
+    GpuPackInputs in{};
+    SampleAudioInputs(*beats, audioSeconds, in);
+    s.audioValid = true;
+    s.beatCount = ContinuousCount(beats->beats, audioSeconds, BeatPeriod(*beats));
+    s.barCount = ContinuousCount(beats->downbeats, audioSeconds, 4.0 * BeatPeriod(*beats));   // bar = 4 beats
+    s.onset = in.audio0.z;
+    s.energy = in.audio0.w;
+    s.section = in.audio1.x;
+    s.bpm = in.audio1.y;
+    return s;
 }
 
 } // namespace mmdx

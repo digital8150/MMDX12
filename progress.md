@@ -2640,3 +2640,29 @@ word to deploy. Workers: opencode deepseek 4.1 1017 #low; Claude designed, revie
   answered (left open for the reporter to confirm).
 - Pitfalls: a Python-written object list had CRLF line ends, so `tar -T` found no files (strip `\r`); the CDN returned
   transient 522 / 525 on some object fetches during the check (files were fine on the origin; retries returned 200).
+
+## 2026-11-15 - Stage drivers + audio inputs for world / screen packs, reference stage "Round Arena"
+- Question from the user: can a stage's lights and devices be keyed, or animated procedurally on the beat, under the
+  current stage contract; and no reference stage used a stage-bundled world pack. Found: keying = yes (`cues` ->
+  params -> `bindings`); procedural = only the spots' `sway`; beat reaction = no (`inputs.audio` reached surface /
+  effect packs only, the L0 layer had no audio although docs/stage_ecosystem.md promised "time + params + audio").
+- Engine (Opus subagent worker from Claude's spec, reviewed, rebuilt and run by Claude): `inputs.audio` for world and
+  screen packs (+ `PackAudioBeatCount`, a continuous beat count in `audio1.w`), stage.json `drivers` (a param modulated
+  by audio.beat / bar / onset / energy / section or time; shapes pulse / saw / sine / triangle / square / ramp; blend
+  set / add / mul; optional `amount` param; applied after overrides; skipped without an analysis), binding `gain`
+  (output x another param: a master level times a beat pattern), `PackBillboardRight / Up` for world particles,
+  `StageSignals` passed to every runtime `EvaluateStage`, `NeedsAudioInputs` counts worlds / stage packs / drivers.
+  Tests: stage_check selftest (drivers, gain), pack_check on the built-in packs and throwaway audio world / screen packs.
+- Stage `arena_round` (MMDX12_Stages, built by Claude with a headless Blender script): circular centre stage, standing
+  floor, two seating tiers all round (17 417 crowd figures), ribbed dome, ring rig (6 profiles, 16 + 8 moving heads,
+  8 lasers, line arrays, centre LED cube with a camera feed), 360-degree LED ribbon (screen pack, beat driven), and the
+  crowd's light sticks as a stage-bundled world pack: one stateless particle per seat from a seat table shared by the
+  build script and the shader (same integer hash), swinging on the beat with a speed-of-sound lag toward the back rows.
+- Verified in the app: play captures (wide / close / up / reverse, several song times), a 10 s raster video (sweeps,
+  pulses, colour wave on the beat), offline GI stills (720p and 4K), the studio (one stage entity, 52 lights).
+- Findings: (1) this ssh shell runs in session 0 (no display: `CreateSwapChainForHwnd 0x887A0022`, gh / git
+  credentials missing); app runs, pushes and gh go through a one-shot interactive scheduled task
+  (`MMDX12_Stages/src/arena_round/isess.sh`). (2) The centre cube's camera feed is about half the frame (48 -> 24 ms,
+  RTX 3060 Laptop, 1600x900); kept, the user rates quality over frame rate (offline renders). (3) Offline GI shows the
+  spot shafts fainter than raster with the same haze values (not investigated).
+- NOT verified: RT / PT real-time paths with the light sticks, the drivers on a song whose analysis fails, AMD.

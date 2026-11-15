@@ -205,13 +205,15 @@ struct StageVariant {
 
 // param -> target with an optional scale / offset / remap: out = remap(value) * scale + offset, where remap maps
 // [inMin, inMax] onto [outMin, outMax] before scale / offset. Several bindings may hit one target: the evaluator
-// emits them in list order and a consumer applies them in that order.
+// emits them in list order and a consumer applies them in that order. `gain` (optional) multiplies the result by the
+// resolved value (after drivers) of a float / int param: numbers out * g, colour / vec3 rgb (xyz) * g, alpha kept.
 struct StageBinding {
     std::string param;                   // required, a known param key
     std::string target;                  // required, see docs/stage_format.md ("lights.<name>.<field>" ...)
     float scale = 1.0f;
     float offset = 0.0f;
     std::optional<std::array<float, 4>> remap;  // inMin, inMax, outMin, outMax
+    std::string gain;                    // optional float / int param key; empty = no gain
 };
 
 // L0 timeline: one keyed param track on the song timeline (frames at 30 fps).
@@ -223,6 +225,35 @@ struct StageCue {
     std::string param;                   // required, a known param key
     bool stepped = false;                // "stepped": the last key at or before the frame wins (else linear)
     std::vector<StageCueKey> keys;       // sorted by frame, one key per frame
+};
+
+// L0 procedural layer: one driver modulates a param from the song's beat / bar / onset / energy / section or the clock
+// (docs/stage_format.md "drivers"). Applied by EvaluateStage after the overrides, in list order.
+enum class StageDriverInput : uint8_t { Beat = 0, Bar, Onset, Energy, Section, Time };
+enum class StageDriverShape : uint8_t { Pulse = 0, Saw, Sine, Triangle, Square, Ramp };
+enum class StageDriverBlend : uint8_t { Set = 0, Add, Mul };
+const char* StageDriverInputName(StageDriverInput in);   // "audio.beat" ... "time"
+bool ParseStageDriverInput(const std::string& s, StageDriverInput& out);
+bool ParseStageDriverShape(const std::string& s, StageDriverShape& out);
+bool ParseStageDriverBlend(const std::string& s, StageDriverBlend& out);
+// Level inputs (onset / energy / section) take the value itself; the others are cyclic.
+inline bool StageDriverIsLevel(StageDriverInput in) {
+    return in == StageDriverInput::Onset || in == StageDriverInput::Energy || in == StageDriverInput::Section;
+}
+inline bool StageDriverIsAudio(StageDriverInput in) { return in != StageDriverInput::Time; }
+
+struct StageDriver {
+    std::string param;                   // required, a float / int / color param
+    StageDriverInput input = StageDriverInput::Beat;   // required
+    StageDriverShape shape = StageDriverShape::Pulse;
+    float every = 1.0f;                  // > 0: beats / bars / seconds per cycle
+    float phase = 0.0f;                  // cycles added to the count
+    float power = 2.0f;                  // > 0 (level inputs: applied only when `hasPower`)
+    bool hasPower = false;               // "power" was given in the JSON
+    float duty = 0.5f;                   // square: the on share of a cycle, 0..1
+    float min = 0.0f, max = 1.0f;
+    StageDriverBlend blend = StageDriverBlend::Set;
+    std::string amount;                  // optional float param key: lerp(base, driven, clamp(amount, 0, 1))
 };
 
 struct StageManifest {
@@ -253,6 +284,7 @@ struct StageManifest {
     std::string defaultVariant;          // empty: the first variant (or none)
     std::vector<StageBinding> bindings;
     std::vector<StageCue> cues;
+    std::vector<StageDriver> drivers;    // L0 procedural modulation (after cues and overrides)
     // where it came from
     std::filesystem::path dir;
     std::filesystem::path manifestPath;
@@ -287,6 +319,8 @@ bool StageGlobMatch(const std::string& pattern, const std::string& text);
 bool StageGlobIsPattern(const std::string& pattern);
 // "path/to/x.glb" -> "x"; empty for an empty path.
 std::string StageFileStem(const std::string& file);
+// True when any driver reads an audio.* input (the app then needs the song's beat analysis).
+bool StageUsesAudio(const StageManifest& manifest);
 
 // A binding target, split and typed. `ok` false = unknown target (the message says why); used by validation and by
 // the evaluator's assignment building.

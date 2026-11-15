@@ -65,4 +65,12 @@ uint2 PackTexSize(uint i) {
 
 uint PackTexCount() { return (uint)PACK_TEX_COUNT; }
 
+// The audio inputs ("requires": ["inputs.audio"], PACK_CAP_INPUTS_AUDIO): PackAudioBeat / Downbeat / Onset / Energy /
+// Section / Bpm / BeatCount and PackInputValid(PACK_IN_AUDIO), the same values the scene's packs read. The pass has no
+// scene constants: the host passes them in the pass constants gP1 / gP2 (StageScreens), so pack_inputs.hlsli's
+// gPackAudio0 / 1 are mapped onto those (after common.hlsli declared the scene's own, which stay unbound here).
+#define gPackAudio0 gP1
+#define gPackAudio1 gP2
+#include "pack_inputs.hlsli"
+
 #endif

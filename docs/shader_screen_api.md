@@ -82,6 +82,27 @@ capability (add `"requires": ["params.ext"]` to pack.json once a pack declares a
 alone works for float-only packs. The values are the manifest's `packs[].params` initial values with the stage's
 `packs.<index>.params.<key>` binding targets applied, clamped to the pack.json ranges.
 
+### Audio inputs
+
+A screen pack that declares `"requires": ["inputs.audio"]` reads the song's beat analysis with the same helpers as
+surface / effect / world packs (`shaders/pack_inputs.hlsli`):
+
+```hlsl
+PackInputValid(PACK_IN_AUDIO) // true while the analysis is ready (all values 0 otherwise)
+PackAudioBeat()               // phase 0..1 within the current beat
+PackAudioDownbeat()           // phase 0..1 within the current bar
+PackAudioBeatCount()          // continuous beat count (beat index + phase; negative before the first beat)
+PackAudioOnset()              // latest onset strength, decaying (0.25 s)
+PackAudioEnergy()             // the current beat's normalised RMS 0..1
+PackAudioSection()            // 0 low / 0.5 mid / 1 high
+PackAudioBpm()
+```
+
+The screen pass has no scene constants: the host passes the frame's two audio vectors in the pass constants `gP1` /
+`gP2` (`StageScreens`), and `screen_api.hlsli` maps `gPackAudio0` / `gPackAudio1` onto them. A pack without the
+capability compiles and renders exactly as before. Audio time = the song's audio cursor (play), the timeline time minus
+the audio offset (studio), the rendered frame's time in offline renders.
+
 ### Pack textures
 
 The v2 pack texture table (`pack.json` `"textures"`, at most 16) is bound at `t0, space5` and sampled with

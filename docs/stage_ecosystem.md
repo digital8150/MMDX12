@@ -29,7 +29,8 @@ videos, (3) a Times Square-like plaza with many LED billboards and building fire
 - **Scripting layers** (every layer is a pure function of time + params + audio analysis, so seeks, reverse playback,
   video and GI shutter samples agree):
   - L0 declarative (`stage.json`): params, variants (= named param value sets), bindings (param -> target with
-    scale / offset / curve), cue tracks.
+    scale / offset / curve / gain param), cue tracks, and procedural **drivers** (a param modulated by the beat / bar /
+    onset / energy / section or the clock: docs/stage_format.md "drivers").
   - L1 GPU code through the existing pack system, bundled inside the stage: surface packs on stage materials, world
     packs anchored to stage sockets, and the new **screen packs** (`"type": "screen"`, a pixel shader that draws LED
     content from time / audio / params).

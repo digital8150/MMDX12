@@ -91,10 +91,11 @@ without them renders exactly as before.
 | `world.overlay` | The overlay surfaces (a wet floor / decal over the lit scene) | `surfaces[].blend: "overlay"` |
 | `world.body` | The body colliders (head, upper body, shoulders / arms, lower body) on top of the feet / hands | - |
 | `world.lights` | The scene's sun and punctual direct lighting, with the scene's shadows (`PackSunLight`, `PackPunctualLight`, `PackDirectDiffuse`, `PackDirectThin`) | - |
+| `inputs.audio` | The song's beat analysis (`PackAudioBeat`, `PackAudioDownbeat`, `PackAudioOnset`, `PackAudioEnergy`, `PackAudioSection`, `PackAudioBpm`, `PackAudioBeatCount`, `PackInputValid(PACK_IN_AUDIO)`) in every world function | - |
 
 The world shaders are compiled with `PACK_CAP_WORLD_CAMERA`, `PACK_CAP_WORLD_ANCHOR`, `PACK_CAP_WORLD_GROUND`,
-`PACK_CAP_WORLD_OVERLAY`, `PACK_CAP_WORLD_BODY` and `PACK_CAP_WORLD_LIGHTS` defined to `1` when the pack requires the
-matching capability. The API functions and the struct fields below exist only under their macro, so a pack that does
+`PACK_CAP_WORLD_OVERLAY`, `PACK_CAP_WORLD_BODY`, `PACK_CAP_WORLD_LIGHTS` and `PACK_CAP_INPUTS_AUDIO` defined to `1`
+when the pack requires the matching capability (`inputs.audio` needs no `"inputs"` list: requiring it is enough). The API functions and the struct fields below exist only under their macro, so a pack that does
 not require a capability cannot use it. Packs without `world.body` see only the old (feet / toes / wrists) colliders,
 in the old order and count.
 
@@ -321,6 +322,29 @@ struct PackParticleShadeIn {
     falloff, spot cone and visibility (see §6.5).
   - `PackDirectDiffuse(pos, n)`, `PackDirectThin(pos, n, viewDir, transmission)` (`world.lights`): Lambert and
     two-sided thin-sheet direct lighting from the sun and every punctual light (see §6.5).
+- **Audio** (`inputs.audio`, `shaders/pack_inputs.hlsli`; the same values surface / effect packs read, from the
+  scene constants every world entry point binds — simulate, spawn, field update, surface and particle VS / PS):
+  - `PackInputValid(PACK_IN_AUDIO)`: `true` while the song's analysis is ready (all values are 0 otherwise: no audio,
+    analysis still running or failed).
+  - `PackAudioBeat()` / `PackAudioDownbeat()`: the phase 0..1 within the current beat / bar.
+  - `PackAudioBeatCount()`: the continuous beat count (beat index + phase; negative before the first beat, keeps
+    counting after the last one) — use it for chases and cycles that span several beats.
+  - `PackAudioOnset()`: the latest onset's strength decaying with a 0.25 s time constant. `PackAudioEnergy()`: the
+    current beat's normalised RMS 0..1. `PackAudioSection()`: 0 low / 0.5 mid / 1 high. `PackAudioBpm()`.
+  - In a seek re-simulation every step sees the **current frame's** audio values (like the camera): they are not part
+    of the simulation state. Stateless `spawn` systems are exact; a stateful `simulate` that integrates audio over time
+    is exact only during playback.
+- **Particle billboards** (no capability): `PackBillboardRight()` / `PackBillboardUp()`: the unit world axes the host
+  expands a particle quad along — the frame camera's right / up (every quad is parallel to the view plane; it does not
+  turn toward the eye per particle). In the particle shade function the quad point is
+  `posWorld = drawnPos + (uv.x - 0.5) * size * right + (uv.y - 0.5) * size * up`: `size` (`particle.size`) is the
+  quad's **edge length**, `uv (0, 0)` is the bottom-left corner and `uv.y` grows **up**. In the shade function
+  `i.posWorld` (and `i.particle.pos`) is the shaded point on the quad, not its centre, and `i.particle.vel` is 0: the
+  point in quad space is `q = i.uv - 0.5` (x along right, y along up), and a world direction `d` (a velocity the pack
+  keeps in `particle.data`, a beam axis) lands in that space as `normalize(float2(dot(d, right), dot(d, up)))`, so a
+  shape can be oriented by rotating `q` (a streak, a star, a beam). The centre is
+  `i.posWorld - q.x * size * right - q.y * size * up`. Offline GI uses the same axes (the frame camera's; the per-iteration lens / shutter
+  camera only projects).
 - **Deterministic Hashing**:
   - `PackRandom(seed)` / `PackRandom(seed, salt)` / `PackRandom(seed, salt1, salt2)`: PCG-based deterministic pseudo-random float in [0, 1).
   - `PackRandom2(seed, salt)` / `PackRandom3(seed, salt)`.
