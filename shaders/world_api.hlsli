@@ -109,6 +109,21 @@ inline float4 WorldClip(float3 posWorld) {
 
 #define gTime (gWorldTime.x)
 
+// The audio inputs ("requires": ["inputs.audio"], PACK_CAP_INPUTS_AUDIO): PackAudioBeat / Downbeat / Onset / Energy /
+// Section / Bpm / BeatCount, PackInputValid(PACK_IN_AUDIO). They read gPackAudio0 / 1 of the scene constants
+// (common.hlsli, b0), which every world entry point binds. A seek re-simulation sees the current frame's values in
+// every step (like the camera).
+#include "pack_inputs.hlsli"
+
+// ---- particle billboards --------------------------------------------------------------------
+// The unit world axes VSWorldParticle expands a particle's quad along: the frame camera's right / up (the rows of
+// gInvView; every quad faces the view plane, not the eye). A quad point is
+// drawn pos + (uv.x - 0.5) * size * right + (uv.y - 0.5) * size * up: size is the quad's edge length and uv.y grows
+// UP (uv (0, 0) = bottom left, (1, 1) = top right). In the shade function posWorld is the shaded quad point, so the
+// quad-space point is uv - 0.5; project a world direction onto (right, up) to orient a shape.
+inline float3 PackBillboardRight() { return normalize(gInvView[0].xyz); }
+inline float3 PackBillboardUp() { return normalize(gInvView[1].xyz); }
+
 // Extended parameter buffer (128 slots float4)
 cbuffer PackParamsExt : register(b4) {
     float4 gPackParamSlots[128];

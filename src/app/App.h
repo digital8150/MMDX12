@@ -414,6 +414,16 @@ private:
     void FillPackInputs(FrameView& view, const ModelInstance* performer, double audioSeconds);
     bool NeedsAudioInputs() const;
     void EnsureAudioAnalysis(const std::filesystem::path& audioPath);
+    // The playing audio's analysis at `audioSeconds` for the stage drivers (audioValid false: no audio / not ready).
+    StageSignals StageAudioSignals(double audioSeconds);
+    // Play mode's audio time for frame `frame`: the motion clock in offline renders, else the audio cursor.
+    double PlayAudioSeconds(float frame) const {
+        return (offline_.mode != OfflineMode::None && scene_ && scene_->motionFps > 0.0f)
+                   ? (double)(frame / scene_->motionFps)
+                   : playTime_;
+    }
+    // The analysis of the audio that plays now, when NeedsAudioInputs() and it is ready (nullptr otherwise).
+    const BeatAnalysis* CurrentAudioAnalysis();
     // M5a: appends one MME scene object (CONTROLOBJECT / DefaultEffect matching) parallel to view.models. `inst`
     // may be null (no per-model data); `displayName` is the model's display name.
     void AppendMmeObject(FrameView& view, const GpuModel* gpu, const ModelInstance* inst, bool visible,

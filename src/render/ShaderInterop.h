@@ -70,7 +70,7 @@ static_assert(sizeof(GpuPackInputRole) == 64, "GpuPackInputRole layout");
 struct GpuPackInputs {
     GpuPackInputRole roles[8];  // PerformerHead..CameraFocus
     DirectX::XMFLOAT4 audio0;   // x = beat, y = downbeat, z = onset, w = energy
-    DirectX::XMFLOAT4 audio1;   // x = section, y = bpm, z = valid, w = 0
+    DirectX::XMFLOAT4 audio1;   // x = section, y = bpm, z = valid, w = beat count (beat index + phase)
 };
 static_assert(sizeof(GpuPackInputs) == 544, "GpuPackInputs layout");
 

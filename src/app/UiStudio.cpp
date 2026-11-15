@@ -861,10 +861,11 @@ void App::StudioApplyStageTargets() {
     if (d.stages.empty()) return;
     const uint64_t frame = ctx_.FrameNumber();
     const float timelineFrame = (float)(d.time * kMmdFps);
+    const StageSignals stageSig = StageAudioSignals(d.time - d.audioOffset);   // audio.* drivers (audio time)
     for (StudioStage& stage : d.stages) {
         if (!stage.manifest) continue;
         const StudioStageOverrides ov = StageOverridesAt(stage, timelineFrame);
-        const StageEvalResult eval = EvaluateStage(*stage.manifest, stage.variant, ov.values, d.time, ov.skipCues);
+        const StageEvalResult eval = EvaluateStage(*stage.manifest, stage.variant, ov.values, d.time, ov.skipCues, &stageSig);
         for (const std::string& w : eval.warnings) LOG_WARN("studio: stage %s: %s", stage.stageId.c_str(), w.c_str());
         // materials: one rule list per stage per frame, applied to every part of this stage in the document
         if (!stage.manifest->materials.empty()) {
@@ -984,10 +985,11 @@ void App::StudioStageScreens(FrameView& view) {
         }
         return false;
     };
+    const StageSignals stageSig = StageAudioSignals(d.time - d.audioOffset);
     for (const studio::StudioStage& stage : d.stages) {
         if (!stage.manifest) continue;
         const StudioStageOverrides ov = StageOverridesAt(stage, (float)(d.time * kMmdFps));
-        const StageEvalResult eval = EvaluateStage(*stage.manifest, stage.variant, ov.values, d.time, ov.skipCues);
+        const StageEvalResult eval = EvaluateStage(*stage.manifest, stage.variant, ov.values, d.time, ov.skipCues, &stageSig);
         const std::vector<StageScreenState> screens = StudioStageScreenStates(stage, eval);
         if (screens.empty()) continue;
         // the stage's parts in the document (its material targets use the same set)
@@ -1715,10 +1717,11 @@ void App::BuildStudioFrameView(FrameView& view) {
     }
     // S6: each stage's bundled world packs, after the project's own worlds and at their sockets (the socket's node bone
     // world matrix x its explicit offset; the parts were posed by UpdateStudioScene). Not editable outliner entities.
+    const StageSignals stageSig = StageAudioSignals(d.time - d.audioOffset);
     for (const studio::StudioStage& stage : d.stages) {
         if (!stage.manifest || stage.manifest->packs.empty()) continue;
         const studio::StudioStageOverrides ov = studio::StageOverridesAt(stage, worldFrame);
-        const StageEvalResult eval = EvaluateStage(*stage.manifest, stage.variant, ov.values, d.time, ov.skipCues);
+        const StageEvalResult eval = EvaluateStage(*stage.manifest, stage.variant, ov.values, d.time, ov.skipCues, &stageSig);
         const std::vector<StagePackState> packs = ResolveStagePacks(*stage.manifest, eval);
         const auto resolveNode = [&](const std::string& node, DirectX::XMFLOAT4X4& out) {
             for (const auto& mp : d.models) {

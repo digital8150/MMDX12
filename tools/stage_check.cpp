@@ -484,6 +484,168 @@ int SelfTest() {
         check(mmdx::ValidateStageManifest(on).empty(), "gltfLights: true validates");
     }
 
+    // L0 drivers: the shapes, blends, amount, clamp, and audio drivers skipped without signals
+    {
+        const std::string driverJson = R"({
+          "format": "mmdx-stage", "formatVersion": 1, "id": "drivertest", "version": "1", "name": "Driver test",
+          "models": [{"file": "x.glb"}],
+          "params": [
+            {"key": "beam", "type": "float", "default": 0.8, "min": 0.0, "max": 1.0},
+            {"key": "glow", "type": "float", "default": 2.0, "min": 0.0, "max": 10.0},
+            {"key": "spin", "type": "float", "default": 0.0, "min": -100.0, "max": 100.0},
+            {"key": "tint", "type": "color", "default": [0.5, 0.4, 1.0, 0.7]},
+            {"key": "react", "type": "float", "default": 0.5, "min": 0.0, "max": 1.0},
+            {"key": "steps", "type": "int", "default": 2, "min": 0, "max": 4}],
+          "drivers": [
+            {"param": "beam", "input": "audio.beat", "shape": "pulse", "power": 2, "min": 0.25, "max": 1.0},
+            {"param": "glow", "input": "time", "shape": "sine", "every": 2.0, "min": 1.0, "max": 3.0, "blend": "set"},
+            {"param": "spin", "input": "time", "shape": "ramp", "every": 0.5, "min": 0.0, "max": 10.0, "blend": "add"},
+            {"param": "tint", "input": "audio.energy", "min": 0.0, "max": 1.0, "blend": "mul", "amount": "react"},
+            {"param": "steps", "input": "time", "shape": "saw", "every": 1.0, "min": 0.0, "max": 10.0, "blend": "set"}]
+        })";
+        StageManifest dm;
+        check(mmdx::ParseStageManifest(driverJson, fs::path("drivertest"), dm, error), "driver manifest parses", error);
+        const auto dErrors = mmdx::ValidateStageManifest(dm);
+        check(dErrors.empty(), "driver manifest validates", dErrors.empty() ? "" : dErrors.front());
+        check(dm.drivers.size() == 5 && dm.drivers[0].hasPower && !dm.drivers[3].hasPower &&
+                  dm.drivers[1].shape == mmdx::StageDriverShape::Sine && dm.drivers[3].blend == mmdx::StageDriverBlend::Mul,
+              "drivers parsed");
+        check(mmdx::StageUsesAudio(dm), "StageUsesAudio: an audio.* driver");
+        const auto approx = [](float a, float b) { return std::abs(a - b) < 1e-4f; };
+
+        mmdx::StageSignals sig;
+        sig.audioValid = true;
+        sig.beatCount = 3.5;   // half way through a beat: pulse = (1 - 0.5)^2 = 0.25
+        sig.energy = 0.5f;
+        // t = 0.5 s: sine every 2 s -> f = 0.25 -> 0.5; ramp every 0.5 s -> u = 1 -> 10 added; saw f = 0.5 -> 5
+        auto dr = mmdx::EvaluateStage(dm, "", {}, 0.5, {}, &sig);
+        check(approx(dr.params.at("beam").x, 0.25f + 0.75f * 0.25f), "pulse driver", Hex(dr.params.at("beam").x));
+        check(approx(dr.params.at("glow").x, 2.0f), "sine driver (set)", Hex(dr.params.at("glow").x));
+        check(approx(dr.params.at("spin").x, 10.0f), "ramp driver (add, unwrapped)", Hex(dr.params.at("spin").x));
+        check(dr.params.at("steps").x == 4.0f, "int driver clamps and rounds", Hex(dr.params.at("steps").x));
+        // colour mul at energy 0.5, amount react 0.5: rgb * lerp(1, 0.5, 0.5) = rgb * 0.75, alpha kept
+        const auto& tint = dr.params.at("tint");
+        check(approx(tint.x, 0.375f) && approx(tint.y, 0.3f) && approx(tint.z, 0.75f) && approx(tint.w, 0.7f),
+              "colour mul with amount", Hex(tint.x) + " " + Hex(tint.w));
+        // the amount param's own override is read before the drivers
+        mmdx::StageParamValues full;
+        full["react"] = mmdx::StageValue::Number(1.0f);
+        auto dr2 = mmdx::EvaluateStage(dm, "", full, 0.5, {}, &sig);
+        check(approx(dr2.params.at("tint").x, 0.25f), "amount 1 = the full driven value", Hex(dr2.params.at("tint").x));
+        // no signals: audio drivers keep the base, time drivers still apply
+        auto dr3 = mmdx::EvaluateStage(dm, "", {}, 0.5);
+        check(approx(dr3.params.at("beam").x, 0.8f) && approx(dr3.params.at("tint").x, 0.5f),
+              "audio drivers skipped without signals", Hex(dr3.params.at("beam").x));
+        check(approx(dr3.params.at("glow").x, 2.0f), "time drivers apply without signals");
+        mmdx::StageSignals invalid = sig;
+        invalid.audioValid = false;
+        check(approx(mmdx::EvaluateStage(dm, "", {}, 0.5, {}, &invalid).params.at("beam").x, 0.8f),
+              "audio drivers skipped while the analysis is not valid");
+        // a driver's result clamps to the param's range (spin: ramp at t = 30 s adds 600 -> 100)
+        check(approx(mmdx::EvaluateStage(dm, "", {}, 30.0, {}, &sig).params.at("spin").x, 100.0f), "driver clamps to max");
+        // a negative beat count (before the first beat) still wraps into the cycle
+        sig.beatCount = -0.25;   // f = 0.75 -> pulse (0.25)^2
+        check(approx(mmdx::EvaluateStage(dm, "", {}, 0.5, {}, &sig).params.at("beam").x, 0.25f + 0.75f * 0.0625f),
+              "pulse before the first beat");
+        // square + duty, level power
+        mmdx::StageDriver sq;
+        sq.input = mmdx::StageDriverInput::Bar;
+        sq.shape = mmdx::StageDriverShape::Square;
+        sq.duty = 0.25f;
+        sig.barCount = 2.2;
+        double sv = -1;
+        check(mmdx::SampleStageDriver(sq, 0.0, &sig, sv) && sv == 1.0, "square on within the duty");
+        sig.barCount = 2.3;
+        check(mmdx::SampleStageDriver(sq, 0.0, &sig, sv) && sv == 0.0, "square off after the duty");
+        mmdx::StageDriver lvl;
+        lvl.input = mmdx::StageDriverInput::Onset;
+        sig.onset = 0.5f;
+        check(mmdx::SampleStageDriver(lvl, 0.0, &sig, sv) && approx((float)sv, 0.5f), "level input: power 1 by default");
+        lvl.hasPower = true;
+        lvl.power = 2.0f;
+        check(mmdx::SampleStageDriver(lvl, 0.0, &sig, sv) && approx((float)sv, 0.25f), "level input: explicit power");
+
+        // validation
+        const auto rejects = [&](const char* what, auto mutate) {
+            StageManifest b = dm;
+            mutate(b);
+            check(!mmdx::ValidateStageManifest(b).empty(), what);
+        };
+        rejects("driver: unknown param", [](StageManifest& b) { b.drivers[0].param = "nope"; });
+        rejects("driver: colour with set", [](StageManifest& b) { b.drivers[3].blend = mmdx::StageDriverBlend::Set; });
+        rejects("driver: colour with add", [](StageManifest& b) { b.drivers[3].blend = mmdx::StageDriverBlend::Add; });
+        rejects("driver: every <= 0", [](StageManifest& b) { b.drivers[1].every = 0.0f; });
+        rejects("driver: power <= 0", [](StageManifest& b) { b.drivers[0].power = -1.0f; });
+        rejects("driver: unknown amount param", [](StageManifest& b) { b.drivers[3].amount = "nope"; });
+        rejects("driver: amount param driven", [](StageManifest& b) { b.drivers[3].amount = "beam"; });
+        rejects("driver: bool param", [](StageManifest& b) {
+            StageParam p;
+            p.key = "flag";
+            p.type = mmdx::StageParamType::Bool;
+            b.params.push_back(p);
+            b.drivers[0].param = "flag";
+        });
+        StageManifest pm;
+        std::string perr;
+        std::string badJson = driverJson;
+        badJson.replace(badJson.find("\"shape\": \"pulse\""), 16, "\"shape\": \"blip\"");
+        check(!mmdx::ParseStageManifest(badJson, fs::path("drivertest"), pm, perr), "driver: unknown shape is a parse problem",
+              perr);
+        badJson = driverJson;
+        badJson.replace(badJson.find("\"every\": 2.0"), 12, "\"every\": \"2\"");
+        check(!mmdx::ParseStageManifest(badJson, fs::path("drivertest"), pm, perr), "driver: a wrong-typed field is a parse problem",
+              perr);
+        badJson = driverJson;
+        badJson.replace(badJson.find("\"input\": \"audio.beat\""), 21, "\"input\": \"audio.bass\"");
+        check(!mmdx::ParseStageManifest(badJson, fs::path("drivertest"), pm, perr), "driver: unknown input is a parse problem",
+              perr);
+        check(!mmdx::StageUsesAudio(m), "StageUsesAudio: no drivers");
+    }
+
+    // binding gain: out = (remap(value) * scale + offset) * the gain param's value after drivers
+    {
+        const std::string gainJson = R"({
+          "format": "mmdx-stage", "formatVersion": 1, "id": "gaintest", "version": "1", "name": "Gain test",
+          "models": [{"file": "x.glb"}],
+          "lights": [{"kind": "spot", "name": "beam_01", "values": {"intensity": 1.0, "color": [1, 1, 1]}}],
+          "params": [
+            {"key": "beamChase1", "type": "float", "default": 0.5, "min": 0.0, "max": 1.0},
+            {"key": "beamLevel", "type": "float", "default": 1.0, "min": 0.0, "max": 1.0},
+            {"key": "beamTint", "type": "color", "default": [0.5, 1.0, 0.25, 0.6]},
+            {"key": "on", "type": "bool", "default": true}],
+          "drivers": [{"param": "beamLevel", "input": "time", "shape": "saw", "every": 1.0, "min": 0.0, "max": 1.0}],
+          "bindings": [
+            {"param": "beamChase1", "target": "lights.beam_01.intensity", "scale": 3.6, "gain": "beamLevel"},
+            {"param": "beamTint", "target": "lights.beam_01.color", "gain": "beamLevel"},
+            {"param": "on", "target": "lights.beam_01.enabled"}]
+        })";
+        StageManifest gm;
+        check(mmdx::ParseStageManifest(gainJson, fs::path("gaintest"), gm, error), "gain manifest parses", error);
+        const auto gErrors = mmdx::ValidateStageManifest(gm);
+        check(gErrors.empty(), "gain manifest validates", gErrors.empty() ? "" : gErrors.front());
+        check(gm.bindings.size() == 3 && gm.bindings[0].gain == "beamLevel" && gm.bindings[2].gain.empty(),
+              "gain parsed");
+        // t = 0.25 s: saw -> beamLevel 0.25; intensity 0.5 * 3.6 * 0.25 = 0.45; colour rgb * 0.25, alpha kept
+        const auto gr = mmdx::EvaluateStage(gm, "", {}, 0.25);
+        check(gr.warnings.empty(), "gain: no warnings", gr.warnings.empty() ? "" : gr.warnings.front());
+        const auto* gi = findTarget(gr, "lights.beam_01.intensity");
+        check(gi && std::abs(gi->value.x - 0.45f) < 1e-4f, "gain on a number target (driven gain)",
+              gi ? Hex(gi->value.x) : "");
+        const auto* gc = findTarget(gr, "lights.beam_01.color");
+        check(gc && std::abs(gc->value.x - 0.125f) < 1e-4f && std::abs(gc->value.z - 0.0625f) < 1e-4f &&
+                  std::abs(gc->value.w - 0.6f) < 1e-4f,
+              "gain on a colour target keeps alpha", gc ? Hex(gc->value.x) : "");
+        StageManifest badGain = gm;
+        badGain.bindings[0].gain = "nope";
+        check(!mmdx::ValidateStageManifest(badGain).empty(), "gain: unknown param rejected");
+        badGain = gm;
+        badGain.bindings[0].gain = "beamTint";
+        check(!mmdx::ValidateStageManifest(badGain).empty(), "gain: a colour gain param rejected");
+        badGain = gm;
+        badGain.bindings[2].gain = "beamLevel";
+        check(!mmdx::ValidateStageManifest(badGain).empty(), "gain: a bool target with a gain rejected");
+    }
+
     // validation catches author errors
     StageManifest bad2 = m;
     bad2.bindings.push_back({"fillLevel", "lights.nosuch.intensity", 1, 0, std::nullopt});

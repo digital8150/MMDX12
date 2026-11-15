@@ -82,4 +82,9 @@ float PackAudioBpm() {
     return gPackAudio1.y;
 }
 
+// Continuous beat count: index of the current beat + its phase (negative before the first beat).
+float PackAudioBeatCount() {
+    return gPackAudio1.w;
+}
+
 #endif // PACK_CAP_INPUTS_AUDIO

@@ -91,7 +91,8 @@ void StageScreens::ForgetModel(uint64_t uid) {
 
 namespace {
 
-// S6: the fullscreen PSO of one screen pack: b1 16 root constants (gP0 = size, time, frame), b2 the pack's 16
+// S6: the fullscreen PSO of one screen pack: b1 16 root constants (gP0 = size, time, frame; gP1 / gP2 = the audio
+// inputs, read only by a pack that requires "inputs.audio"), b2 the pack's 16
 // params, t0..t15 space5 its textures. No b0: a screen pack reads no scene constants (screen_api.hlsli), so the pass
 // needs nothing from the frame's constant buffer and works in every render path (raster / PT / offline GI).
 bool CreateProgramPipe(Dx12Context& ctx, const std::filesystem::path& shaderDir, const ShaderPack& pack,
@@ -137,6 +138,7 @@ bool CreateProgramPipe(Dx12Context& ctx, const std::filesystem::path& shaderDir,
     ShaderDefines defines = {{"MMDX_PACK", "\"" + inc + "\""},
                              {"PACK_TEX_COUNT", std::to_string(texCount)},
                              {"PACK_TEX_CLAMP_MASK", std::to_string(clampMask) + "u"}};
+    if (pack.HasCap("inputs.audio")) defines.push_back({"PACK_CAP_INPUTS_AUDIO", "1"});
     std::string errors;
     ComPtr<ID3DBlob> vs = CompileShaderDxc(file, "VSFullscreen", "vs_6_0", defines, &errors);
     ComPtr<ID3DBlob> ps = vs ? CompileShaderDxc(file, "PSPackScreen", "ps_6_0", defines, &errors) : nullptr;
@@ -175,7 +177,8 @@ bool CreateProgramPipe(Dx12Context& ctx, const std::filesystem::path& shaderDir,
 // Draws one program screen: the pack's PSO over the screen's own texture, at `time` seconds. The texture is left in
 // ALL_SHADER_RESOURCE (the raster material shaders and the PT / GI compute shaders read it).
 bool DrawProgramScreen(Dx12Context& ctx, ID3D12GraphicsCommandList* cmd, ProgramPipe& pipe, const ShaderPack& pack,
-                       Texture& target, float time, uint64_t frame, const std::map<std::string, float>& params) {
+                       Texture& target, float time, uint64_t frame, const std::map<std::string, float>& params,
+                       const GpuPackInputs& inputs) {
     if (!pipe.pso || !target) return false;
     ID3D12DescriptorHeap* heaps[] = {ctx.SrvHeap().Heap()};
     cmd->SetDescriptorHeaps(1, heaps);
@@ -184,8 +187,11 @@ bool DrawProgramScreen(Dx12Context& ctx, ID3D12GraphicsCommandList* cmd, Program
     cmd->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
     cmd->IASetVertexBuffers(0, 0, nullptr);
     cmd->IASetIndexBuffer(nullptr);
-    const float cb[16] = {(float)target.width, (float)target.height, time, (float)(frame & 63ull), 0, 0, 0, 0,
-                          0, 0, 0, 0, 0, 0, 0, 0};
+    // gP1 / gP2 = the frame's audio inputs (screen_api.hlsli maps gPackAudio0 / 1 onto them for pack_inputs.hlsli)
+    const float cb[16] = {(float)target.width, (float)target.height, time, (float)(frame & 63ull),
+                          inputs.audio0.x, inputs.audio0.y, inputs.audio0.z, inputs.audio0.w,
+                          inputs.audio1.x, inputs.audio1.y, inputs.audio1.z, inputs.audio1.w,
+                          0, 0, 0, 0};
     cmd->SetGraphicsRoot32BitConstants(0, 16, cb, 0);
     const PackParamValues values = pack.Resolve(params);
     cmd->SetGraphicsRoot32BitConstants(1, (uint32_t)kPackMaxParams, values.data(), 0);
@@ -476,7 +482,8 @@ void StageScreens::Render(Dx12Context& ctx, ID3D12GraphicsCommandList* cmd, cons
             it = impl.programs.emplace(s.pack, std::move(pipe)).first;
         }
         if (it->second.failed) continue;   // the screen keeps its previous content (black before the first frame)
-        DrawProgramScreen(ctx, cmd, it->second, *pack, s.tex, view.sceneTime, ctx.FrameNumber(), view.screens[i].params);
+        DrawProgramScreen(ctx, cmd, it->second, *pack, s.tex, view.sceneTime, ctx.FrameNumber(), view.screens[i].params,
+                          view.packInputs);
     }
 
     // 4. Camera feeds: render at most kMaxFeedsPerFrame per frame, round robin over the rest. Screens showing the same

@@ -583,6 +583,7 @@ int wmain(int argc, wchar_t** argv) {
             if (pack.HasCap("world.overlay")) baseDefines.push_back({"PACK_CAP_WORLD_OVERLAY", "1"});
             if (pack.HasCap("world.body")) baseDefines.push_back({"PACK_CAP_WORLD_BODY", "1"});
             if (pack.HasCap("world.lights")) baseDefines.push_back({"PACK_CAP_WORLD_LIGHTS", "1"});
+            if (pack.HasCap("inputs.audio")) baseDefines.push_back({"PACK_CAP_INPUTS_AUDIO", "1"});
             if (pack.world) {
                 for (const auto& ps : pack.world->particles) {
                     if (!ps.simulate.empty()) {
@@ -672,6 +673,7 @@ int wmain(int argc, wchar_t** argv) {
                 {"MMDX_PACK", "\"" + inc + "\""},
                 {"PACK_TEX_COUNT", std::to_string(texCount)},
                 {"PACK_TEX_CLAMP_MASK", std::to_string(clampMask) + "u"}};
+            if (pack.HasCap("inputs.audio")) defines.push_back({"PACK_CAP_INPUTS_AUDIO", "1"});
             printf("compile: PSPackScreen of %s (ps_6_0, MMDX_PACK = %s, %u textures)\n",
                    mmdx::PathToUtf8(hostHlsl.filename()).c_str(), inc.c_str(), texCount);
             std::string errors;

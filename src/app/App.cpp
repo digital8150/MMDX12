@@ -2444,9 +2444,11 @@ void App::UpdateScene(float frame) {
     }
     // S1b: the MMDX stage's material targets at the song time, BEFORE UpdateMaterials so its rebuild (a
     // receiveShadow override) lands in this frame's constants ring.
-    if (scene_->stage && scene_->stage->Valid() && screen_ != Screen::BenchRender)
+    if (scene_->stage && scene_->stage->Valid() && screen_ != Screen::BenchRender) {
+        const StageSignals sig = StageAudioSignals(PlayAudioSeconds(frame));   // the audio.* drivers
         scene_->stage->Apply(scene_->motionFps > 0.0f ? (double)frame / scene_->motionFps : playTime_,
-                             ctx_.FrameNumber());
+                             ctx_.FrameNumber(), &sig);
+    }
     for (size_t i = 0; i < scene_->stages.size(); ++i) {
         ModelInstance& st = *scene_->stages[i];
         // M8a: the bundled stage's motion animates on the song clock (the normal pose path, no physics).
@@ -2681,8 +2683,10 @@ void App::BuildFrameView(float frame, FrameView& view) {
     // records (SetPbrOverrides), the light targets into the rig BuildSceneLighting resolves below.
     const double stageSeconds = scene_->motionFps > 0.0f ? (double)frame / scene_->motionFps : playTime_;
     const std::vector<studio::SceneLight>* stageRig = nullptr;
-    if (scene_->stage && scene_->stage->Valid() && screen_ != Screen::BenchRun)
-        stageRig = &scene_->stage->Apply(stageSeconds, ctx_.FrameNumber());
+    if (scene_->stage && scene_->stage->Valid() && screen_ != Screen::BenchRun) {
+        const StageSignals sig = StageAudioSignals(PlayAudioSeconds(frame));   // usually cached: UpdateScene applied it
+        stageRig = &scene_->stage->Apply(stageSeconds, ctx_.FrameNumber(), &sig);
+    }
     const bool stageLights = stageRig && !stageRig->empty();    if (stageLights && preset == LightingPreset::Stage) {
         // the stage's own rig (cue / binding targets on its lights included)
         LightAnchors stageAnchors;
@@ -2823,9 +2827,7 @@ void App::BuildFrameView(float frame, FrameView& view) {
     if (options_.quitAfterFrames > 0 || !options_.uiScript.empty() || options_.mcp == 1 || HeadlessRun()) {
         view.effectDt = 1.0f / 60.0f;
     }
-    const double audioSec = (offline_.mode != OfflineMode::None && scene_ && scene_->motionFps > 0.0f)
-                                ? (double)(frame / scene_->motionFps)
-                                : playTime_;
+    const double audioSec = PlayAudioSeconds(frame);
     FillPackInputs(view, scene_ ? scene_->character.get() : nullptr, audioSec);
 
     // World entities: one instance per enabled stack entry (identity transform), on the song clock used for the frame.

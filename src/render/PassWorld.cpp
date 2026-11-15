@@ -928,6 +928,8 @@ WorldPass::Impl::PackPipelines* WorldPass::Impl::GetOrCompilePipelines(Dx12Conte
     if (pack.HasCap("world.body")) baseDefines.push_back({"PACK_CAP_WORLD_BODY", "1"});
     const bool worldLights = pack.HasCap("world.lights");
     if (worldLights) baseDefines.push_back({"PACK_CAP_WORLD_LIGHTS", "1"});
+    // The audio inputs (pack_inputs.hlsli): gPackAudio0 / 1 of the scene constants every world entry point binds.
+    if (pack.HasCap("inputs.audio")) baseDefines.push_back({"PACK_CAP_INPUTS_AUDIO", "1"});
     // The ray-query shadow path (RT / PT / offline GI): the same PSOs with the ps_6_5 variant, only for lights packs.
     const bool lightsRt = worldLights && RtPipelinesSupported(ctx);
 

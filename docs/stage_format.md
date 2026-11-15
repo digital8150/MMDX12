@@ -66,6 +66,7 @@ throws.
 | `groups`, `params`, `variants`, `defaultVariant` | array / string | the exposed parameter surface |
 | `bindings` | array | param → target assignments |
 | `cues` | array | L0 timeline: keyed param tracks |
+| `drivers` | array | L0 procedural: params modulated by the beat / bar / onset / energy / section or the clock |
 | `gltfLights` | bool | **S2a**: take the glTF lights of the parts into the rig (see below), default `false` |
 
 ## `models`
@@ -526,12 +527,16 @@ variants = the plain defaults). A variant that names an unknown param is an erro
 "bindings": [
   {"param": "keyIntensity", "target": "lights.key.intensity"},
   {"param": "fillLevel", "target": "lights.fill.intensity", "scale": 2.0, "offset": 0.25},
-  {"param": "mirrorAmount", "target": "materials.mirror_wall.roughness", "remap": [0, 1, 0.5, 0.02]}
+  {"param": "mirrorAmount", "target": "materials.mirror_wall.roughness", "remap": [0, 1, 0.5, 0.02]},
+  {"param": "beamChase1", "target": "lights.beam_01.intensity", "scale": 3.6, "gain": "beamLevel"}
 ]
 ```
 
-`out = remap(value) * scale + offset`, where `remap: [inMin, inMax, outMin, outMax]` maps the param range onto the
-target range first (an empty input range is an error). Several bindings may hit one target: they are emitted in list
+`out = (remap(value) * scale + offset) * gain`, where `remap: [inMin, inMax, outMin, outMax]` maps the param range onto
+the target range first (an empty input range is an error). `gain` is optional: the key of a `float` / `int` param whose
+resolved value (after the drivers) multiplies the result: a number target `out * g`, a colour / vec3 target its rgb
+(xyz) `* g` with alpha kept. A gain on a bool / string target, an unknown gain param or a gain param of another type is
+a validation error; without `gain` nothing changes. Several bindings may hit one target: they are emitted in list
 order and applied in that order. Target paths:
 
 | path | value type |
@@ -566,18 +571,69 @@ first key and after the last, that key holds (as MMD does). Frames are 30 fps so
 The studio keys stage params itself in S3; these cue tracks are the stage's own light show, and a project track
 overrides them (project overrides beat cues, see below).
 
+## `drivers` (L0 procedural)
+
+```json
+"drivers": [
+  {"param": "beamLevel", "input": "audio.beat", "shape": "pulse", "every": 1, "phase": 0, "power": 2,
+   "min": 0.35, "max": 1.0, "blend": "mul", "amount": "beatReact"},
+  {"param": "hazeDrift", "input": "time", "shape": "sine", "every": 8, "min": 0.8, "max": 1.2, "blend": "mul"}
+]
+```
+
+A driver modulates one param from the song's beat analysis or the clock, with no keys. Drivers run **last**: they
+modulate the value defaults < variant < cues < overrides resolved (in the studio that includes the user's own value or
+key), in list order, each on the previous driver's result.
+
+| field | type | default | meaning |
+|---|---|---|---|
+| `param` | string | (required) | a `float`, `int` or `color` param (`bool` / `enum` = validation error) |
+| `input` | string | (required) | `audio.beat`, `audio.bar`, `audio.onset`, `audio.energy`, `audio.section` or `time` |
+| `shape` | string | `pulse` | `pulse`, `saw`, `sine`, `triangle`, `square`, `ramp` (cyclic inputs only) |
+| `every` | float > 0 | 1 | beats / bars per cycle (`time`: the cycle length in seconds) |
+| `phase` | float | 0 | cycles added to the count |
+| `power` | float > 0 | 2 | pulse sharpness; level inputs: an exponent, applied only when given (else 1) |
+| `duty` | 0..1 | 0.5 | `square`: the on share of a cycle |
+| `min`, `max` | float | 0, 1 | the output range: `v = min + (max - min) * s` |
+| `blend` | string | `set` | `set` (v), `add` (base + v), `mul` (base * v); a colour param takes `mul` only (rgb * v, alpha kept) |
+| `amount` | string | none | a `float` param key: `result = lerp(base, driven, clamp(amount, 0, 1))` |
+
+Signal `s`:
+
+* cyclic inputs (`audio.beat`, `audio.bar`, `time`): `u = count / every + phase`, `count` = the continuous beat count
+  (beat index + phase; negative before the first beat), the bar count (downbeat index + bar phase) or the song seconds
+  (clamped to 0, like cues). `f = u - floor(u)`. `saw` = f, `pulse` = (1 - f)^power, `sine` = 0.5 - 0.5 cos(2 pi f),
+  `triangle` = 1 - |2f - 1|, `square` = f < duty ? 1 : 0, `ramp` = u (unbounded, not wrapped).
+* level inputs (`audio.onset` = the decaying onset envelope, `audio.energy` = the current beat's normalised RMS,
+  `audio.section` = 0 low / 0.5 mid / 1 high): `s = clamp(value, 0, 1)^power`; `shape` / `every` / `phase` are ignored.
+
+`amount` reads its param's value **before** any driver (an amount param cannot itself be driven: validation error).
+The result is clamped to the param's range (`int` rounds).
+
+**Audio unavailable**: an `audio.*` driver is skipped entirely (the param keeps its base) when there is no song audio
+or its analysis is not ready / failed (`StageSignals::audioValid` false; the analysis runs on a worker thread, and
+offline renders wait for it). `time` drivers always apply. The analysis is the same one the packs' `inputs.audio` read
+(`audio/BeatAnalysis`, sampled at the frame's audio time: play = the audio cursor / the motion clock in offline
+renders, studio = timeline time - audio offset).
+
+Validation: unknown param / amount param, a `bool` / `enum` param, `set` / `add` on a colour, `every` <= 0, `power` <=
+0, `duty` outside 0..1, an amount param that is not a float or is itself driven. Parse problems: a wrong-typed field,
+an unknown `input` / `shape` / `blend` string, a missing `param` / `input`.
+
 ## Evaluation (pure)
-`EvaluateStage(manifest, variantId, overrides, timeSeconds) -> StageEvalResult`
+`EvaluateStage(manifest, variantId, overrides, timeSeconds, skipCues, signals) -> StageEvalResult`
 (`asset/StageEval.h`) is the single implementation used by play, studio, GI and the tools. Order per param:
 
 1. the param's default,
 2. the chosen variant's value (`variantId` empty = `defaultVariant`; an unknown id warns and uses the defaults),
 3. the cue track's value at `time` (clamped to 0),
-4. the caller's overrides (a project's saved values).
+4. the caller's overrides (a project's saved values),
+5. the drivers, in list order (`signals` = `StageSignals`, the song's beat analysis at the frame's audio time; nullptr or
+   `audioValid` false skips the `audio.*` drivers).
 
 Values are clamped to their param's range / option list. Then every binding turns its param's resolved value into one
-assignment (`target` + typed value: float, vec3, colour, bool or string). The function is deterministic and does no
-I/O, so seeks, reverse playback, video and GI shutter samples agree.
+assignment (`target` + typed value: float, vec3, colour, bool or string; times its `gain` param's resolved value). The
+function is deterministic and does no I/O, so seeks, reverse playback, video and GI shutter samples agree.
 
 ## Runtime (S1b: loading, materials, lights, variants)
 
@@ -635,7 +691,8 @@ adds the file / model checks:
   param keys / variant ids / group ids;
 * references: groups, screens (from material rules and packs), sockets (from packs), cameras (from screens), params
   (from variants, bindings, cues), the default variant, pack indices;
-* binding targets and type compatibility, cue track shape, `remap` ranges;
+* binding targets and type compatibility, binding `gain` params, cue track shape, `remap` ranges, drivers (see
+  `drivers`);
 * pack roles and their required fields, screen sources and their required fields, sun / ambient counts, cone angles;
 * `stage_check` only: declared files exist, every model part loads (`LoadModelFile`), material names / globs in
   `materials` / `screens` / surface packs match a loaded material, previews exist, and a size budget report.

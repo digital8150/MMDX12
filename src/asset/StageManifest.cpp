@@ -283,6 +283,48 @@ std::string StageFileStem(const std::string& file) {
     return dot == std::string::npos ? name : name.substr(0, dot);
 }
 
+const char* StageDriverInputName(StageDriverInput in) {
+    switch (in) {
+    case StageDriverInput::Beat: return "audio.beat";
+    case StageDriverInput::Bar: return "audio.bar";
+    case StageDriverInput::Onset: return "audio.onset";
+    case StageDriverInput::Energy: return "audio.energy";
+    case StageDriverInput::Section: return "audio.section";
+    case StageDriverInput::Time: return "time";
+    }
+    return "time";
+}
+
+bool ParseStageDriverInput(const std::string& s, StageDriverInput& out) {
+    for (StageDriverInput in : {StageDriverInput::Beat, StageDriverInput::Bar, StageDriverInput::Onset,
+                                StageDriverInput::Energy, StageDriverInput::Section, StageDriverInput::Time})
+        if (s == StageDriverInputName(in)) { out = in; return true; }
+    return false;
+}
+
+bool ParseStageDriverShape(const std::string& s, StageDriverShape& out) {
+    if (s == "pulse") { out = StageDriverShape::Pulse; return true; }
+    if (s == "saw") { out = StageDriverShape::Saw; return true; }
+    if (s == "sine") { out = StageDriverShape::Sine; return true; }
+    if (s == "triangle") { out = StageDriverShape::Triangle; return true; }
+    if (s == "square") { out = StageDriverShape::Square; return true; }
+    if (s == "ramp") { out = StageDriverShape::Ramp; return true; }
+    return false;
+}
+
+bool ParseStageDriverBlend(const std::string& s, StageDriverBlend& out) {
+    if (s == "set") { out = StageDriverBlend::Set; return true; }
+    if (s == "add") { out = StageDriverBlend::Add; return true; }
+    if (s == "mul") { out = StageDriverBlend::Mul; return true; }
+    return false;
+}
+
+bool StageUsesAudio(const StageManifest& manifest) {
+    for (const StageDriver& d : manifest.drivers)
+        if (StageDriverIsAudio(d.input)) return true;
+    return false;
+}
+
 // ---- manifest lookups ------------------------------------------------------------------------------------------------
 
 const StageParam* StageManifest::FindParam(const std::string& key) const {
@@ -1128,6 +1170,10 @@ void ParseBindings(const nlohmann::json& j, StageManifest& out, ParseCtx& ctx) {
         }
         binding.scale = (float)ReadDouble(b, "scale", binding.scale);
         binding.offset = (float)ReadDouble(b, "offset", binding.offset);
+        if (const auto g = b.find("gain"); g != b.end()) {
+            if (g->is_string()) binding.gain = g->get<std::string>();
+            else ctx.Add("bindings: " + binding.param + " -> " + binding.target + ": \"gain\" must be a param key");
+        }
         if (const nlohmann::json* remap = ArrayAt(b, "remap")) {
             if (remap->size() != 4) {
                 ctx.Add("bindings: " + binding.param + " -> " + binding.target + ": \"remap\" needs 4 numbers");
@@ -1199,6 +1245,77 @@ void ParseCues(const nlohmann::json& j, StageManifest& out, ParseCtx& ctx) {
     }
 }
 
+void ParseDrivers(const nlohmann::json& j, StageManifest& out, ParseCtx& ctx) {
+    const nlohmann::json* arr = ArrayAt(j, "drivers");
+    if (!arr) {
+        if (j.contains("drivers")) ctx.Add("drivers: must be an array");
+        return;
+    }
+    for (const auto& d : *arr) {
+        if (!d.is_object()) {
+            ctx.Add("drivers: entry is not an object");
+            continue;
+        }
+        StageDriver driver;
+        driver.param = ReadString(d, "param");
+        if (driver.param.empty()) {
+            ctx.Add("drivers: an entry has no \"param\"");
+            continue;
+        }
+        const std::string at = "drivers: " + driver.param + ": ";
+        bool ok = true;
+        // a present member of the wrong type / an unknown enum string is a problem (absent = the default)
+        auto number = [&](const char* key, float& v) -> bool {
+            const auto it = d.find(key);
+            if (it == d.end()) return false;
+            if (!it->is_number()) {
+                ctx.Add(at + "\"" + key + "\" must be a number");
+                ok = false;
+                return false;
+            }
+            v = it->get<float>();
+            return true;
+        };
+        auto word = [&](const char* key, std::string& v) -> bool {
+            const auto it = d.find(key);
+            if (it == d.end()) return false;
+            if (!it->is_string()) {
+                ctx.Add(at + "\"" + key + "\" must be a string");
+                ok = false;
+                return false;
+            }
+            v = it->get<std::string>();
+            return true;
+        };
+        std::string s;
+        if (!word("input", s)) {
+            if (ok) ctx.Add(at + "no \"input\"");
+            continue;
+        }
+        if (!ParseStageDriverInput(Lower(s), driver.input)) {
+            ctx.Add(at + "unknown input \"" + s + "\"");
+            continue;
+        }
+        if (word("shape", s) && !ParseStageDriverShape(Lower(s), driver.shape)) {
+            ctx.Add(at + "unknown shape \"" + s + "\"");
+            ok = false;
+        }
+        if (word("blend", s) && !ParseStageDriverBlend(Lower(s), driver.blend)) {
+            ctx.Add(at + "unknown blend \"" + s + "\"");
+            ok = false;
+        }
+        word("amount", driver.amount);
+        number("every", driver.every);
+        number("phase", driver.phase);
+        driver.hasPower = number("power", driver.power);
+        number("duty", driver.duty);
+        number("min", driver.min);
+        number("max", driver.max);
+        if (!ok) continue;
+        out.drivers.push_back(std::move(driver));
+    }
+}
+
 } // namespace
 
 bool ParseStageManifest(const std::string& json, const std::filesystem::path& dir, StageManifest& out,
@@ -1250,6 +1367,7 @@ bool ParseStageManifest(const std::string& json, const std::filesystem::path& di
     out.defaultVariant = Trimmed(ReadString(j, "defaultVariant"));
     ParseBindings(j, out, ctx);
     ParseCues(j, out, ctx);
+    ParseDrivers(j, out, ctx);
 
     error = ctx.error;
     return error.empty();
@@ -1519,6 +1637,14 @@ std::vector<std::string> ValidateStageManifest(const StageManifest& manifest) {
         }
         std::string why;
         if (!BindingTypesFit(param->type, spec.type, why)) err(at + why);
+        if (!b.gain.empty()) {
+            const StageParam* gain = manifest.FindParam(b.gain);
+            if (!gain) err(at + "unknown gain param \"" + b.gain + "\"");
+            else if (gain->type != StageParamType::Float && gain->type != StageParamType::Int)
+                err(at + "the gain param \"" + b.gain + "\" must be a float or int");
+            if (spec.type == StageTargetSpec::ValueType::Bool || spec.type == StageTargetSpec::ValueType::String)
+                err(at + "a bool / string target takes no gain");
+        }
         if (b.remap) {
             const auto& r = *b.remap;
             if (r[1] == r[0]) err(at + "\"remap\" has an empty input range");
@@ -1535,6 +1661,31 @@ std::vector<std::string> ValidateStageManifest(const StageManifest& manifest) {
         if (c.keys.empty()) err("cues: " + c.param + ": no keys");
         if (param->type == StageParamType::Color && c.stepped)
             err("cues: " + c.param + ": a color track cannot be stepped");
+    }
+
+    // drivers
+    std::set<std::string> driven;
+    for (const auto& d : manifest.drivers) driven.insert(d.param);
+    for (const auto& d : manifest.drivers) {
+        const std::string at = "drivers: " + d.param + ": ";
+        const StageParam* param = manifest.FindParam(d.param);
+        if (!param) {
+            err(at + "unknown param");
+        } else if (param->type == StageParamType::Bool || param->type == StageParamType::Enum) {
+            err(at + "a " + std::string(StageParamTypeName(param->type)) + " param cannot be driven");
+        } else if (param->type == StageParamType::Color && d.blend != StageDriverBlend::Mul) {
+            err(at + "a color param takes \"blend\": \"mul\" only");
+        }
+        if (!(d.every > 0.0f)) err(at + "\"every\" must be > 0");
+        if (!(d.power > 0.0f)) err(at + "\"power\" must be > 0");
+        if (d.duty < 0.0f || d.duty > 1.0f) err(at + "\"duty\" must be 0..1");
+        if (!d.amount.empty()) {
+            const StageParam* amount = manifest.FindParam(d.amount);
+            if (!amount) err(at + "unknown amount param \"" + d.amount + "\"");
+            else if (amount->type != StageParamType::Float)
+                err(at + "the amount param \"" + d.amount + "\" must be a float");
+            if (driven.count(d.amount)) err(at + "the amount param \"" + d.amount + "\" is itself driven");
+        }
     }
 
     // previews exist
