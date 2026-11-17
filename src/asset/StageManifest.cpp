@@ -471,7 +471,9 @@ StageTargetSpec ResolveStageTarget(const StageManifest& manifest, const std::str
         // S9b-1: the same for the Physical Sky light's "lights.<name>.sky.timeOfDay" (and the other sky fields).
         std::string lightOwner = owner;
         std::string lightField = field;
-        if ((int)LightFieldType(field) == 255) {
+        // "sky.intensity" ends in a name that is also a plain light field: the nested reading also applies when the
+        // owner the last dot left ("<name>.sky") is not a light.
+        if ((int)LightFieldType(field) == 255 || !manifest.FindLight(owner)) {
             for (const char* block : {".gobo", ".sky"}) {
                 const size_t n = std::char_traits<char>::length(block);
                 if (owner.size() <= n || owner.compare(owner.size() - n, n, block) != 0) continue;
