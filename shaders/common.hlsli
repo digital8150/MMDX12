@@ -64,7 +64,7 @@ cbuffer SceneCB : register(b0) {
     float4 gSunShadowParams;     // x = shadowType (0=NoCast, 1=Hard, 2=Soft), y = softness, z = density, w = unused (sun shadows: only x/y/z are read)
     float4 gSunShadowColor;      // xyz = shadow colour (linear RGB), w = unused
     float4 gPointShadowParams;   // x = point lights shadowed this frame (0 = none), y = 1/pointMapSize
-    float4 gAutoLumParams;       // x = AutoLuminous glow enabled (0/1), yzw unused
+    float4 gAutoLumParams;       // x = AutoLuminous glow enabled (0/1), y = RT glass reflection rays (0/1), zw unused
     float4 gBgOverride;          // xyz = transparent-export background colour (linear), w = enabled (offline GI)
     // Shader pack typed inputs (PACK_CAP_INPUTS_SCENE / PACK_CAP_INPUTS_AUDIO)
     GpuPackInputRoleHLSL gPackRoles[8];

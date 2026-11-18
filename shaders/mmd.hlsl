@@ -74,6 +74,34 @@ SamplerState gWrap  : register(s0);
 SamplerState gClamp : register(s1);
 SamplerComparisonState gShadowCmp : register(s2);
 
+#ifdef RT_SHADOWS
+// The RT glass branch's reflection ray: the hit radiance rtreflect.hlsl uses, over every light of the frame
+#define REFLECT_LIGHTS gLights
+#define REFLECT_LIGHT_T Light
+#define REFLECT_MAX_LIGHTS 256u
+#define REFLECT_HDR_EMISSIVE
+#include "reflect_hit.hlsli"
+
+// RT glass: what the interface mirrors. One sharp ray from the glass pixel; another transmissive surface on the
+// way is crossed (at most twice), a miss shows the sky. Call it last in the pixel: it resets the PBR uv gradients.
+float3 GlassReflection(float3 wp, float3 n, float3 ng, float3 V) {
+    float3 R = reflect(-V, n);
+    // a mapped normal may send the ray behind the surface: the vertex normal's reflection then
+    if (dot(R, ng) <= 0.0) R = reflect(-V, ng);
+    if (dot(R, ng) <= 0.0) return SkyColor(R);
+    float3 origin = OffsetRayOrigin(wp, ng);
+    PbrSetUvGradients(0.0, 0.0);   // hit materials sample mip 0, like the compute reflection pass
+    RtHit hit;
+    [loop] for (int k = 0; k < 3; ++k) {
+        if (!TraceClosest(origin, R, 0.0, 1200.0, 0.5, hit)) return SkyColor(R);
+        const RtGeometry g = LoadGeometry(hit.instanceId, hit.geometryIndex);
+        if ((g.flags & RTG_TRANSMISSIVE) == 0u || k == 2) break;
+        origin += R * (hit.t + 0.02);
+    }
+    return ReflectHitRadiance(hit, R);
+}
+#endif
+
 struct VSIn {
     float3 pos : POSITION; float3 nrm : NORMAL; float2 uv : TEXCOORD0;
     uint4 bones : BLENDINDICES; float4 weights : BLENDWEIGHT; float edge : TEXCOORD1;
@@ -661,6 +689,8 @@ PSOut MmdShadePbr(VSOut i, bool front, GpuPbrMaterial m, float3 n0, float4 tex, 
     // the composite swaps this sky for what the ray hit, so a wet road mirrors the performers as strongly as the sky.
     // One sharp ray stands in for the lobe, so rough lobes fade the swap out (they keep the pre-blurred sky).
     float pbrReflW = 0.0;
+    float3 envSpec = 0.0;
+    float glassGloss = 0.0;   // 1 for smooth lobes, 0 from perceptual roughness 0.65 (the RT glass reflection's fade)
     if (envSpecOn) {
         float nv = saturate(dot(n, V));
         float pr = sqrt(saturate(rough));   // perceptual roughness (rough is GGX alpha)
@@ -668,7 +698,9 @@ PSOut MmdShadePbr(VSOut i, bool front, GpuPbrMaterial m, float3 n0, float4 tex, 
         float3 Rd = normalize(lerp(n, R, (1.0 - pr) * (sqrt(1.0 - pr) + pr)));
         float3 env = lerp(SkyColor(Rd), Hemisphere(n), pr * pr);
         const float3 dfg = PbrEnvBrdfApprox(f0, pr, nv);
-        color += dfg * env * ao;
+        envSpec = dfg * env * ao;
+        color += envSpec;
+        glassGloss = 1.0 - smoothstep(0.3, 0.65, pr);
         pbrReflW = saturate(dot(dfg, float3(0.2126, 0.7152, 0.0722)) * ao * (1.0 - smoothstep(0.3, 0.65, pr)));
     }
 
@@ -708,6 +740,7 @@ PSOut MmdShadePbr(VSOut i, bool front, GpuPbrMaterial m, float3 n0, float4 tex, 
         // The coat reflects part of the base light: attenuate the base layer by (1 - coat Fresnel).
         const float coatF = 0.04 + 0.96 * pow(1.0 - saturate(dot(n, V)), 5.0);
         color *= 1.0 - coat * coatF;
+        envSpec *= 1.0 - coat * coatF;   // what is left of it in `color` (the RT glass branch takes it back out)
     }
 
     // Reflectivity output (SSR / RT reflections): F0 luminance scaled by smoothness, so smooth / metal materials
@@ -734,15 +767,33 @@ PSOut MmdShadePbr(VSOut i, bool front, GpuPbrMaterial m, float3 n0, float4 tex, 
     // physically flavoured instead of S2a's flat 0.85: alpha = 1 - transmission * (1 - Fresnel(N.V, ior)), what passes
     // through is tinted by the base colour (glTF), and the reflectivity output is the interface Fresnel, so SSR / RT
     // reflections show on the glass. Reflectivity always carries at least the S2a value (smooth dielectrics mirror).
+    // On the RayTraced path the reflection is traced in this shader (see GlassReflection), because the alpha-blended
+    // normal target dilutes the Fresnel tag below the reflection pass's gate.
     const float transp = PbrTransmissionAt(m, uv);
     if (transp > 0.0) {
         const float nv = saturate(dot(n, V));
         const float fres = FresnelDielectric(nv, max(m.transmission.y, 1.0));
         const float coverage = saturate(1.0 - transp * (1.0 - fres));
+#ifdef RT_SHADOWS
+        // RT: the interface's reflection is traced here (gAutoLumParams.y: reflections on). The blend shows
+        // coverage x colour, so fres / coverage x radiance puts exactly the Fresnel share on screen; it replaces the
+        // sky the environment specular added, and the reflection passes must not add theirs (tag 0). Rough glass
+        // fades back to the pre-blurred sky.
+        const bool traced = gAutoLumParams.y > 0.5 && glassGloss > 0.0;
+        if (traced) color -= envSpec * glassGloss;
+#endif
         // the blended layer keeps the refracted (tinted) light rather than the shaded opaque surface
         color = lerp(color, color * pbrAlbedo, transp * (1.0 - fres));
         reflectivity = max(reflectivity, fres);
         alpha *= coverage;
+#ifdef RT_SHADOWS
+        if (traced) {
+            color += GlassReflection(i.worldPos, n, n0, V) * (glassGloss * fres / max(coverage, 1e-3));
+            color = max(color, 0.0);
+        }
+        // RT glass never takes the reflection pass's ray, rough glass included (no second reflection where the fade ends)
+        if (gAutoLumParams.y > 0.5) reflectivity = 0.0;
+#endif
         return PackOutput(color, alpha, n, reflectivity, i.curClip, i.prevClip, 0u, true);
     }
     // Environment-lit PBR surfaces carry the DFG weight (PBR tag); CEL / skin keep the MMD reflectivity.
