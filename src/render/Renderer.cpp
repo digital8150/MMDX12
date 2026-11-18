@@ -1364,7 +1364,9 @@ void Renderer::FillSceneConstants(const FrameView& view, uint32_t w, uint32_t h,
     sc.farZ = cam.farZ;
     sc.frameIndex = (float)(temporalIndex_ % 64);
     // AutoLuminous (そぼろ): the global glow switch (settings_.autoLuminous) reaches every path through SceneConstants.
-    sc.autoLumParams = {settings_.autoLuminous ? 1.0f : 0.0f, 0.0f, 0.0f, 0.0f};
+    // y = RT glass reflections traced in the scene PS (reflections on, RayTraced path)
+    sc.autoLumParams = {settings_.autoLuminous ? 1.0f : 0.0f,
+                        (settings_.ssr && EffectivePath() == RenderPath::RayTraced) ? 1.0f : 0.0f, 0.0f, 0.0f};
     // The DXR scene shaders read shading as 0 (Lit): RayTraced / PathTraced ignore the setting.
     // The quad view's extra views get their own shading from their SceneConstants below.
     uint32_t shading = (EffectivePath() == RenderPath::Raster) ? (uint32_t)settings_.shading : 0u;

@@ -114,7 +114,7 @@ struct SceneConstants {               // b0, kSceneCbSize-byte slot per frame
     DirectX::XMFLOAT4 sunShadowParams;   // x = shadowType (0=NoCast, 1=Hard, 2=Soft), y = softness, z = density, w = unused
     DirectX::XMFLOAT4 sunShadowColor;    // xyz = shadow colour (linear RGB), w = unused
     DirectX::XMFLOAT4 pointShadowParams; // x = point lights shadowed this frame (0 = none), y = 1/pointMapSize
-    DirectX::XMFLOAT4 autoLumParams;     // x = AutoLuminous glow enabled (0/1), yzw unused
+    DirectX::XMFLOAT4 autoLumParams;     // x = AutoLuminous glow enabled (0/1), y = RT glass reflection rays (0/1), zw unused
     // Transparent-background export (offline GI): primary camera-ray misses output xyz (linear); w = enabled (0/1).
     // Real-time renderers use RenderSettings::transparentBackground for the same effect. 0 = the real sky.
     DirectX::XMFLOAT4 bgOverride;

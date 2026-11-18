@@ -76,6 +76,9 @@ progress.md is the session log. Read its latest entry first.
   transmission > 0 is a mesh dielectric — raster / RT blend with `alpha = 1 - transmission * (1 - Fresnel)` and report
   the Fresnel as reflectivity, RT / PT / GI refract (thin straight through, a volume with Snell + Beer-Lambert, rough
   interfaces GGX-perturbed), and shadow rays through it return a tint (`TraceShadowRayTinted`) instead of stopping.
+  On the RayTraced path the scene PS traces the glass's reflection itself (`GlassReflection` in mmd.hlsl,
+  `shaders/reflect_hit.hlsli` shared with rtreflect.hlsl, `SceneConstants::autoLumParams.y`); raster glass still has no
+  reflection of the scene.
 - MMDX stages (docs/stage_format.md, `asset/StageManifest.h`): a folder with a `stage.json`. Play mode loads its parts
   through `LoadScenePackage` and the studio through `LoadStudioStage` / `LoadStudioPackage` /
   `LoadStudioProjectPackage` (manifest order, not the library's flat part list); the manifest's `materials` rules are
