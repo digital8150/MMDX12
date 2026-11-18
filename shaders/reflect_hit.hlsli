@@ -1,6 +1,7 @@
 // The radiance of one reflection hit, shared by rtreflect.hlsl (compute) and mmd.hlsl's RT glass branch.
 // Requires rt_common.hlsli and pbr_common.hlsli before it. The includer defines REFLECT_LIGHTS (the light buffer),
-// REFLECT_LIGHT_T (its element type) and optionally REFLECT_MAX_LIGHTS (default 64).
+// REFLECT_LIGHT_T (its element type) and optionally REFLECT_MAX_LIGHTS (default 64) and
+// REFLECT_HDR_EMISSIVE (a hit's PBR emissive is not clamped to 1).
 #ifndef REFLECT_HIT_HLSLI
 #define REFLECT_HIT_HLSLI
 
@@ -64,7 +65,11 @@ float3 ReflectHitRadiance(RtHit hit, float3 R) {
     if (g.pbrIndex != 0xFFFFFFFFu) {
         GpuPbrMaterial pm = PbrLoadMaterial((int)g.pbrSrv, g.pbrIndex);
         tex.rgb = LinearToSrgb(saturate(PbrAlbedo(pm, s.uv, g.diffuse.rgb)));
+#ifdef REFLECT_HDR_EMISSIVE
+        pbrEmissive = PbrEmissive(pm, s.uv);   // a full-resolution reflection keeps an HDR emitter's strength
+#else
         pbrEmissive = saturate(PbrEmissive(pm, s.uv));
+#endif
     }
     float3 L = -gLightDir;
     float ndl = dot(s.normal, L);

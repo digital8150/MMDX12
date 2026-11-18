@@ -79,14 +79,17 @@ SamplerComparisonState gShadowCmp : register(s2);
 #define REFLECT_LIGHTS gLights
 #define REFLECT_LIGHT_T Light
 #define REFLECT_MAX_LIGHTS 256u
+#define REFLECT_HDR_EMISSIVE
 #include "reflect_hit.hlsli"
 
 // RT glass: what the interface mirrors. One sharp ray from the glass pixel; another transmissive surface on the
 // way is crossed (at most twice), a miss shows the sky. Call it last in the pixel: it resets the PBR uv gradients.
-float3 GlassReflection(float3 wp, float3 n, float3 V) {
+float3 GlassReflection(float3 wp, float3 n, float3 ng, float3 V) {
     float3 R = reflect(-V, n);
-    if (dot(R, n) <= 0.0) return SkyColor(R);
-    float3 origin = OffsetRayOrigin(wp, n);
+    // a mapped normal may send the ray behind the surface: the vertex normal's reflection then
+    if (dot(R, ng) <= 0.0) R = reflect(-V, ng);
+    if (dot(R, ng) <= 0.0) return SkyColor(R);
+    float3 origin = OffsetRayOrigin(wp, ng);
     PbrSetUvGradients(0.0, 0.0);   // hit materials sample mip 0, like the compute reflection pass
     RtHit hit;
     [loop] for (int k = 0; k < 3; ++k) {
@@ -737,6 +740,7 @@ PSOut MmdShadePbr(VSOut i, bool front, GpuPbrMaterial m, float3 n0, float4 tex, 
         // The coat reflects part of the base light: attenuate the base layer by (1 - coat Fresnel).
         const float coatF = 0.04 + 0.96 * pow(1.0 - saturate(dot(n, V)), 5.0);
         color *= 1.0 - coat * coatF;
+        envSpec *= 1.0 - coat * coatF;   // what is left of it in `color` (the RT glass branch takes it back out)
     }
 
     // Reflectivity output (SSR / RT reflections): F0 luminance scaled by smoothness, so smooth / metal materials
@@ -784,10 +788,11 @@ PSOut MmdShadePbr(VSOut i, bool front, GpuPbrMaterial m, float3 n0, float4 tex, 
         alpha *= coverage;
 #ifdef RT_SHADOWS
         if (traced) {
-            color += GlassReflection(i.worldPos, n, V) * (glassGloss * fres / max(coverage, 1e-3));
+            color += GlassReflection(i.worldPos, n, n0, V) * (glassGloss * fres / max(coverage, 1e-3));
             color = max(color, 0.0);
-            reflectivity = 0.0;
         }
+        // RT glass never takes the reflection pass's ray, rough glass included (no second reflection where the fade ends)
+        if (gAutoLumParams.y > 0.5) reflectivity = 0.0;
 #endif
         return PackOutput(color, alpha, n, reflectivity, i.curClip, i.prevClip, 0u, true);
     }
