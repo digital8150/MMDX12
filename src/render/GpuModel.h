@@ -40,6 +40,9 @@ struct PbrOverride {
     std::optional<float> roughness;
     std::optional<float> metallic;
     std::optional<DirectX::XMFLOAT3> emissive;
+    // #30: a stage rule / binding that sets only the strength (no `emissive`): the material's own emission
+    // (PbrMaterial::ext.emissiveOwn) times this. Ignored when `emissive` is set (that colour already carries it).
+    std::optional<float> emissiveStrength;
     std::optional<float> alpha;
     std::optional<float> transmission;
     std::optional<float> ior;
@@ -57,6 +60,9 @@ struct MirrorPlane {
     DirectX::XMFLOAT3 normal{0, 1, 0};    // unit, model space
     float area = 0.0f;                    // rest-pose triangle area (model space): ranks the frame's two slots
     bool valid = false;
+    // #31: a flat transmissive (glass) material, not a mirror: raster draws its planar reflection weighted by the
+    // interface Fresnel (mmd.hlsl glass branch). Only planar glass gets an entry; a mirror wins a slot over glass.
+    bool glass = false;
 };
 
 // S8b raster / RT screen lights: the rectangle an S5 screen material's rest-pose triangles fit into (model space),
@@ -410,6 +416,7 @@ private:
     // Per material transmission factor (0 = opaque / no record): the base records, kept current by SetPbrOverrides
     // (a stage `transmission` target must move the ray paths' RtGeom_Transmissive too).
     std::vector<float> pbrTransmission_;
+    std::vector<DirectX::XMFLOAT4> pbrEmissiveOwn_;   // #30: per material, PbrMaterial::ext.emissiveOwn (w 0 = none)
     bool hasPbrRecords_ = false;
     // Base PBR records (the ones Create built) and the 3-entry UPLOAD-heap ring of SetPbrOverrides. Lazily created.
     std::vector<GpuPbrMaterial> pbrRecords_;

@@ -125,6 +125,9 @@ void ApplyStageMaterialList(GpuModel& gpu, int part, const StageMaterialBinding&
             const float strength = v.emissiveStrength ? std::max(0.0f, *v.emissiveStrength) : 1.0f;
             o.emissive = DirectX::XMFLOAT3{v.emissive->x * strength, v.emissive->y * strength,
                                            v.emissive->z * strength};
+        } else if (v.emissiveStrength) {
+            // #30: a strength-only rule scales the material's own emission (GpuModel keeps it per material)
+            o.emissiveStrength = std::max(0.0f, *v.emissiveStrength);
         }
         if (v.alpha) o.alpha = *v.alpha;
         if (v.transmission) o.transmission = *v.transmission;

@@ -91,6 +91,10 @@ struct PbrMaterial {
         float sheenRoughness = 0.0f;
         float uvRotation = 0.0f;        // KHR_texture_transform rotation in radians (one per material)
         float emissiveStrength = 1.0f;  // KHR_materials_emissive_strength (HDR multiplier on the emissive slot)
+        // The material's own emission before an MMDX stage rule changed it (linear: the emissive map's factor, or the
+        // constant colour), filled by ApplyStageMaterialRules. A rule / runtime binding that sets only
+        // emissiveStrength scales this. w = 1 when the material emitted on its own, 0 otherwise (nothing to scale).
+        DirectX::XMFLOAT4 emissiveOwn{0, 0, 0, 0};
         // S10 planar mirror (an MMDX stage rule's "mirror"): the material is a perfect specular surface in every
         // render path. Raster samples the frame's planar reflection, RT / PT / offline GI reflect at the hit. The
         // base colour is the reflection tint and smoothness / roughness the blur.
