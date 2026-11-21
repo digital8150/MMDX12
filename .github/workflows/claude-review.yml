@@ -83,6 +83,7 @@ jobs:
           BASE_DIR: ${{ github.workspace }}/base
           HEAD_DIR: ${{ github.workspace }}/head
           PR_NUMBER: ${{ steps.pr.outputs.number }}
+          HEAD_SHA: ${{ steps.pr.outputs.head_sha }}
         run: |
           cd "$RUNNER_TEMP"
           "$RUNNER_TEMP/venv/bin/python" -I "$GITHUB_WORKSPACE/base/.github/claude-review/review.py"
