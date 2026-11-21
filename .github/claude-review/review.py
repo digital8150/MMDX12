@@ -123,7 +123,9 @@ class Cost:
 # --------------------------------------------------------------------------------------------------- PR data
 
 def load_pr(event: dict) -> tuple[dict, list]:
-    pr = event["pull_request"]
+    pr = event.get("pull_request")
+    if pr is None:  # workflow_dispatch: the number comes from the workflow's validated input
+        pr, _ = gh("GET", f"/repos/{REPO}/pulls/{int(os.environ['PR_NUMBER'])}")
     files = gh_paged(f"/repos/{REPO}/pulls/{pr['number']}/files")
     return pr, files
 
@@ -265,6 +267,9 @@ def gate_comment(pr: dict, text: str) -> None:
 
 def should_review(client: anthropic.Anthropic, event: dict, pr: dict, files: list, cost: Cost) -> bool:
     action = event.get("action")
+    if "pull_request" not in event:  # workflow_dispatch: only someone with write access can start one
+        summary(f"Manual review run by `{event.get('sender', {}).get('login', '?')}`.")
+        return True
     if action == "labeled":
         sender = event["sender"]["login"]
         if (event.get("label") or {}).get("name") == LABEL and sender_can_write(sender):
