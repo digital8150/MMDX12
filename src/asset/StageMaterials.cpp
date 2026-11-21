@@ -276,8 +276,9 @@ void ApplyStageMaterialRules(const std::vector<StageMaterialRule>& rules, const 
 
     int records = pbr.materialsWithRecord;
     for (size_t i = 0; i < pmx.materials.size(); ++i) {
-        // every record keeps its own emission: a binding may give a material a strength later, at run time
-        if (i < pbr.materials.size() && pbr.materials[i].valid)
+        // every record keeps its own emission: a binding may give a material a strength later, at run time. Captured
+        // once, so applying rules again to the same record scales the original, not the previous result.
+        if (i < pbr.materials.size() && pbr.materials[i].valid && !(pbr.materials[i].ext.emissiveOwn.w > 0.0f))
             pbr.materials[i].ext.emissiveOwn = RecordEmissiveLinear(pbr.materials[i]);
         const StageMaterialRule v = StageEffectiveMaterialValues(rules, binding, i);
         const bool matched = v.baseColor || v.roughness || v.metallic || v.emissive || v.emissiveStrength ||

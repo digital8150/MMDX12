@@ -168,8 +168,30 @@ void TestExponentMap() {
            "a second strength rule replaces the scale, the exponent stays");
 }
 
+// Applying strength rules twice to one record scales its original emission both times (4 then 0.5 = 0.25, not 2),
+// and strength 0 followed by 1 brings the emission back.
+void TestReapply() {
+    PmxModel pmx;
+    PbrModelData pbr;
+    MakeModel(pmx, pbr);
+    StageMaterialRule r;
+    r.match = "hdr";
+    r.emissiveStrength = 4.0f;
+    Apply({r}, pmx, pbr);
+    r.emissiveStrength = 0.5f;
+    Apply({r}, pmx, pbr);
+    Expect(Near(Emissive(pbr.materials[2]).value[0], 7.5f), "re-applied strength scales the original (15 x 0.5)");
+    r.emissiveStrength = 0.0f;
+    Apply({r}, pmx, pbr);
+    r.emissiveStrength = 1.0f;
+    Apply({r}, pmx, pbr);
+    Expect(pbr.materials[2].emissiveEnable && Near(Emissive(pbr.materials[2]).value[0], 15.0f),
+           "strength 0 then 1 restores the original emission");
+}
+
 int main() {
     TestStrengthOnly();
+    TestReapply();
     TestExponentMap();
     TestStrengthBelowOne();
     TestColourRule();
