@@ -126,6 +126,9 @@ def load_pr(event: dict) -> tuple[dict, list]:
     pr = event.get("pull_request")
     if pr is None:  # workflow_dispatch: the number comes from the workflow's validated input
         pr, _ = gh("GET", f"/repos/{REPO}/pulls/{int(os.environ['PR_NUMBER'])}")
+    # Review exactly the commit the workflow checked out: a push after that step must not move the review's commit.
+    if os.environ.get("HEAD_SHA"):
+        pr["head"]["sha"] = os.environ["HEAD_SHA"]
     files = gh_paged(f"/repos/{REPO}/pulls/{pr['number']}/files")
     return pr, files
 
