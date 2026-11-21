@@ -1017,6 +1017,9 @@ void UploadBatch::Submit() {
         WaitForSingleObject(event, INFINITE);
         CloseHandle(event);
     }
+    // Without an event the copies may still be running: wait for them anyway, since the buffers they read and the
+    // resources they write are released below. A removed device reports UINT64_MAX, so this ends.
+    while (fence_->GetCompletedValue() < 1) Sleep(1);
     staging_.clear();
     created_.clear();   // the copies are done: what the caller dropped meanwhile goes now
 }
