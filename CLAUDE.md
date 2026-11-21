@@ -193,7 +193,10 @@ progress.md is the session log. Read its latest entry first.
     `studioexport`/`studioimport <vmd>` and `studiovpdexport`/`studiovpdimport <vpd>` skip the file dialogs; pose editing:
     `studiobone <name>` clicks that bone's joint, `studiogizmo <x|y|z|yz|zx|xy|rx|ry|rz> <dx> <dy> [steps]` drags a gizmo
     part; arm rest-pose correction is `studiorestpose <deg> [both|left|right]` (selected model, one undo step) and
-    `studiorestposeanswer <accept|keep> [deg]` (presses the import modal's button); `studiostate` also logs `STUDIOPOSE`, `STUDIOPROJ` (including `aspect=`) and one `STUDIOMODEL` line per model). Projects/models
+    `studiorestposeanswer <accept|keep> [deg]` (presses the import modal's button); a VMD import onto a model / camera that already has keys of the file's kinds asks "병합 / 비우고 불러오기 / 취소" first
+    (`app/UiStudioImport.cpp`; replace clears the model's bone / morph / IK / visibility keys, or only the camera tracks the
+    file brings; more VMDs arriving meanwhile queue behind it) and `studioimportanswer <merge|replace|cancel>` presses its
+    buttons (`studiostate` logs `STUDIOIMPORT`); `studiostate` also logs `STUDIOPOSE`, `STUDIOPROJ` (including `aspect=`) and one `STUDIOMODEL` line per model). Projects/models
     without dialogs: `studionew`, `studiosave`/`studioopen <file>`, `studioautosave`, `studioadd <character|stage|prop> <file>`,
     `studioaddlib <character|stage> <substr>`, `studiosong <substr>`, `studioaudio <file|none> [offset]`,
     `studiobgvideo <file|none>`, `studiobgvideoopt <offsetSeconds> <asBackground 0|1>`,

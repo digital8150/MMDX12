@@ -204,6 +204,23 @@ struct MotionData {
     static MotionData FromVmd(const VmdMotion& vmd);
     // Adds `other`'s keys (same frame: other wins). Used to merge a dance with its facial VMDs.
     void Merge(const MotionData& other);
+    // Drops a model motion's VMD keys (bones, morphs, IK, visibility and their constant flags) before an import that
+    // replaces them; camera / light / shadow / focus / accessory tracks stay.
+    void ClearModelKeys() {
+        bones.clear();
+        morphs.clear();
+        ik.clear();
+        visibility.clear();
+        staticBones.clear();
+        staticMorphs.clear();
+    }
+    size_t ModelKeyCount() const {  // bone + morph + IK + visibility keys
+        size_t n = visibility.size();
+        for (const auto& t : bones) n += t.second.size();
+        for (const auto& t : morphs) n += t.second.size();
+        for (const auto& t : ik) n += t.second.size();
+        return n;
+    }
     // Renames tracks whose VMD name is a 15/20-byte truncation of a model bone/morph name to the full name,
     // so the timeline can find them by model name. Tracks without a match keep their name (and stay exported).
     void CanonicalizeNames(const PmxModel& model);

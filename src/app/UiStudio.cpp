@@ -4240,8 +4240,16 @@ void App::StudioImportVmd() {
     if (!path.empty()) StudioImportVmdFrom(path);
 }
 
-void App::StudioImportVmdFrom(const std::filesystem::path& path) {
+void App::StudioImportVmdFrom(const std::filesystem::path& path, VmdImportMode mode) {
     StudioDoc& d = *studio_;
+    const bool replace = mode == VmdImportMode::Replace;
+    // Another import is waiting for an answer (several dropped VMDs): this one follows once that modal closes.
+    if (mode == VmdImportMode::Ask && (studioImportModeOpen_ || studioRestPoseOpen_)) {
+        const StudioModel* sel = d.Selected();
+        studioImportQueue_.push_back({path, sel ? (int)sel->uid : -1, d.selectedCameraUid});
+        LOG_INFO("studio: VMD import queued behind an open import modal: %s", PathToUtf8(path.filename()).c_str());
+        return;
+    }
     VmdMotion vmd;
     std::string err;
     if (!LoadVmd(path, vmd, &err)) {
@@ -4260,24 +4268,49 @@ void App::StudioImportVmdFrom(const std::filesystem::path& path) {
             toast_ = {Tr("카메라 키가 없는 VMD입니다"), PathToUtf8(path.filename()), {}, true, timeSeconds_ + 5.0};
             return;
         }
-        // S4: camera keys land in the SELECTED camera (uid 0 = the main one); light / shadow stay the main camera's
+        // Existing keys of the kinds the file brings: ask whether to merge or replace them.
+        if (mode == VmdImportMode::Ask) {
+            size_t existing = 0;
+            if (!in.camera.empty()) existing += d.SelectedCameraTrack().camera.size();
+            if (!in.light.empty()) existing += d.camera.light.size();
+            if (!in.shadow.empty()) existing += d.camera.shadow.size();
+            if (existing > 0) {
+                studioImportPending_ = {path, -1, d.selectedCameraUid};
+                studioImportModeExisting_ = existing;
+                studioImportModeOpen_ = true;
+                LOG_INFO("studio: camera VMD onto %zu existing keys: asking merge / replace", existing);
+                return;
+            }
+        }
+        const char* undoName = replace ? Tr("카메라 VMD 불러오기 (기존 키 비움)") : Tr("카메라 VMD 불러오기");
+        // S4: camera keys land in the SELECTED camera (uid 0 = the main one); light / shadow stay the main camera's.
+        // Replace clears only the tracks the file brings keys for.
         if (d.selectedCameraUid == 0) {
             MotionData after = d.camera;
+            if (replace) {
+                if (!in.camera.empty()) after.camera.clear();
+                if (!in.light.empty()) after.light.clear();
+                if (!in.shadow.empty()) after.shadow.clear();
+            }
             for (const CameraKf& k : in.camera) UpsertKey(after.camera, k);
             for (const LightKf& k : in.light) UpsertKey(after.light, k);
             for (const ShadowKf& k : in.shadow) UpsertKey(after.shadow, k);
-            d.history.Push(std::make_unique<MotionSwapCommand>(d, -1, Tr("카메라 VMD 불러오기"), d.camera, std::move(after)));
+            d.history.Push(std::make_unique<MotionSwapCommand>(d, -1, undoName, d.camera, std::move(after)));
         } else {
             const std::vector<TrackState> before{CaptureTrack(d, -1, RowKind::Camera, "")};
             std::vector<CameraKf>& keys = d.SelectedCameraTrack().camera;
+            if (replace && !in.camera.empty()) keys.clear();
             for (const CameraKf& k : in.camera) UpsertKey(keys, k);
-            StudioPushTrackEdit(Tr("카메라 VMD 불러오기"), before);
+            StudioPushTrackEdit(undoName, before);
             if (!in.light.empty() || !in.shadow.empty()) {
                 MotionData after = d.camera;   // the main camera keeps the light / self-shadow tracks
+                if (replace) {
+                    if (!in.light.empty()) after.light.clear();
+                    if (!in.shadow.empty()) after.shadow.clear();
+                }
                 for (const LightKf& k : in.light) UpsertKey(after.light, k);
                 for (const ShadowKf& k : in.shadow) UpsertKey(after.shadow, k);
-                d.history.Push(std::make_unique<MotionSwapCommand>(d, -1, Tr("카메라 VMD 불러오기"), d.camera,
-                                                                   std::move(after)));
+                d.history.Push(std::make_unique<MotionSwapCommand>(d, -1, undoName, d.camera, std::move(after)));
             }
         }
         d.selectedModel = -1;
@@ -4289,6 +4322,16 @@ void App::StudioImportVmdFrom(const std::filesystem::path& path) {
         in.light.clear();
         in.shadow.clear();
         in.CanonicalizeNames(*m->pmx);
+        // The model already has keys: ask whether to merge or replace them (the rest-pose question comes after).
+        if (mode == VmdImportMode::Ask) {
+            if (const size_t existing = m->motion.ModelKeyCount(); existing > 0) {
+                studioImportPending_ = {path, (int)m->uid, d.selectedCameraUid};
+                studioImportModeExisting_ = existing;
+                studioImportModeOpen_ = true;
+                LOG_INFO("studio: motion VMD onto %zu existing keys: asking merge / replace", existing);
+                return;
+            }
+        }
         // Arm rest-pose correction: a T-pose-authored motion onto an A-pose model asks before the merge.
         if (m->kind == ModelKind::Character) {
             const ArmRestGuess guess = GuessTPoseMotion(in);
@@ -4301,6 +4344,7 @@ void App::StudioImportVmdFrom(const std::filesystem::path& path) {
                 studioRestPoseSourceDeg_ = 0.0f;
                 studioRestPoseSide_[0] = studioRestPoseSide_[1] = true;
                 studioRestPoseAuto_ = true;
+                studioRestPoseReplace_ = replace;
                 studioRestPoseOpen_ = true;
                 LOG_INFO("studio: VMD looks T-pose authored (median %.1f deg, %d keys): asking before the merge",
                          guess.medianDeg, guess.samples);
@@ -4308,8 +4352,11 @@ void App::StudioImportVmdFrom(const std::filesystem::path& path) {
             }
         }
         MotionData after = m->motion;
+        if (replace) after.ClearModelKeys();
         after.Merge(in);
-        d.history.Push(std::make_unique<MotionSwapCommand>(d, d.selectedModel, Tr("모션 VMD 불러오기"), m->motion, std::move(after)));
+        d.history.Push(std::make_unique<MotionSwapCommand>(
+            d, d.selectedModel, replace ? Tr("모션 VMD 불러오기 (기존 키 비움)") : Tr("모션 VMD 불러오기"), m->motion,
+            std::move(after)));
     }
     StudioFinishVmdImport(path);
 }
@@ -4497,6 +4544,7 @@ void App::DrawStudio() {
     DrawStudioStopwatchConfirm();   // stopwatch off: "키프레임을 모두 지웁니다"
     DrawStudioBakeDialog();    // P2.2: the physics bake options / progress modal
     DrawStudioRestPoseDialog();  // T-pose-authored VMDs: the arm rest-pose correction modal
+    DrawStudioImportModeDialog();  // a VMD onto existing keys: merge / clear and import / cancel
     DrawVideoRenderDialog();   // the render dialog (top bar render menu); starting it leaves for Screen::Offline
     if (screen_ != Screen::Studio) return;
     DrawToast();
