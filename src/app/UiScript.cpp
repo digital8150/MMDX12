@@ -139,6 +139,9 @@ bool App::ExecuteUiCommand(const std::string& cmd, const std::vector<std::string
                      (int)studioRestPoseAuto_,
                      studioRestPoseModel_ < 0 ? -1 : d.IndexOfUid((uint32_t)studioRestPoseModel_),
                      studioRestPoseGuess_.medianDeg);
+            LOG_INFO("STUDIOIMPORT open=%d model=%d existing=%zu queued=%zu", (int)studioImportModeOpen_,
+                     studioImportPending_.modelUid < 0 ? -1 : d.IndexOfUid((uint32_t)studioImportPending_.modelUid),
+                     studioImportModeExisting_, studioImportQueue_.size());
             LOG_INFO("STUDIOFOCUS keys=%zu distance=%.2f aperture=%.2f subject=%u subjectName=%s dof=%d", d.camera.focus.size(),
                      studioFocusShown_, studioFocusAperture_, studioFocusSubject_,
                      StudioModelLabel(studioFocusSubject_).c_str(), (int)settings_.dof);
@@ -887,6 +890,15 @@ bool App::ExecuteUiCommand(const std::string& cmd, const std::vector<std::string
         } else {
             LOG_WARN("ui script: studiorestposeanswer without an open auto modal");
             if (outError) *outError = "No rest-pose modal is open";
+            return false;
+        }
+    } else if (cmd == "studioimportanswer") {  // studioimportanswer <merge|replace|cancel>: the import-mode modal's button
+        if (studio_ && studioImportModeOpen_ && !args.empty() &&
+            (args[0] == "merge" || args[0] == "replace" || args[0] == "cancel")) {
+            studioImportModeAnswer_ = args[0] == "merge" ? 1 : args[0] == "replace" ? 2 : 0;
+        } else {
+            LOG_WARN("ui script: studioimportanswer expects an open import modal and merge|replace|cancel");
+            if (outError) *outError = "No import modal is open (or bad answer)";
             return false;
         }
     } else if (cmd == "studiomaterial") {  // studiomaterial <default|ray> [emd path] (selected studio model)

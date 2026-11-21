@@ -71,7 +71,8 @@ namespace mmdx {
 //                          capture <file.png> | log <text> |
 //                          studiostate (logs the Studio's frame, selection, rows, range, key counts, undo) |
 //                          studioexport <file.vmd> | studioimport <file.vmd> (the Studio's VMD export/import
-//                          without the dialogs) | studiovpdexport/studiovpdimport <file.vpd> (pose files, current
+//                          without the file dialogs; onto existing keys the merge / replace modal still asks) |
+//                          studioimportanswer <merge|replace|cancel> (that modal's buttons) | studiovpdexport/studiovpdimport <file.vpd> (pose files, current
 //                          scope) | studiobone <name> (clicks that bone's joint in the viewport) |
 //                          studiogizmo <x|y|z|yz|zx|xy|rx|ry|rz> <dx> <dy> [steps] (drags that gizmo part by dx,dy px).
 //                          studiostate also logs a STUDIOPOSE line (active bone + value, pose layer, tool) and a
@@ -537,7 +538,10 @@ private:
     void StudioRowStopwatch(uint64_t rowId);         // stopwatch clicked in row
     void StudioRowKeyNav(uint64_t rowId, int dir);   // keynav clicked in row (-1, 1, 2)
     void StudioImportVmd();                                   // open dialog, then StudioImportVmdFrom
-    void StudioImportVmdFrom(const std::filesystem::path& path);  // merge into the selected model (camera VMDs: camera)
+    // Merge into (or replace) the selected model's keys (camera VMDs: the selected camera). Ask = when the target
+    // already has keys of the kinds the file brings, the import-mode modal asks first (UiStudioImport.cpp).
+    enum class VmdImportMode { Ask, Merge, Replace };
+    void StudioImportVmdFrom(const std::filesystem::path& path, VmdImportMode mode = VmdImportMode::Ask);
     // The VMD import's tail (clear selection, refresh rows, "VMD를 불러왔어요" toast): shared with the arm
     // rest-pose dialog, which merges the pending motion when the import asked for a correction first.
     void StudioFinishVmdImport(const std::filesystem::path& path);
@@ -872,6 +876,21 @@ private:
     std::filesystem::path studioRestPosePendingPath_;
     int studioRestPoseModel_ = -1;
     int studioRestPoseAnswer_ = 0;            // ui-script answer pending: 1 = primary, 2 = secondary
+    bool studioRestPoseReplace_ = false;      // auto mode: the import replaces the model's keys instead of merging
+    // --- VMD import onto existing keys (UiStudioImport.cpp): "merge / clear and import / cancel"
+    void DrawStudioImportModeDialog();        // also starts the next queued import once no import modal is open
+    // 0 = cancel, 1 = merge, 2 = clear the existing keys and import. Closes the modal; false when it was not open.
+    bool StudioImportModeAnswer(int answer);
+    struct QueuedVmdImport {
+        std::filesystem::path path;
+        int modelUid = -1;          // the target model's uid (-1 = the camera)
+        uint32_t cameraUid = 0;     // the selected camera at the time of the import
+    };
+    std::vector<QueuedVmdImport> studioImportQueue_;  // imports that arrived while an import modal was open
+    QueuedVmdImport studioImportPending_;             // the import the modal asks about
+    bool studioImportModeOpen_ = false;
+    size_t studioImportModeExisting_ = 0;             // existing keys the replace would clear
+    int studioImportModeAnswer_ = -1;                 // ui-script answer pending (StudioImportModeAnswer's codes)
     void DrawStudioPropPanel(float w);                // inspector: prop parent / bone / offset
     void DrawStudioUnsavedPrompt();
     void DrawRecoveryPrompt();                        // select screen: offer the autosave of a crashed session
@@ -892,7 +911,7 @@ private:
     void DrawStudioHelp();                            // shortcut overlay (? key / top bar button)
     bool StudioModal() const { return videoDialogOpen_ || studioHelpOpen_ || studioLeaveConfirm_ || studioLightPresetPending_ >= 0 ||
                                        studioStopwatchOff_ || studioBakeDialogOpen_ || studioBakeRunning_ ||
-                                       studioRestPoseOpen_ || shutdownPending_; }
+                                       studioRestPoseOpen_ || studioImportModeOpen_ || shutdownPending_; }
 
     // --- scripted UI input for tests (UiScript.cpp) and MCP
     void PumpUiScript();  // before ImGui::NewFrame: feeds the events due at framesInScene_

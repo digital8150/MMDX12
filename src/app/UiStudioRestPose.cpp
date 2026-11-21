@@ -32,6 +32,7 @@ void App::StudioOpenRestPoseDialog() {
     StudioModel* m = d.Selected();
     if (!m || m->kind != ModelKind::Character) return;
     studioRestPoseAuto_ = false;
+    studioRestPoseReplace_ = false;
     studioRestPosePending_ = {};
     studioRestPosePendingPath_.clear();
     studioRestPoseGuess_ = {};
@@ -86,11 +87,14 @@ bool App::StudioRestPoseAnswer(bool accept) {
         ArmRetargetResult res;
         if (accept) res = RetargetArmRest(*target->pmx, in, opt);
         MotionData after = target->motion;
+        if (studioRestPoseReplace_) after.ClearModelKeys();  // the import-mode modal chose "clear and import"
         after.Merge(in);
-        d.history.Push(std::make_unique<MotionSwapCommand>(d, d.IndexOfUid(target->uid),
-                                                           accept ? Tr("모션 VMD 불러오기 (팔 보정)")
-                                                                  : Tr("모션 VMD 불러오기"),
-                                                           target->motion, std::move(after)));
+        const char* undoName = accept ? (studioRestPoseReplace_ ? Tr("모션 VMD 불러오기 (팔 보정, 기존 키 비움)")
+                                                                : Tr("모션 VMD 불러오기 (팔 보정)"))
+                                      : (studioRestPoseReplace_ ? Tr("모션 VMD 불러오기 (기존 키 비움)")
+                                                                : Tr("모션 VMD 불러오기"));
+        d.history.Push(std::make_unique<MotionSwapCommand>(d, d.IndexOfUid(target->uid), undoName, target->motion,
+                                                           std::move(after)));
         if (accept)
             LOG_INFO("studio: arm rest-pose correction on import: angle %.1f / %.1f, bones %d, keys %d",
                      res.rotationDeg[0], res.rotationDeg[1], res.bonesChanged, res.keysChanged);
@@ -100,6 +104,7 @@ bool App::StudioRestPoseAnswer(bool accept) {
     }
     studioRestPoseOpen_ = false;
     studioRestPoseAuto_ = false;
+    studioRestPoseReplace_ = false;
     studioRestPosePending_ = {};
     studioRestPosePendingPath_.clear();
     studioRestPoseModel_ = -1;
