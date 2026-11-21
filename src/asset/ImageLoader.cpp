@@ -17,6 +17,7 @@
 #include <wincodec.h>
 
 #include <algorithm>
+#include <cmath>
 #include <cstring>
 
 #pragma comment(lib, "windowscodecs.lib")
@@ -25,6 +26,72 @@
 namespace mmdx {
 
 namespace {
+
+struct Tap {
+    uint32_t index;
+    float weight;
+};
+
+// The source texels output texel i covers when an axis shrinks from `src` to `dst` texels (dst < src): the span
+// [i * s, (i + 1) * s), s = src / dst, the partly covered texels at its ends weighted by their overlap (sum 1).
+std::vector<std::vector<Tap>> BoxTaps(uint32_t src, uint32_t dst) {
+    std::vector<std::vector<Tap>> taps(dst);
+    const double s = (double)src / (double)dst;
+    for (uint32_t i = 0; i < dst; ++i) {
+        const double a = i * s, b = std::min((double)src, (i + 1) * s);
+        for (uint32_t j = (uint32_t)a; j < src && (double)j < b; ++j) {
+            const double overlap = std::min(b, j + 1.0) - std::max(a, (double)j);
+            if (overlap > 0.0) taps[i].push_back({j, (float)(overlap / s)});
+        }
+    }
+    return taps;
+}
+
+// D3D12 creates no 2D texture wider or taller than kMaxImageDimension: CreateCommittedResource fails with
+// E_INVALIDARG, and a model texture took its whole model with it (a 40000 x 30 strip of a stage). MMD's D3DX loader
+// clamps the width and the height to the device's maximum separately and resamples the file; this box-filters the
+// oversized axis (or both) of level 0 down to the limit the same way. Returns true when it scaled.
+bool FitToTextureLimit(ImageRGBA8::Level& level) {
+    const uint32_t w = level.width, h = level.height;
+    const uint32_t nw = std::min(w, kMaxImageDimension), nh = std::min(h, kMaxImageDimension);
+    if (nw == w && nh == h) return false;
+    const auto store = [](uint8_t* dst, const float* sum) {
+        for (int c = 0; c < 4; ++c) dst[c] = (uint8_t)std::clamp(std::lround(sum[c]), 0L, 255L);
+    };
+    if (nw < w) {
+        const std::vector<std::vector<Tap>> taps = BoxTaps(w, nw);
+        std::vector<uint8_t> out((size_t)nw * h * 4);
+        for (uint32_t y = 0; y < h; ++y) {
+            const uint8_t* row = level.pixels.data() + (size_t)y * w * 4;
+            for (uint32_t x = 0; x < nw; ++x) {
+                float sum[4] = {};
+                for (const Tap& t : taps[x])
+                    for (int c = 0; c < 4; ++c) sum[c] += row[(size_t)t.index * 4 + c] * t.weight;
+                store(&out[((size_t)y * nw + x) * 4], sum);
+            }
+        }
+        level.pixels = std::move(out);
+        level.width = nw;
+    }
+    if (nh < h) {
+        const std::vector<std::vector<Tap>> taps = BoxTaps(h, nh);
+        const uint32_t rw = level.width;
+        std::vector<uint8_t> out((size_t)rw * nh * 4);
+        for (uint32_t y = 0; y < nh; ++y) {
+            for (uint32_t x = 0; x < rw; ++x) {
+                float sum[4] = {};
+                for (const Tap& t : taps[y]) {
+                    const uint8_t* p = &level.pixels[((size_t)t.index * rw + x) * 4];
+                    for (int c = 0; c < 4; ++c) sum[c] += p[c] * t.weight;
+                }
+                store(&out[((size_t)y * rw + x) * 4], sum);
+            }
+        }
+        level.pixels = std::move(out);
+        level.height = nh;
+    }
+    return true;
+}
 
 bool LoadWithWic(const uint8_t* bytes, size_t size, std::vector<uint8_t>& pixels,
                  int& w, int& h) {
@@ -175,6 +242,10 @@ bool LoadImageRGBA8FromMemory(const uint8_t* bytes, size_t size, ImageRGBA8& out
         level0.width = static_cast<uint32_t>(w);
         level0.height = static_cast<uint32_t>(h);
         level0.pixels = std::move(pixels);
+        if (FitToTextureLimit(level0)) {
+            out.sourceWidth = static_cast<uint32_t>(w);
+            out.sourceHeight = static_cast<uint32_t>(h);
+        }
 
         // hasAlpha + mips
         bool hasAlpha = false;
@@ -189,11 +260,11 @@ bool LoadImageRGBA8FromMemory(const uint8_t* bytes, size_t size, ImageRGBA8& out
             }
         }
 
+        uint32_t sw = level0.width;
+        uint32_t sh = level0.height;
         out.mips.push_back(std::move(level0));
         out.hasAlpha = hasAlpha;
 
-        uint32_t sw = static_cast<uint32_t>(w);
-        uint32_t sh = static_cast<uint32_t>(h);
         while (sw > 1 || sh > 1) {
             uint32_t nw = std::max(1u, sw / 2);
             uint32_t nh = std::max(1u, sh / 2);

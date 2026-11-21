@@ -247,6 +247,7 @@ progress.md is the session log. Read its latest entry first.
   - `gltf_pbr_test`: imported PBR records (`captures/assets_dl` BoomBox.glb maps / channels, Seed-san.vrm = no records; SKIP when absent; `tools/testdata/ext_test.glb` = the S2a glTF extensions + lights)
   - `spot_shadow_pick_test`: the spot shadow budget (reach test, score, hysteresis)
   - `stage_material_test`: stage material rules on PBR records (emissive colour / strength-only rules, `ext.emissiveOwn`)
+  - `image_limit_test`: images over 16384 px decode fitted to the D3D12 texture limit (that axis only, area average), smaller ones byte for byte (CI)
   - `studio_focus_test`: DoF focus track evaluation, automatic focus (score, hysteresis, rack), focus keys in projects
   - `mmdx12_mcp [--pipe <name>] [--pid <pid>] [--launch] [--timeout <ms>]`: Model Context Protocol stdio bridge
   - `mcp_smoke.py [--handshake-only] [--scenario]`: MCP test client (protocol handshake & end-to-end scenario)
@@ -322,7 +323,7 @@ Agents keep misusing the CLI and then blaming the app. These rules are verified 
 ## Architecture (src/)
 - `core`: logging, text encodings (Shift-JIS/UTF-16/UTF-8).
 - `anim`: BoundMotion disables unkeyed IK targets when their links have FK-only rotation keys; explicit IK states win.
-- `asset`: MVD import via LoadVmd magic sniffing (layer 0 only; `tools/mvd_test`); PMX/VMD parsers, image loading (stb with a WIC fallback, also from memory), `AssetLibrary`, `ModelImport`.
+- `asset`: MVD import via LoadVmd magic sniffing (layer 0 only; `tools/mvd_test`); PMX/VMD parsers, image loading (stb with a WIC fallback, also from memory; a side over D3D12's 16384 texture limit is box-filtered down to it, `kMaxImageDimension`), `AssetLibrary`, `ModelImport`.
   - DDS (M5a / S11): `DdsLoader` decodes level 0 of any 2D DDS to RGBA8 (`LoadDdsLevel0`, the fallback path) and, for
     BC1/BC2/BC3/BC4/BC5/BC6H/BC7 (DX10 formats and the DXT1/DXT3/DXT5/ATI1/ATI2/BC4U/BC5U FourCCs),
     `LoadDdsCompressed` keeps the file's blocks and all its mips in a `CompressedImage` instead. `IsDdsCube` /

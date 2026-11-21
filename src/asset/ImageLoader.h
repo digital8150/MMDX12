@@ -8,20 +8,29 @@ namespace mmdx {
 
 struct CompressedImage;
 
+// The largest width / height of a 2D texture in D3D12 (D3D12_REQ_TEXTURE2D_U_OR_V_DIMENSION). The decoders below fit a
+// larger file into it, so every image they return can be uploaded.
+inline constexpr uint32_t kMaxImageDimension = 16384;
+
 // Tightly packed RGBA8 image with a full mip chain (level 0 first).
 struct ImageRGBA8 {
     struct Level { uint32_t width = 0, height = 0; std::vector<uint8_t> pixels; };  // pixels.size() == w*h*4
     std::vector<Level> mips;
     bool hasAlpha = false;  // true if any texel in level 0 has alpha < 255
+    // The decoded file's size when it exceeded kMaxImageDimension and level 0 was scaled down to fit (0 = not scaled).
+    uint32_t sourceWidth = 0, sourceHeight = 0;
 
     bool Empty() const { return mips.empty(); }
     uint32_t Width() const { return mips.empty() ? 0 : mips[0].width; }
     uint32_t Height() const { return mips.empty() ? 0 : mips[0].height; }
+    bool ScaledDown() const { return sourceWidth != 0; }
 };
 
 // Decodes PNG/JPG/BMP/TGA/GIF/PSD (stb_image), and treats .spa/.sph as BMP (stb sniffs
 // the content, so the extension is irrelevant). Builds mips with a 2x2 box filter down
-// to 1x1 (odd sizes: clamp the source coordinate). Returns false on failure.
+// to 1x1 (odd sizes: clamp the source coordinate). A side longer than kMaxImageDimension is
+// box-filtered down to it first, that axis alone, as MMD's D3DX loader fits a file to the
+// device (UVs are normalised, so the mapping stays). Returns false on failure.
 bool LoadImageRGBA8(const std::filesystem::path& path, ImageRGBA8& out, std::string* error = nullptr);
 // Same decode from an in-memory file image (textures embedded in glTF/GLB/VRM/FBX). WIC covers
 // formats stb lacks (e.g. WebP when the system codec is installed).
