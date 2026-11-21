@@ -4,6 +4,7 @@
 #include "app/App.h"
 #include "app/Icons.h"
 #include "app/UiKit.h"
+#include "asset/VmdMotion.h"
 #include "core/I18n.h"
 #include "core/Log.h"
 #include "core/TextUtil.h"
@@ -26,6 +27,14 @@ bool SelectImportTarget(StudioDoc& d, int modelUid, uint32_t cameraUid) {
     }
     d.selectedCameraUid = cameraUid != 0 && d.FindCamera(cameraUid) ? cameraUid : 0;
     return true;
+}
+
+// A camera file (no bone / morph keys): it lands on the camera whatever model was selected when it was queued.
+bool IsCameraOnlyVmd(const std::filesystem::path& path) {
+    VmdMotion vmd;
+    if (!LoadVmd(path, vmd, nullptr)) return false;
+    return vmd.boneKeys.empty() && vmd.morphKeys.empty() &&
+           (!vmd.cameraKeys.empty() || !vmd.lightKeys.empty() || !vmd.shadowKeys.empty());
 }
 } // namespace
 
@@ -58,8 +67,11 @@ void App::DrawStudioImportModeDialog() {
     if (!studioImportModeOpen_ && !studioRestPoseOpen_ && !studioImportQueue_.empty()) {
         const QueuedVmdImport q = studioImportQueue_.front();
         studioImportQueue_.erase(studioImportQueue_.begin());
-        if (SelectImportTarget(d, q.modelUid, q.cameraUid)) StudioImportVmdFrom(q.path);
-        else LOG_WARN("studio: queued VMD import target is gone: %s", PathToUtf8(q.path.filename()).c_str());
+        if (SelectImportTarget(d, q.modelUid, q.cameraUid) ||
+            (IsCameraOnlyVmd(q.path) && SelectImportTarget(d, -1, q.cameraUid)))
+            StudioImportVmdFrom(q.path);
+        else
+            LOG_WARN("studio: queued VMD import target is gone: %s", PathToUtf8(q.path.filename()).c_str());
     }
     if (!studioImportModeOpen_) return;
 

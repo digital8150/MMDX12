@@ -360,6 +360,11 @@ void App::StudioEnter(std::unique_ptr<StudioDoc> doc) {
     studioStageOpen_.clear();
     studioLastBind_ = 0;
     studioLeaveConfirm_ = false;
+    studioImportQueue_.clear();     // VMD imports waiting for the merge / replace question belong to the old document
+    studioImportPending_ = {};
+    studioImportModeOpen_ = false;
+    studioImportModeExisting_ = 0;
+    studioImportModeAnswer_ = -1;
     studioPending_ = StudioAction::None;
     studioViewDrag_ = 0;
     studioAutosaveAt_ = timeSeconds_;
@@ -397,6 +402,11 @@ void App::LeaveStudio() {
     rs.shading = ViewShading::Lit;  // the studio shading mode is an editing view only
     renderer_.SetSettings(rs);
     studioLeaveConfirm_ = false;
+    studioImportQueue_.clear();     // VMD imports waiting for the merge / replace question belong to the old document
+    studioImportPending_ = {};
+    studioImportModeOpen_ = false;
+    studioImportModeExisting_ = 0;
+    studioImportModeAnswer_ = -1;
     studioPending_ = StudioAction::None;
     ResetStudioGi();   // a viewport GI job does not outlive the studio
     screen_ = Screen::Select;
@@ -4301,7 +4311,11 @@ void App::StudioImportVmdFrom(const std::filesystem::path& path, VmdImportMode m
             std::vector<CameraKf>& keys = d.SelectedCameraTrack().camera;
             if (replace && !in.camera.empty()) keys.clear();
             for (const CameraKf& k : in.camera) UpsertKey(keys, k);
-            StudioPushTrackEdit(undoName, before);
+            // One undo step: the extra camera's keys and the main camera's light / self-shadow tracks together.
+            std::vector<TrackState> afterTrack;
+            for (const TrackState& s : before) afterTrack.push_back(CaptureTrack(d, s));
+            std::vector<std::unique_ptr<Command>> parts;
+            parts.push_back(std::make_unique<TrackEditCommand>(d, undoName, before, std::move(afterTrack)));
             if (!in.light.empty() || !in.shadow.empty()) {
                 MotionData after = d.camera;   // the main camera keeps the light / self-shadow tracks
                 if (replace) {
@@ -4310,8 +4324,9 @@ void App::StudioImportVmdFrom(const std::filesystem::path& path, VmdImportMode m
                 }
                 for (const LightKf& k : in.light) UpsertKey(after.light, k);
                 for (const ShadowKf& k : in.shadow) UpsertKey(after.shadow, k);
-                d.history.Push(std::make_unique<MotionSwapCommand>(d, -1, undoName, d.camera, std::move(after)));
+                parts.push_back(std::make_unique<MotionSwapCommand>(d, -1, undoName, d.camera, std::move(after)));
             }
+            d.history.Push(std::make_unique<CompositeCommand>(undoName, std::move(parts)));
         }
         d.selectedModel = -1;
         if (!in.camera.empty()) d.useMotionCamera = true;
