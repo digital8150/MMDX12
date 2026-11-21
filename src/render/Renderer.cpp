@@ -948,11 +948,15 @@ void Renderer::UpdateMirrors(ID3D12GraphicsCommandList* cmd, const FrameView& vi
     // Zero cost without mirror materials: no model has a fitted mirror plane, so the constants keep what
     // FillSceneConstants left (zero: no mirror, clip off) and the frame is byte for byte the one without the feature.
     bool anyMirror = false;
-    for (const GpuModel* model : view.models)
-        if (model && !model->MirrorPlanes().empty()) {
-            anyMirror = true;
-            break;
-        }
+    for (const GpuModel* model : view.models) {
+        if (!model) continue;
+        for (const MirrorPlane& p : model->MirrorPlanes())
+            if (model->MirrorPlaneActive(p)) {
+                anyMirror = true;
+                break;
+            }
+        if (anyMirror) break;
+    }
     if (!anyMirror) return;
     sc.mirrorParams = {0.0f, -1.0f, -1.0f, 0.0f};
     sc.clipPlane = {0.0f, 0.0f, 0.0f, 0.0f};
@@ -992,7 +996,7 @@ void Renderer::UpdateMirrors(ID3D12GraphicsCommandList* cmd, const FrameView& vi
         const XMMATRIX normalMat = XMMatrixTranspose(XMMatrixInverse(nullptr, root));
         const float scale = std::cbrt(std::fabs(det));
         for (const MirrorPlane& p : model->MirrorPlanes()) {
-            if (!p.valid || !(p.area > 0.0f)) continue;
+            if (!model->MirrorPlaneActive(p) || !(p.area > 0.0f)) continue;
             const XMVECTOR c = XMVector3TransformCoord(XMLoadFloat3(&p.centroid), root);
             // the ordinary normal transform (inverse transpose), which is also what the scene shaders use, so a
             // model root with a reflection in it keeps the side the surface is actually drawn from

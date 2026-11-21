@@ -52,7 +52,7 @@ struct GpuPbrSlot {
     uint type;         // Ray <PREFIX>_MAP_TYPE
     uint swizzle;      // 0 R, 1 G, 2 B, 3 A
     uint uvFlip;       // 0 none, 1 X, 2 Y, 3 both; NORMAL 4 = flip the shading normal X
-    uint applyScale;   // 0 none, 1 map * value, 2 map ^ value
+    uint applyScale;   // 0 none, 1 map * value, 2 map ^ value, 3 (map ^ value) * value.w
     uint colorFlip;    // CUSTOM_A/B: 1 inverts the value
     int textureSrv;    // absolute SrvHeap index of the slot texture (-1 = none)
     float loopU, loopV;
@@ -264,6 +264,7 @@ float3 PbrModelHue(uint model) {
 float PbrApplyScaleS(float v, GpuPbrSlot s) {
     if (s.applyScale == 1u) return v * s.value.x;
     if (s.applyScale == 2u) return pow(max(v, 0.0), s.value.x);
+    if (s.applyScale == 3u) return pow(max(v, 0.0), s.value.x) * s.value.w;
     return v;
 }
 
@@ -271,6 +272,8 @@ float PbrApplyScaleS(float v, GpuPbrSlot s) {
 float3 PbrApplyScaleRgb(float3 c, GpuPbrSlot s) {
     if (s.applyScale == 1u) return c * s.value.xyz;
     if (s.applyScale == 2u) return pow(max(c, 0.0), s.value.xyz);
+    // 3: an exponent map scaled by a stage strength-only emissive rule (#30), which keeps the record's exponent
+    if (s.applyScale == 3u) return pow(max(c, 0.0), s.value.xyz) * s.value.w;
     return c;
 }
 

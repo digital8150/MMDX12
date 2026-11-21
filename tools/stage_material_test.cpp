@@ -143,8 +143,34 @@ void TestColourRule() {
 
 } // namespace
 
+// A Ray-MMD exponent map (EMISSIVE_MAP_APPLY_SCALE 2: map ^ value): a strength-only rule keeps the exponent and scales
+// the result (applyScale 3, strength in the slot's scale), instead of rewriting it as a linear factor.
+void TestExponentMap() {
+    PmxModel pmx;
+    PbrModelData pbr;
+    MakeModel(pmx, pbr);
+    PbrSlot& te = pbr.materials[0].slots[(int)PbrSlotId::Emissive];
+    te.applyScale = 2;
+    te.value[0] = te.value[1] = te.value[2] = 2.0f;
+    StageMaterialRule r;
+    r.match = "tex";
+    r.emissiveStrength = 3.0f;
+    Apply({r}, pmx, pbr);
+    const PbrMaterial& t = pbr.materials[0];
+    const PbrSlot& e = Emissive(t);
+    Expect(t.emissiveEnable && e.applyScale == 3 && Near(e.value[0], 2.0f) && e.hasScale && Near(e.scale, 3.0f) &&
+               t.ext.emissiveStrength > 1.0f,
+           "strength only on an exponent map: exponent kept, x3, HDR");
+    r.emissiveStrength = 0.5f;
+    Apply({r}, pmx, pbr);
+    Expect(Emissive(pbr.materials[0]).applyScale == 3 && Near(Emissive(pbr.materials[0]).value[0], 2.0f) &&
+               Near(Emissive(pbr.materials[0]).scale, 0.5f),
+           "a second strength rule replaces the scale, the exponent stays");
+}
+
 int main() {
     TestStrengthOnly();
+    TestExponentMap();
     TestStrengthBelowOne();
     TestColourRule();
     printf("%s (%d failures)\n", g_fails ? "FAILED" : "ALL PASSED", g_fails);

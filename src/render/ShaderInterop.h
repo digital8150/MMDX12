@@ -466,7 +466,7 @@ struct GpuPbrSlot {
     uint32_t type;         // Ray <PREFIX>_MAP_TYPE
     uint32_t swizzle;      // 0 R, 1 G, 2 B, 3 A
     uint32_t uvFlip;       // 0 none, 1 X, 2 Y, 3 both; NORMAL 4 = flip the shading normal X
-    uint32_t applyScale;   // 0 none, 1 map * value, 2 map ^ value
+    uint32_t applyScale;   // 0 none, 1 map * value, 2 map ^ value, 3 (map ^ value) * scale (#30)
     uint32_t colorFlip;    // CUSTOM_A/B: 1 inverts the value
     int32_t textureSrv;    // absolute SrvHeap index of the slot texture (None falls back to the constant)
     float loopU, loopV;    // <slot>MapLoopNum

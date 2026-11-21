@@ -805,8 +805,10 @@ PSOut MmdShadePbr(VSOut i, bool front, GpuPbrMaterial m, float3 n0, float4 tex, 
         alpha *= coverage;
 #ifndef RT_SHADOWS
         if (glassSlot >= 0) {
+            // the record's own roughness (rough above has a 0.03 floor, which kept smooth glass off the one-tap path)
+            const float glassRough = sqrt(saturate(PbrSlotRoughness(m.slots[PBR_SLOT_SMOOTHNESS], uv)));
             const float3 refl = MirrorReflection(MirrorSrv(glassSlot), glassSlot, i.worldPos, float3(1, 1, 1),
-                                                 sqrt(saturate(rough)));
+                                                 glassRough);
             color = max(color + refl * (glassGloss * fres / max(coverage, 1e-3)), 0.0);
             reflectivity = 0.0;
         }

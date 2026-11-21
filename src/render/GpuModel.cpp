@@ -911,11 +911,14 @@ bool GpuModel::Create(Dx12Context& ctx, UploadBatch& batch, const PmxModel& pmx,
     // material is an authored flat surface, so the area-weighted centroid and normal of its triangles are the plane;
     // a material whose vertices do not stay within 1 % of its own extent of that plane (a curved or scattered group)
     // gets valid = false and shows its tint only.
-    // #31: a transmissive material (glass) that is flat gets a plane too, so raster can show its reflection.
+    // #31: a flat stage material with a PBR record gets a glass plane too, so raster can show a glass reflection.
+    // Its transmission decides at frame time (Renderer::UpdateMirrors, MirrorPlaneActive), because a stage binding
+    // may turn a material into glass, or glass opaque, at run time. Stage parts only: a skinned model's rest-pose
+    // plane would not follow its bones (a glTF character's lens, a studio prop).
     for (size_t mIdx = 0; mIdx < pmx.materials.size() && mIdx < consts.size(); ++mIdx) {
         const bool mirror = (consts[mIdx].flags & MatFlag_Mirror) != 0;
-        const bool glass = !mirror && mIdx < pbr.materials.size() && pbr.materials[mIdx].valid &&
-                           pbr.materials[mIdx].ext.transmission > 0.0f;
+        const bool glass = !mirror && role_ == ModelRole::Stage && mIdx < pbr.materials.size() &&
+                           pbr.materials[mIdx].valid;
         if (!mirror && !glass) continue;
         MirrorPlane plane;
         plane.material = mIdx;
@@ -1486,8 +1489,18 @@ void GpuModel::SetPbrOverrides(uint64_t frame, const std::vector<PbrOverride>& l
         }
         // #30: a strength without a colour scales the material's own emission (none: nothing to scale)
         std::optional<DirectX::XMFLOAT3> emissive = o.emissive;
+        GpuPbrSlot& emSlot = m.slots[(int)PbrSlotId::Emissive];
         if (!emissive && o.emissiveStrength && o.material < pbrEmissiveOwn_.size() &&
-            pbrEmissiveOwn_[o.material].w > 0.0f) {
+            pbrEmissiveOwn_[o.material].w > 0.0f && emSlot.textureSrv >= 0 &&
+            (emSlot.applyScale == 2 || emSlot.applyScale == 3)) {
+            // an exponent map (map ^ value): keep the exponent, scale the result (applyScale 3, value.w = strength)
+            const float k = std::max(0.0f, *o.emissiveStrength);
+            emSlot.applyScale = 3;
+            emSlot.value.w = k;
+            m.flags = k > 0.0f ? (m.flags | 4u) : (m.flags & ~4u);   // GpuPbrFlags bit 2: emissive
+            m.flags = k > 1.0f ? (m.flags | 8u) : (m.flags & ~8u);   // bit 3: HDR (not clamped)
+        } else if (!emissive && o.emissiveStrength && o.material < pbrEmissiveOwn_.size() &&
+                   pbrEmissiveOwn_[o.material].w > 0.0f) {
             const DirectX::XMFLOAT4& own = pbrEmissiveOwn_[o.material];
             const float k = std::max(0.0f, *o.emissiveStrength);
             emissive = DirectX::XMFLOAT3{own.x * k, own.y * k, own.z * k};
@@ -1661,6 +1674,11 @@ float GpuModel::EmitEstimate(size_t material) const {
         if ((r.flags & 4u) != 0) {
             const GpuPbrSlot& s = r.slots[(int)PbrSlotId::Emissive];
             DirectX::XMFLOAT3 v = {std::max(s.value.x, 0.0f), std::max(s.value.y, 0.0f), std::max(s.value.z, 0.0f)};
+            // an exponent map's value is the exponent, not a colour: the map itself (x the #30 strength for 3)
+            if (s.textureSrv >= 0 && (s.applyScale == 2 || s.applyScale == 3)) {
+                const float k = s.applyScale == 3 ? std::max(s.value.w, 0.0f) : 1.0f;
+                v = {k, k, k};
+            }
             if (s.textureSrv < 0 && (r.flags & 8u) == 0) {
                 const auto srgb = [](float x) {
                     x = std::clamp(x, 0.0f, 1.0f);

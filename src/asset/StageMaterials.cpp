@@ -146,7 +146,18 @@ void ApplyRuleToRecord(const StageMaterialRule& rule, PbrMaterial& m, PmxMateria
     // The colour the rule emits: its own colour, or (a rule with only a strength) the material's own emission, so a
     // strength-only rule scales what the material already emits. A material that emits nothing stays dark then.
     std::optional<DirectX::XMFLOAT3> base;
-    if (rule.emissive) base = *rule.emissive;
+    PbrSlot& emSlot = m.slots[(int)PbrSlotId::Emissive];
+    if (!rule.emissive && rule.emissiveStrength && m.ext.emissiveOwn.w > 0.0f && SlotHasTexture(emSlot) &&
+        (emSlot.applyScale == 2 || emSlot.applyScale == 3)) {
+        // An exponent map (map ^ value) cannot be written as a colour factor: keep the exponent and scale the result
+        // (applyScale 3, the strength rides in the slot's scale).
+        const float strength = std::max(0.0f, *rule.emissiveStrength);
+        emSlot.applyScale = 3;
+        emSlot.hasScale = true;
+        emSlot.scale = strength;
+        m.emissiveEnable = strength > 0.0f;
+        m.ext.emissiveStrength = strength;   // > 1 marks the record HDR (GpuModel)
+    } else if (rule.emissive) base = *rule.emissive;
     else if (rule.emissiveStrength && m.ext.emissiveOwn.w > 0.0f)
         base = DirectX::XMFLOAT3{m.ext.emissiveOwn.x, m.ext.emissiveOwn.y, m.ext.emissiveOwn.z};
     if (base) {
