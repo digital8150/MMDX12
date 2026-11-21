@@ -1572,6 +1572,25 @@ void App::DrawStudioModelMenu(int index) {
     ImGui::PopStyleVar();
 }
 
+// A prop field gesture whose field went away before it saw its end (DrawStudio, once no item is active; or another
+// gesture starting): the non-key path wrote the attach live, so that change is one undo step; the key path writes
+// its value so far into the key at the frame the gesture started on.
+void App::StudioEndPropGesture() {
+    if (!studioPropDragging_) return;
+    studioPropDragging_ = false;
+    StudioDoc& d = *studio_;
+    const int i = d.IndexOfUid(studioPropDragModel_);
+    if (i < 0) return;
+    if (studioPropDragKey_) {
+        if (!(studioPropDragValue_ == studioPropDragBefore_))
+            StudioCommitPropKey(studioPropDragModel_, studioPropDragFrame_, studioPropDragValue_, Tr("소품 키 편집"));
+        return;
+    }
+    const PropAttach& now = d.models[(size_t)i]->attach;
+    if (!(studioPropDragBefore_ == now))
+        d.history.Push(std::make_unique<PropAttachCommand>(d, studioPropDragModel_, studioPropDragBefore_, now));
+}
+
 void App::DrawStudioPropPanel(float w) {
     using namespace ui;
     StudioDoc& d = *studio_;
@@ -1592,15 +1611,20 @@ void App::DrawStudioPropPanel(float w) {
         }
         ImGui::Dummy(ImVec2(w, Dp(20.0f)));
     }
-    const bool keyHere = FindKey(m->motion.accessory, d.Frame()) != nullptr;
-    const bool editKey = keyed && (keyHere || d.autoKey);  // a keyed prop with auto-key: the fields edit the key at the playhead
-    const PropAttach cur = AccessoryPlacement(*m, (float)d.Frame());
+    // A gesture of this prop keeps its path and frame to its end (the playhead may move meanwhile: playback, a key
+    // jump), so it never writes the start frame's placement into another frame's key.
+    const bool ownGesture = studioPropDragging_ && studioPropDragModel_ == m->uid;
+    const int editFrame = ownGesture ? studioPropDragFrame_ : d.Frame();
+    const bool keyHere = FindKey(m->motion.accessory, editFrame) != nullptr;
+    // a keyed prop with auto-key: the fields edit the key at the playhead
+    const bool editKey = ownGesture ? studioPropDragKey_ : keyed && (keyHere || d.autoKey);
+    const PropAttach cur = AccessoryPlacement(*m, (float)editFrame);
     const PropAttach before = editKey ? cur : m->attach;
-    PropAttach a = before;
+    // the key path writes nothing until the gesture ends: its fields keep the gesture's value so far
+    PropAttach a = ownGesture && editKey ? studioPropDragValue_ : before;
     const int parentIndex = a.parent >= 0 ? d.IndexOfUid((uint32_t)a.parent) : -1;
     const StudioModel* parent = parentIndex >= 0 ? d.models[(size_t)parentIndex].get() : nullptr;
     bool commit = false;  // push one undo step now (combo picks, chips, the end of a drag)
-    static bool dragging = false;
     const auto row = [&](const char* label, auto&& widget) {
         const ImVec2 c = ImGui::GetCursorScreenPos();
         Text(cdl, Font::Regular, size::Small, ImVec2(c.x, c.y + Dp(5.0f)), p.ink3, label);
@@ -1677,40 +1701,50 @@ void App::DrawStudioPropPanel(float w) {
     }
     // a new parent / bone keeps the prop where it is in the world (the offset absorbs the new bone's transform)
     if (commit && (a.parent != before.parent || a.bone != before.bone)) a = StudioKeepWorldAttach(*m, before, a);
+    // One undo step per drag / typed value: the gesture keeps the attach it started from (the non-key path writes the
+    // attach live, so this frame's `before` is no longer the gesture's start) and ends after this frame's value is in.
+    const auto beginGesture = [&] {
+        if (studioPropDragging_ && studioPropDragModel_ == m->uid) return;
+        StudioEndPropGesture();  // another prop's gesture still open: record it first
+        studioPropDragging_ = true;
+        studioPropDragKey_ = editKey;
+        studioPropDragModel_ = m->uid;
+        studioPropDragFrame_ = editFrame;
+        studioPropDragBefore_ = before;
+        studioPropDragValue_ = before;
+    };
     bool dragEnded = false;
     const auto dragRow = [&](const char* label, auto&& widget) {
         row(label, [&] {
             widget();
-            if (ImGui::IsItemActivated() && !dragging) { dragging = true; }
-            if (ImGui::IsItemDeactivated()) dragEnded = true;
+            if (ImGui::IsItemActivated()) beginGesture();
+            if (ItemEditEnded()) dragEnded = true;
         });
     };
+    const PropAttach fieldsStart = a;
     dragRow(Tr("위치"), [&] { ImGui::DragFloat3("##propt", &a.translation.x, 0.02f, 0.0f, 0.0f, "%.2f"); });
     dragRow(Tr("회전"), [&] { ImGui::DragFloat3("##propr", &a.rotationDeg.x, 0.25f, 0.0f, 0.0f, "%.1f°"); });
     dragRow(Tr("크기"), [&] { ImGui::DragFloat("##props", &a.scale, 0.005f, 0.01f, 100.0f, "%.3f"); });
     a.scale = std::clamp(a.scale, 0.01f, 100.0f);
+    // a change opens the gesture when none is open: a field activated as another field's gesture ends only joins it
+    if (!(a == fieldsStart)) beginGesture();
+    const bool gesture = studioPropDragging_ && studioPropDragModel_ == m->uid;
+    if (gesture) studioPropDragValue_ = a;
     // a keyed prop with auto-key: a finished placement edit writes the accessory key at the playhead (undoable);
     // without keys (or with auto-key off) the static attach is edited, as before.
-    const auto commitPlacement = [&] {
+    const auto commitPlacement = [&](const PropAttach& from) {
         if (editKey) {
-            AccessoryKf k = StudioNewAccessoryKey(*m, d.Frame());
-            k.translation = a.translation;
-            k.rotationDeg = a.rotationDeg;
-            k.scale = a.scale;
-            k.parentUid = a.parent < 0 ? 0 : (uint32_t)a.parent;
-            k.bone = a.bone;
-            if (const AccessoryKf* cur = FindKey(m->motion.accessory, k.frame); cur && *cur == k) return;
-            StudioSetAccessoryAtPlayhead(k, Tr("소품 키 편집"));
+            StudioCommitPropKey(m->uid, editFrame, a, Tr("소품 키 편집"));
         } else {
-            if (!(a == before)) d.history.Push(std::make_unique<PropAttachCommand>(d, m->uid, before, a));
+            if (!(a == from)) d.history.Push(std::make_unique<PropAttachCommand>(d, m->uid, from, a));
         }
     };
     if (!editKey && !(a == m->attach)) m->attach = a;  // live while dragging (the non-key path); the undo step is pushed below
     if (commit) {
-        commitPlacement();
-    } else if (dragEnded && dragging) {
-        dragging = false;
-        commitPlacement();
+        commitPlacement(before);
+    } else if (dragEnded && gesture) {
+        studioPropDragging_ = false;
+        commitPlacement(studioPropDragBefore_);
     }
     ImGui::SetCursorScreenPos(ImVec2(ImGui::GetCursorScreenPos().x + Dp(64.0f), ImGui::GetCursorScreenPos().y));
     if (Button("##propreset", Tr("배치 초기화"), icon::ArrowCcw, ButtonKind::Ghost, ImVec2((w - Dp(64.0f)) / Dpi(), 32.0f))) {

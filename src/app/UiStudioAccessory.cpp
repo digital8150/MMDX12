@@ -48,6 +48,26 @@ void App::StudioSetAccessoryAtPlayhead(const AccessoryKf& key, const char* undoN
     d.rowsKey = ~0ull;
 }
 
+void App::StudioCommitPropKey(uint32_t uid, int frame, const PropAttach& a, const char* undoName) {
+    StudioDoc& d = *studio_;
+    const int i = d.IndexOfUid(uid);
+    if (i < 0) return;
+    StudioModel& m = *d.models[(size_t)i];
+    if (!m.IsProp()) return;
+    AccessoryKf k = StudioNewAccessoryKey(m, frame);
+    k.translation = a.translation;
+    k.rotationDeg = a.rotationDeg;
+    k.scale = a.scale;
+    k.parentUid = a.parent < 0 ? 0 : (uint32_t)a.parent;
+    k.bone = a.bone;
+    if (const AccessoryKf* cur = FindKey(m.motion.accessory, frame); cur && *cur == k) return;
+    std::vector<TrackState> before{CaptureTrack(d, i, RowKind::Accessory, "")};
+    UpsertKey(m.motion.accessory, k);
+    StudioPushTrackEdit(undoName, before);
+    if (i == d.selectedModel) d.selection = {{MakeRowId(RowKind::Accessory, 0, 0), frame}};
+    d.rowsKey = ~0ull;
+}
+
 bool App::DrawStudioAccessoryKeyFields(float w, int frame) {
     using namespace ui;
     StudioDoc& d = *studio_;

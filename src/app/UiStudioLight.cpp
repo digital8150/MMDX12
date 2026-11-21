@@ -468,6 +468,8 @@ void App::DrawStudioLightInspector(float w) {
         ImGui::Dummy(ImVec2(w, Dp(8.0f)));
     };
 
+    // the field's own activation / end (read before the row's trailing Dummy, which becomes the last item)
+    bool rowActivated = false, rowEnded = false;
     const auto row = [&](const char* label, auto&& widget) {
         const ImVec2 c = ImGui::GetCursorScreenPos();
         Text(cdl, Font::Regular, size::Small, ImVec2(c.x, c.y + Dp(5.0f)), p.ink3, label);
@@ -476,6 +478,8 @@ void App::DrawStudioLightInspector(float w) {
         PushFont(Font::Regular, size::Small);
         ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(ImGui::GetStyle().FramePadding.x, Dp(4.0f)));
         bool changed = widget();
+        rowActivated = ImGui::IsItemActivated();
+        rowEnded = ItemEditEnded();
         ImGui::PopStyleVar();
         PopFont();
         ImGui::Dummy(ImVec2(w, Dp(4.0f)));
@@ -510,7 +514,9 @@ void App::DrawStudioLightInspector(float w) {
         bool changed = row(label, [&] { return widget(); });
         if (locked) ImGui::EndDisabled();
 
-        if (ImGui::IsItemActivated()) {
+        // One undo step per drag / typed value. A change opens an edit when none is open (a field activated as another
+        // field's edit ends only joins it), and the edit ends after this frame's value is written.
+        if (rowActivated || changed) {
             StudioBeginLightEdit(light->uid, willKey);
         }
         if (changed) {
@@ -529,7 +535,7 @@ void App::DrawStudioLightInspector(float w) {
             }
             d.rowsKey = ~0ull;
         }
-        if (ImGui::IsItemDeactivated()) {
+        if (rowEnded) {
             StudioEndLightEdit(light->uid);
         }
         return changed;
@@ -541,7 +547,7 @@ void App::DrawStudioLightInspector(float w) {
         if (locked) ImGui::BeginDisabled(true);
         bool changed = row(label, [&] { return widget(); });
         if (locked) ImGui::EndDisabled();
-        if (ImGui::IsItemActivated()) {
+        if (rowActivated || changed) {  // as keyedEdit: a change opens an edit when none is open
             StudioBeginLightEdit(light->uid, false);
         }
         if (changed) {
@@ -549,7 +555,7 @@ void App::DrawStudioLightInspector(float w) {
             apply(*light);
             d.rowsKey = ~0ull;
         }
-        if (ImGui::IsItemDeactivated()) {
+        if (rowEnded) {
             StudioEndLightEdit(light->uid);
         }
         return changed;
