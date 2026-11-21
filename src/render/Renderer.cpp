@@ -996,9 +996,14 @@ void Renderer::UpdateMirrors(ID3D12GraphicsCommandList* cmd, const FrameView& vi
             const XMVECTOR c = XMVector3TransformCoord(XMLoadFloat3(&p.centroid), root);
             // the ordinary normal transform (inverse transpose), which is also what the scene shaders use, so a
             // model root with a reflection in it keeps the side the surface is actually drawn from
-            const XMVECTOR n = XMVector3Normalize(XMVector3TransformNormal(XMLoadFloat3(&p.normal), normalMat));
-            // the reflection is visible from the side the eye is on
-            if (XMVectorGetX(XMVector3Dot(n, XMVectorSubtract(eye, c))) <= 0.0f) continue;
+            XMVECTOR n = XMVector3Normalize(XMVector3TransformNormal(XMLoadFloat3(&p.normal), normalMat));
+            // the reflection is visible from the side the eye is on. A mirror has one reflecting side; glass (#31)
+            // reflects on both, so its plane turns toward the eye (the scene PS matches the slot by the pixel's
+            // viewer-facing normal).
+            if (XMVectorGetX(XMVector3Dot(n, XMVectorSubtract(eye, c))) <= 0.0f) {
+                if (!p.glass) continue;
+                n = XMVectorNegate(n);
+            }
             // ... and the plane has to reach into the view frustum: test the sphere (centroid, sqrt(area)) against the
             // six frustum planes, so a wall whose centre is off screen but which fills the view is kept.
             const float radius = std::sqrt(p.area) * scale;
@@ -1018,7 +1023,8 @@ void Renderer::UpdateMirrors(ID3D12GraphicsCommandList* cmd, const FrameView& vi
             // projected size: world area x foreshortening / distance^2
             const float dist = std::max(XMVectorGetX(XMVector3Length(XMVectorSubtract(c, eye))), 1.0f);
             const float face = std::fabs(XMVectorGetX(XMVector3Dot(n, XMVector3Normalize(XMVectorSubtract(eye, c)))));
-            const float score = p.area * scale * scale * std::max(face, 0.05f) / (dist * dist);
+            // #31: a glass plane reflects only its Fresnel share, so a mirror of similar size wins the slot
+            const float score = p.area * scale * scale * std::max(face, 0.05f) / (dist * dist) * (p.glass ? 0.25f : 1.0f);
             if (candCount < kMaxMirrorPlanes) {
                 cand[candCount].plane = {XMVectorGetX(n), XMVectorGetY(n), XMVectorGetZ(n),
                                          -XMVectorGetX(XMVector3Dot(n, c))};

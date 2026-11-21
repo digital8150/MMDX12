@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """stagegen: writes procedural MMDX test stages (GLB + stage.json) for tools/stage_check.
 
-    python tools/stagegen/stagegen.py [--out captures/stages] [--only cyclorama,mirror_room,led_stage]
+    python tools/stagegen/stagegen.py [--out captures/stages] [--only cyclorama,mirror_room,glass_room,led_stage]
 
 Everything is generated from numpy arrays: no Blender, no pygltflib, no third-party glTF writer. The GLB is written
 by hand (a JSON chunk + a BIN chunk, 4-byte padded) and is a valid glTF 2.0 asset with named nodes and materials,
@@ -521,6 +521,81 @@ def build_mirror_room(out_dir):
             {"param": "lampIntensity", "target": "lights.ceiling_r.intensity"},
             {"param": "lampIntensity", "target": "lights.ceiling_back.intensity", "scale": 0.7},
             {"param": "floorGloss", "target": "materials.wood_floor.roughness"},
+        ],
+    }
+    with open(os.path.join(stage_dir, "stage.json"), "w", encoding="utf-8") as f:
+        json.dump(manifest, f, ensure_ascii=False, indent=2)
+    return stage_dir
+
+
+def build_glass_room(out_dir):
+    """#31 fixture: a room split by one flat, free-standing glass pane (transmission 1, ior 1.5, smooth). Raster shows
+    the planar reflection of the room on the pane (Fresnel weighted, strongest at grazing angles); a red block behind
+    the pane shows what is seen through it."""
+    gltf = Gltf("glass_room")
+    wood = gltf.material("wood_floor", base_color=(0.34, 0.21, 0.12, 1.0), roughness=0.38, metallic=0.0)
+    paint = gltf.material("wall_paint", base_color=(0.72, 0.71, 0.70, 1.0), roughness=0.7, metallic=0.0)
+    accent = gltf.material("accent", base_color=(0.80, 0.12, 0.10, 1.0), roughness=0.5, metallic=0.0)
+    glass = gltf.material("glass_pane", base_color=(0.97, 0.985, 1.0, 1.0), roughness=0.0, metallic=0.0)
+    ceiling = gltf.material("ceiling", base_color=(0.85, 0.85, 0.86, 1.0), roughness=0.8, metallic=0.0)
+
+    width, height, depth = 14.0, 5.0, 16.0
+    gltf.add(grid_part("Floor", wood, ((-width / 2, 0.0, -depth / 2), (-width / 2, 0.0, depth / 2),
+                                      (width / 2, 0.0, -depth / 2)), 8, 8, flip=False, uv_scale=(7.0, 8.0)))
+    gltf.add(grid_part("Ceiling", ceiling, ((-width / 2, height, depth / 2), (-width / 2, height, -depth / 2),
+                                           (width / 2, height, depth / 2)), 4, 4, flip=False))
+    gltf.add(grid_part("Wall_Back", paint, ((-width / 2, 0.0, -depth / 2), (width / 2, 0.0, -depth / 2),
+                                           (-width / 2, height, -depth / 2)), 4, 2, flip=False))
+    gltf.add(grid_part("Wall_Left", paint, ((-width / 2, 0.0, depth / 2), (-width / 2, 0.0, -depth / 2),
+                                           (-width / 2, height, depth / 2)), 4, 2, flip=False))
+    gltf.add(grid_part("Wall_Right", paint, ((width / 2, 0.0, -depth / 2), (width / 2, 0.0, depth / 2),
+                                            (width / 2, height, -depth / 2)), 4, 2, flip=False))
+    gltf.add(grid_part("Wall_Front", paint, ((width / 2, 0.0, depth / 2), (-width / 2, 0.0, depth / 2),
+                                            (width / 2, height, depth / 2)), 4, 2, flip=False))
+    # the pane: 9 x 3.6 at z = -3, facing +z (toward the default camera)
+    gltf.add(grid_part("Glass_Pane", glass, ((-4.5, 0.2, -3.0), (4.5, 0.2, -3.0), (-4.5, 3.8, -3.0)), 2, 1,
+                       flip=False))
+    for part in box_parts("Block", accent, (0.0, 0.8, -5.5), (2.0, 1.6, 1.0), skip=("ny",)):
+        gltf.add(part)
+    for part in box_parts("Bench", wood, (3.5, 0.22, 3.0), (2.4, 0.35, 0.6), skip=("py", "ny")):
+        gltf.add(part)
+
+    stage_dir = os.path.join(out_dir, "glass_room")
+    os.makedirs(stage_dir, exist_ok=True)
+    with open(os.path.join(stage_dir, "glass_room.glb"), "wb") as f:
+        f.write(gltf.build())
+
+    manifest = {
+        "format": "mmdx-stage",
+        "formatVersion": 1,
+        "id": "glass_room",
+        "version": "1.0.0",
+        "name": {"ko": "유리 칸막이 방", "en": "Glass partition room", "ja": "ガラス仕切りの部屋"},
+        "description": {"ko": "평평한 유리 한 장이 방을 나누는 테스트 무대.", "en": "A test room split by one flat glass pane."},
+        "authors": [{"name": "MMDX stagegen", "role": "procedural"}],
+        "license": "CC0-1.0",
+        "tags": ["glass", "interior", "test"],
+        "models": [{"file": "glass_room.glb", "name": "Room", "role": "floor"}],
+        "materials": [
+            {"match": "glass_pane", "baseColor": [0.97, 0.985, 1.0, 1.0], "transmission": 1.0, "ior": 1.5,
+             "roughness": 0.0, "castShadow": False},
+            {"match": "wood_floor", "roughness": 0.38, "receiveShadow": True},
+            {"match": "wall_paint", "roughness": 0.7},
+            {"match": "ceiling", "castShadow": False},
+        ],
+        "lights": [
+            light("ambient", "ambient", intensity=0.22),
+            light("point", "ceiling_l", intensity=1.4, color=(1.0, 0.97, 0.92), position=(-55.0, 55.0, 40.0),
+                  range_=160.0),
+            light("point", "ceiling_r", intensity=1.4, color=(1.0, 0.97, 0.92), position=(55.0, 55.0, 40.0),
+                  range_=160.0),
+            light("point", "ceiling_back", intensity=1.0, color=(0.96, 0.98, 1.0), position=(0.0, 55.0, -80.0),
+                  range_=160.0, shadow="nocast"),
+        ],
+        "sockets": [{"name": "world", "position": [0.0, 0.0, 0.0]}],
+        "cameras": [
+            {"name": "wide", "position": [0.0, 18.0, 115.0], "target": [0.0, 14.0, -30.0], "fov": 45.0},
+            {"name": "grazing", "position": [-70.0, 20.0, 20.0], "target": [10.0, 18.0, -38.0], "fov": 40.0},
         ],
     }
     with open(os.path.join(stage_dir, "stage.json"), "w", encoding="utf-8") as f:
@@ -1449,6 +1524,7 @@ STAGES = {
     "sky_test": build_sky_test,
     "sky_cloud_test": build_sky_cloud_test,
     "sky_map_test": build_sky_map_test,
+    "glass_room": build_glass_room,
 }
 
 

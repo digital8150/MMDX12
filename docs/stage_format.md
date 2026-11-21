@@ -129,7 +129,7 @@ distance are read from the record's factor (the maps are carried, not sampled: a
 
 | path | what a transmissive material does |
 |---|---|
-| raster / RT camera view | no screen-space refraction (S2b): the surface is blended with `alpha = 1 − transmission × (1 − Fresnel(N·V, ior))`, its blended colour is tinted by the base colour and its reflectivity output is the interface Fresnel, so SSR reflections show on it; on the RayTraced path the scene shader traces a ray-traced reflection of the scene on the glass itself |
+| raster / RT camera view | no screen-space refraction (S2b): the surface is blended with `alpha = 1 − transmission × (1 − Fresnel(N·V, ior))`, its blended colour is tinted by the base colour. The blended normal target dilutes the Fresnel below the reflection passes' gate, so the scene shader adds the reflection itself, weighted by the Fresnel: on the RayTraced path a ray-traced reflection, on raster the planar reflection of **flat** glass (the material's triangles are fitted to a plane at load, like a mirror; see “Planar mirrors”). Curved raster glass shows the pre-blurred sky, and SSR reaches it only at grazing angles |
 | RT (ray-query shadows / reflections) and PT, offline GI shadows | a shadow ray is tinted by `transmission × baseColour × (1 − Fresnel)` per crossing (`TraceShadowRayTinted`) instead of being stopped, and by the volume's absorption over the chord travelled inside; no caustics. Glass therefore casts a coloured shadow that darkens toward its rim |
 | PT, offline GI (path continuation) | at a hit, the transmission event is chosen with probability = the transmission factor, else the ordinary BSDF. The event is Fresnel-weighted reflection vs refraction with the material's ior; thin-walled (`thickness` 0) transmits straight through without bending, a volume refracts and absorbs over the segment it travels inside (`sigma = -ln(attenuationColour) / attenuationDistance`). Smooth when roughness < 0.1; above that the interface normal is a GGX-sampled microfacet normal, so a frosted panel blurs what is seen through it. The base colour tints the light entering the material (glTF), and the offline GI irradiance cache is never read across the interface (that path is brute force) |
 | renders of the benchmark glass cube | unchanged: the analytic cube keeps its own dispersion path through the same shared dielectric step (`shaders/dielectric.hlsli`) |
@@ -153,7 +153,7 @@ one rule per material family). Every override is optional:
 | `baseColor` | colour | albedo (linear); alpha is the material's opacity |
 | `roughness`, `metallic` | 0..1 | PBR factors |
 | `emissive` | `[r,g,b]` | emitted colour (linear, already includes the strength below) |
-| `emissiveStrength` | float | multiplies `emissive` (glTF `KHR_materials_emissive_strength`) |
+| `emissiveStrength` | float | multiplies `emissive` (glTF `KHR_materials_emissive_strength`); a rule without `emissive` multiplies the material's own emission (its emissive map / colour), and a material that emits nothing stays dark |
 | `transmission` | 0..1 | dielectric transmission (`KHR_materials_transmission`); raster / RT blend the surface see-through, RT / PT / GI refract it (S2b) |
 | `ior` | float | 1.0..3.0 (`KHR_materials_ior`) |
 | `alpha` | 0..1 | opacity |
@@ -428,7 +428,12 @@ get a reflection per frame).
   so a mirror reflects what the ray tracer sees, including other mirrors.
 * A quad / ortho view, a camera feed and `RenderToImage` (lobby thumbnails) show the tint only, since they would need
   their own reflection render.
-* Zero cost without a mirror material: no textures are created, no extra scene render runs, and the frame is identical.
+* **Flat glass** (raster, #31): a material with transmission > 0 whose triangles are coplanar (the same 1 % test; curved
+  glass is skipped silently) is a candidate for the same two slots. Its reflection is weighted by the interface Fresnel
+  instead of a tint, and a glass plane ranks at a quarter of a mirror of the same on-screen size, so a mirror keeps its
+  slot. RT / PT / GI reflect glass through their own paths (unchanged).
+* Zero cost without a mirror or flat glass material: no textures are created, no extra scene render runs, and the frame
+  is identical.
   Mirror materials are excluded from the shadow-map casters by default in `mirror_room` (`"castShadow": false`).
 
 ## `environment`
