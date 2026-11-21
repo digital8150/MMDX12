@@ -30,8 +30,10 @@ uint LightClusterIndex(float3 vp, out bool beyondGrid) {
         beyondGrid = true;
         return 0u;
     }
-    // the tile from the unjittered projection of the fragment's own position (the cull's AABB has a jitter margin)
-    const float4 clip = mul(float4(vp, 1.0), gViewProjNoJitter);
+    // the tile from the projection of the fragment's own view-space position. `vp` is already in view space, so it
+    // takes gProj, not a view-projection matrix (that applied the view twice: fragments read another tile's list and
+    // lost lights in hard-edged patches). gProj carries the sub-pixel TAA jitter, which the cull's AABB margin absorbs.
+    const float4 clip = mul(float4(vp, 1.0), gProj);
     const float2 ndc = clip.w > 1e-6 ? clip.xy / clip.w : float2(0.0, 0.0);
     const float2 uv = float2(ndc.x * 0.5 + 0.5, 0.5 - ndc.y * 0.5);
     const uint tx = min((uint)(saturate(uv.x) * (float)tilesX), tilesX - 1u);

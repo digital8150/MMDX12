@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <optional>
 
 namespace mmdx {
 
@@ -20,6 +21,27 @@ DirectX::XMFLOAT3 EncodeSrgb(const DirectX::XMFLOAT3& c) {
 
 bool SlotHasTexture(const PbrSlot& slot) {
     return slot.tex.kind != PbrTexKind::None && slot.from != 0;
+}
+
+float DecodeSrgb(float encoded) {
+    encoded = std::clamp(encoded, 0.0f, 1.0f);
+    return encoded <= 0.04045f ? encoded / 12.92f : std::pow((encoded + 0.055f) / 1.055f, 2.4f);
+}
+
+// The record's own emission as a linear colour, the way PbrEmissive reads it: the emissive map's linear factor
+// (applyScale 1; a map without a factor = 1), or the constant (linear when the record is HDR, else sRGB-encoded).
+// w = 0 when the record does not emit.
+DirectX::XMFLOAT4 RecordEmissiveLinear(const PbrMaterial& m) {
+    if (!m.emissiveEnable) return {0.0f, 0.0f, 0.0f, 0.0f};
+    const PbrSlot& em = m.slots[(int)PbrSlotId::Emissive];
+    if (SlotHasTexture(em)) {
+        if (em.applyScale == 1 && em.hasValue)
+            return {std::max(0.0f, em.value[0]), std::max(0.0f, em.value[1]), std::max(0.0f, em.value[2]), 1.0f};
+        return {1.0f, 1.0f, 1.0f, 1.0f};
+    }
+    if (m.ext.emissiveStrength > 1.0f)
+        return {std::max(0.0f, em.value[0]), std::max(0.0f, em.value[1]), std::max(0.0f, em.value[2]), 1.0f};
+    return {DecodeSrgb(em.value[0]), DecodeSrgb(em.value[1]), DecodeSrgb(em.value[2]), 1.0f};
 }
 
 // Writes one assignment into a rule's field (the evaluator already checked that the param type fits the target).
@@ -121,36 +143,53 @@ void ApplyRuleToRecord(const StageMaterialRule& rule, PbrMaterial& m, PmxMateria
         metal.hasValue = true;
         metal.value[0] = std::clamp(*rule.metallic, 0.0f, 1.0f);
     }
-    if (rule.emissive || rule.emissiveStrength) {
-        DirectX::XMFLOAT3 e{0.0f, 0.0f, 0.0f};
-        if (rule.emissive) e = *rule.emissive;
+    // The colour the rule emits: its own colour, or (a rule with only a strength) the material's own emission, so a
+    // strength-only rule scales what the material already emits. A material that emits nothing stays dark then.
+    std::optional<DirectX::XMFLOAT3> base;
+    PbrSlot& emSlot = m.slots[(int)PbrSlotId::Emissive];
+    if (!rule.emissive && rule.emissiveStrength && m.ext.emissiveOwn.w > 0.0f && SlotHasTexture(emSlot) &&
+        (emSlot.applyScale == 2 || emSlot.applyScale == 3)) {
+        // An exponent map (map ^ value) cannot be written as a colour factor: keep the exponent and scale the result
+        // (applyScale 3, the strength rides in the slot's scale).
+        const float strength = std::max(0.0f, *rule.emissiveStrength);
+        emSlot.applyScale = 3;
+        emSlot.hasScale = true;
+        emSlot.scale = strength;
+        m.emissiveEnable = strength > 0.0f;
+        m.ext.emissiveStrength = strength;   // > 1 marks the record HDR (GpuModel)
+    } else if (rule.emissive) base = *rule.emissive;
+    else if (rule.emissiveStrength && m.ext.emissiveOwn.w > 0.0f)
+        base = DirectX::XMFLOAT3{m.ext.emissiveOwn.x, m.ext.emissiveOwn.y, m.ext.emissiveOwn.z};
+    if (base) {
         const float strength = rule.emissiveStrength ? std::max(0.0f, *rule.emissiveStrength) : 1.0f;
-        // the emitted colour already includes the strength: a rule that only raises the strength of an existing
-        // emissive keeps that colour, a rule that sets the colour scales it
-        const bool on = e.x > 0.0f || e.y > 0.0f || e.z > 0.0f;
-        m.emissiveEnable = on;
-        m.ext.emissiveStrength = strength;   // > 1 marks the record HDR (GpuModel), so a strong panel is not clamped
+        const DirectX::XMFLOAT3 e{base->x * strength, base->y * strength, base->z * strength};
+        const float peak = std::max(e.x, std::max(e.y, e.z));
+        m.emissiveEnable = peak > 0.0f;
+        // > 1 marks the record HDR (GpuModel), so a strong panel is not clamped: a strength above 1, or a colour that
+        // is already above 1 (an imported KHR_materials_emissive_strength emitter scaled by a strength-only rule)
+        const bool hdr = strength > 1.0f || peak > 1.0f;
+        m.ext.emissiveStrength = hdr ? std::max(strength, peak) : strength;
         PbrSlot& em = m.slots[(int)PbrSlotId::Emissive];
         if (SlotHasTexture(em)) {
             em.applyScale = 1;   // linear factor on the decoded map
             em.hasValue = true;
-            em.value[0] = e.x * strength;
-            em.value[1] = e.y * strength;
-            em.value[2] = e.z * strength;
+            em.value[0] = e.x;
+            em.value[1] = e.y;
+            em.value[2] = e.z;
         } else {
             em.from = 0;
             em.applyScale = 0;
             em.hasValue = true;
-            // An HDR emissive (strength > 1) is read as a linear colour by PbrEmissive; the plain case keeps the sRGB
-            // constant every other record uses.
-            if (strength > 1.0f) {
-                em.value[0] = e.x * strength;
-                em.value[1] = e.y * strength;
-                em.value[2] = e.z * strength;
+            // An HDR emissive is read as a linear colour by PbrEmissive; the plain case keeps the sRGB constant every
+            // other record uses.
+            if (hdr) {
+                em.value[0] = e.x;
+                em.value[1] = e.y;
+                em.value[2] = e.z;
             } else {
-                em.value[0] = EncodeSrgb(e.x * strength);
-                em.value[1] = EncodeSrgb(e.y * strength);
-                em.value[2] = EncodeSrgb(e.z * strength);
+                em.value[0] = EncodeSrgb(e.x);
+                em.value[1] = EncodeSrgb(e.y);
+                em.value[2] = EncodeSrgb(e.z);
             }
         }
     }
@@ -237,6 +276,10 @@ void ApplyStageMaterialRules(const std::vector<StageMaterialRule>& rules, const 
 
     int records = pbr.materialsWithRecord;
     for (size_t i = 0; i < pmx.materials.size(); ++i) {
+        // every record keeps its own emission: a binding may give a material a strength later, at run time. Captured
+        // once, so applying rules again to the same record scales the original, not the previous result.
+        if (i < pbr.materials.size() && pbr.materials[i].valid && !(pbr.materials[i].ext.emissiveOwn.w > 0.0f))
+            pbr.materials[i].ext.emissiveOwn = RecordEmissiveLinear(pbr.materials[i]);
         const StageMaterialRule v = StageEffectiveMaterialValues(rules, binding, i);
         const bool matched = v.baseColor || v.roughness || v.metallic || v.emissive || v.emissiveStrength ||
                              v.transmission || v.ior || v.alpha || v.mirror || v.screen || v.castShadow ||

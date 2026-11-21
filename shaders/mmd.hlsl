@@ -765,10 +765,10 @@ PSOut MmdShadePbr(VSOut i, bool front, GpuPbrMaterial m, float3 n0, float4 tex, 
     color += PbrEmissive(m, uv);
     // S2b mesh dielectric, raster / RT camera view: no screen-space refraction in this milestone. The see-through is
     // physically flavoured instead of S2a's flat 0.85: alpha = 1 - transmission * (1 - Fresnel(N.V, ior)), what passes
-    // through is tinted by the base colour (glTF), and the reflectivity output is the interface Fresnel, so SSR / RT
-    // reflections show on the glass. Reflectivity always carries at least the S2a value (smooth dielectrics mirror).
-    // On the RayTraced path the reflection is traced in this shader (see GlassReflection), because the alpha-blended
-    // normal target dilutes the Fresnel tag below the reflection pass's gate.
+    // through is tinted by the base colour (glTF). The alpha-blended normal target dilutes the Fresnel reflectivity
+    // tag below the reflection passes' gate (about 0.002 head-on), so the reflection is added in this shader instead:
+    // traced on the RayTraced path (see GlassReflection), the planar reflection of flat glass on raster (#31). Curved
+    // raster glass keeps the pre-blurred sky only (SSR reaches it at grazing angles, where the Fresnel is large).
     const float transp = PbrTransmissionAt(m, uv);
     if (transp > 0.0) {
         const float nv = saturate(dot(n, V));
@@ -782,10 +782,37 @@ PSOut MmdShadePbr(VSOut i, bool front, GpuPbrMaterial m, float3 n0, float4 tex, 
         const bool traced = gAutoLumParams.y > 0.5 && glassGloss > 0.0;
         if (traced) color -= envSpec * glassGloss;
 #endif
+#ifndef RT_SHADOWS
+        // #31 raster: a flat glass material gets the frame's planar reflection (GpuModel fits a plane for it, S10's
+        // mirror render draws the reflected scene). The alpha-blended normal target dilutes the Fresnel tag below the
+        // SSR gate, so the reflection is added here exactly like the RT branch below: fres / coverage x radiance puts
+        // the Fresnel share on screen, it replaces the sky the environment specular added, and SSR adds nothing
+        // (tag 0). Glass without a slot this frame (curved, off the two slots, quad / ortho views) keeps the old look.
+        int glassSlot = glassGloss > 0.0 ? MirrorSlotOf(i.worldPos, n) : -1;
+        if (glassSlot >= 0 && MirrorSrv(glassSlot) >= 0) {
+            // a mirror falls back to its tint where the reflected view does not reach; glass keeps the sky instead
+            const float4 mc = mul(float4(i.worldPos, 1.0), gMirrorViewProj[glassSlot]);
+            const float2 muv = mc.xy / max(mc.w, 1e-6) * float2(0.5, -0.5) + 0.5;
+            if (mc.w <= 0.0 || any(muv < 0.0) || any(muv > 1.0)) glassSlot = -1;
+        } else {
+            glassSlot = -1;
+        }
+        if (glassSlot >= 0) color -= envSpec * glassGloss;
+#endif
         // the blended layer keeps the refracted (tinted) light rather than the shaded opaque surface
         color = lerp(color, color * pbrAlbedo, transp * (1.0 - fres));
         reflectivity = max(reflectivity, fres);
         alpha *= coverage;
+#ifndef RT_SHADOWS
+        if (glassSlot >= 0) {
+            // the record's own roughness (rough above has a 0.03 floor, which kept smooth glass off the one-tap path)
+            const float glassRough = sqrt(saturate(PbrSlotRoughness(m.slots[PBR_SLOT_SMOOTHNESS], uv)));
+            const float3 refl = MirrorReflection(MirrorSrv(glassSlot), glassSlot, i.worldPos, float3(1, 1, 1),
+                                                 glassRough);
+            color = max(color + refl * (glassGloss * fres / max(coverage, 1e-3)), 0.0);
+            reflectivity = 0.0;
+        }
+#endif
 #ifdef RT_SHADOWS
         if (traced) {
             color += GlassReflection(i.worldPos, n, n0, V) * (glassGloss * fres / max(coverage, 1e-3));

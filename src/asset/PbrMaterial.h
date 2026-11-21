@@ -45,7 +45,7 @@ struct PbrSlot {
     int type = 0;          // Ray <PREFIX>_MAP_TYPE
     int swizzle = 0;       // 0 R, 1 G, 2 B, 3 A
     int uvFlip = 0;        // 0 none, 1 X, 2 Y, 3 both; NORMAL 4 = flip the shading normal X
-    int applyScale = 0;    // 0 none, 1 map * value, 2 map ^ value
+    int applyScale = 0;    // 0 none, 1 map * value, 2 map ^ value, 3 (map ^ value) * scale (#30)
     int colorFlip = 0;     // CUSTOM_A/B: 1 inverts the value
     bool hasValue = false; // the slot's const value was declared
     float value[3] = {0, 0, 0};
@@ -91,6 +91,10 @@ struct PbrMaterial {
         float sheenRoughness = 0.0f;
         float uvRotation = 0.0f;        // KHR_texture_transform rotation in radians (one per material)
         float emissiveStrength = 1.0f;  // KHR_materials_emissive_strength (HDR multiplier on the emissive slot)
+        // The material's own emission before an MMDX stage rule changed it (linear: the emissive map's factor, or the
+        // constant colour), filled by ApplyStageMaterialRules. A rule / runtime binding that sets only
+        // emissiveStrength scales this. w = 1 when the material emitted on its own, 0 otherwise (nothing to scale).
+        DirectX::XMFLOAT4 emissiveOwn{0, 0, 0, 0};
         // S10 planar mirror (an MMDX stage rule's "mirror"): the material is a perfect specular surface in every
         // render path. Raster samples the frame's planar reflection, RT / PT / offline GI reflect at the hit. The
         // base colour is the reflection tint and smoothness / roughness the blur.

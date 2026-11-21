@@ -540,6 +540,7 @@ bool GpuModel::Create(Dx12Context& ctx, UploadBatch& batch, const PmxModel& pmx,
     // PBR file map textures (R8 for single-channel slots, RGBA8 otherwise).
     pbrIndex_.assign(pmx.materials.size(), DescriptorHeap::kInvalid);
     pbrTransmission_.assign(pmx.materials.size(), 0.0f);
+    pbrEmissiveOwn_.assign(pmx.materials.size(), DirectX::XMFLOAT4{0, 0, 0, 0});
     pbrTextures_.assign(pbr.textures.size(), {});
     for (int32_t i : pbrFileUsed) {
         const int channel = i < (int)pbr.textureChannels.size() ? pbr.textureChannels[(size_t)i] : -1;
@@ -910,10 +911,18 @@ bool GpuModel::Create(Dx12Context& ctx, UploadBatch& batch, const PmxModel& pmx,
     // material is an authored flat surface, so the area-weighted centroid and normal of its triangles are the plane;
     // a material whose vertices do not stay within 1 % of its own extent of that plane (a curved or scattered group)
     // gets valid = false and shows its tint only.
+    // #31: a flat stage material with a PBR record gets a glass plane too, so raster can show a glass reflection.
+    // Its transmission decides at frame time (Renderer::UpdateMirrors, MirrorPlaneActive), because a stage binding
+    // may turn a material into glass, or glass opaque, at run time. Stage parts only: a skinned model's rest-pose
+    // plane would not follow its bones (a glTF character's lens, a studio prop).
     for (size_t mIdx = 0; mIdx < pmx.materials.size() && mIdx < consts.size(); ++mIdx) {
-        if ((consts[mIdx].flags & MatFlag_Mirror) == 0) continue;
+        const bool mirror = (consts[mIdx].flags & MatFlag_Mirror) != 0;
+        const bool glass = !mirror && role_ == ModelRole::Stage && mIdx < pbr.materials.size() &&
+                           pbr.materials[mIdx].valid;
+        if (!mirror && !glass) continue;
         MirrorPlane plane;
         plane.material = mIdx;
+        plane.glass = glass;
         const uint32_t first = materials_[mIdx].indexStart;
         const uint32_t count = std::min(materials_[mIdx].indexCount, (uint32_t)(indices.size() - first));
         double cx = 0, cy = 0, cz = 0, nx = 0, ny = 0, nz = 0, area = 0;
@@ -969,9 +978,11 @@ bool GpuModel::Create(Dx12Context& ctx, UploadBatch& batch, const PmxModel& pmx,
             }
             const double extent = std::max(std::max(hi[0] - lo[0], hi[1] - lo[1]), hi[2] - lo[2]);
             plane.valid = maxDist <= std::max(extent * 0.01, 1e-4);
-            if (!plane.valid)
+            if (!plane.valid && mirror)
                 LOG_INFO("model '%s': mirror material %zu is not planar, showing its tint only", name_.c_str(), mIdx);
         }
+        // curved glass (bottles, lenses) keeps its old look: no plane, no reflection render for it
+        if (glass && !plane.valid) continue;
         mirrorPlanes_.push_back(plane);
     }
 
@@ -1065,6 +1076,7 @@ bool GpuModel::Create(Dx12Context& ctx, UploadBatch& batch, const PmxModel& pmx,
             }
             pbrIndex_[mi] = (uint32_t)records.size();
             pbrTransmission_[mi] = transmission;   // S2b: RtGeom_Transmissive (the ray paths refract through it)
+            pbrEmissiveOwn_[mi] = src.ext.emissiveOwn;   // #30: what a strength-only override scales
             records.push_back(r);
         }
         pbrBuf_ = batch.CreateBuffer(records.data(), records.size() * sizeof(GpuPbrMaterial),
@@ -1475,26 +1487,44 @@ void GpuModel::SetPbrOverrides(uint64_t frame, const std::vector<PbrOverride>& l
             s.applyScale = 0;
             s.value.x = std::clamp(*o.metallic, 0.0f, 1.0f);
         }
-        if (o.emissive) {
+        // #30: a strength without a colour scales the material's own emission (none: nothing to scale)
+        std::optional<DirectX::XMFLOAT3> emissive = o.emissive;
+        GpuPbrSlot& emSlot = m.slots[(int)PbrSlotId::Emissive];
+        if (!emissive && o.emissiveStrength && o.material < pbrEmissiveOwn_.size() &&
+            pbrEmissiveOwn_[o.material].w > 0.0f && emSlot.textureSrv >= 0 &&
+            (emSlot.applyScale == 2 || emSlot.applyScale == 3)) {
+            // an exponent map (map ^ value): keep the exponent, scale the result (applyScale 3, value.w = strength)
+            const float k = std::max(0.0f, *o.emissiveStrength);
+            emSlot.applyScale = 3;
+            emSlot.value.w = k;
+            m.flags = k > 0.0f ? (m.flags | 4u) : (m.flags & ~4u);   // GpuPbrFlags bit 2: emissive
+            m.flags = k > 1.0f ? (m.flags | 8u) : (m.flags & ~8u);   // bit 3: HDR (not clamped)
+        } else if (!emissive && o.emissiveStrength && o.material < pbrEmissiveOwn_.size() &&
+                   pbrEmissiveOwn_[o.material].w > 0.0f) {
+            const DirectX::XMFLOAT4& own = pbrEmissiveOwn_[o.material];
+            const float k = std::max(0.0f, *o.emissiveStrength);
+            emissive = DirectX::XMFLOAT3{own.x * k, own.y * k, own.z * k};
+        }
+        if (emissive) {
             GpuPbrSlot& s = m.slots[(int)PbrSlotId::Emissive];
-            const bool hdr = o.emissive->x > 1.0f || o.emissive->y > 1.0f || o.emissive->z > 1.0f;
+            const bool hdr = emissive->x > 1.0f || emissive->y > 1.0f || emissive->z > 1.0f;
             if (s.textureSrv < 0 && !hdr) {
                 s.applyScale = 0;   // no map: the sRGB-encoded constant
-                s.value.x = encode(o.emissive->x);
-                s.value.y = encode(o.emissive->y);
-                s.value.z = encode(o.emissive->z);
+                s.value.x = encode(emissive->x);
+                s.value.y = encode(emissive->y);
+                s.value.z = encode(emissive->z);
             } else if (s.textureSrv < 0) {
                 s.applyScale = 0;   // no map, HDR colour: PbrEmissive reads a linear value
-                s.value.x = std::max(0.0f, o.emissive->x);
-                s.value.y = std::max(0.0f, o.emissive->y);
-                s.value.z = std::max(0.0f, o.emissive->z);
+                s.value.x = std::max(0.0f, emissive->x);
+                s.value.y = std::max(0.0f, emissive->y);
+                s.value.z = std::max(0.0f, emissive->z);
             } else {
                 s.applyScale = 1;   // a map: the LINEAR colour multiplies the decoded map
-                s.value.x = std::max(0.0f, o.emissive->x);
-                s.value.y = std::max(0.0f, o.emissive->y);
-                s.value.z = std::max(0.0f, o.emissive->z);
+                s.value.x = std::max(0.0f, emissive->x);
+                s.value.y = std::max(0.0f, emissive->y);
+                s.value.z = std::max(0.0f, emissive->z);
             }
-            const bool on = o.emissive->x > 0.0f || o.emissive->y > 0.0f || o.emissive->z > 0.0f;
+            const bool on = emissive->x > 0.0f || emissive->y > 0.0f || emissive->z > 0.0f;
             m.flags = on ? (m.flags | 4u) : (m.flags & ~4u);   // GpuPbrFlags bit 2: emissive
             m.flags = (on && hdr) ? (m.flags | 8u) : (m.flags & ~8u);   // bit 3: HDR (not clamped)
         }
@@ -1644,6 +1674,11 @@ float GpuModel::EmitEstimate(size_t material) const {
         if ((r.flags & 4u) != 0) {
             const GpuPbrSlot& s = r.slots[(int)PbrSlotId::Emissive];
             DirectX::XMFLOAT3 v = {std::max(s.value.x, 0.0f), std::max(s.value.y, 0.0f), std::max(s.value.z, 0.0f)};
+            // an exponent map's value is the exponent, not a colour: the map itself (x the #30 strength for 3)
+            if (s.textureSrv >= 0 && (s.applyScale == 2 || s.applyScale == 3)) {
+                const float k = s.applyScale == 3 ? std::max(s.value.w, 0.0f) : 1.0f;
+                v = {k, k, k};
+            }
             if (s.textureSrv < 0 && (r.flags & 8u) == 0) {
                 const auto srgb = [](float x) {
                     x = std::clamp(x, 0.0f, 1.0f);
@@ -1764,6 +1799,7 @@ void GpuModel::Destroy() {
     pbrTextures_.clear();
     pbrIndex_.clear();
     pbrTransmission_.clear();
+    pbrEmissiveOwn_.clear();
     pbrBuf_.Reset();
     rt_ = RtResources{};
     materialConsts_.clear();

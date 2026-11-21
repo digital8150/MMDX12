@@ -1,6 +1,6 @@
 // The radiance of one reflection hit, shared by rtreflect.hlsl (compute) and mmd.hlsl's RT glass branch.
 // Requires rt_common.hlsli and pbr_common.hlsli before it. The includer defines REFLECT_LIGHTS (the light buffer),
-// REFLECT_LIGHT_T (its element type) and optionally REFLECT_MAX_LIGHTS (default 64) and
+// REFLECT_LIGHT_T (its element type) and optionally REFLECT_MAX_LIGHTS (default 256 = Renderer::kMaxPunctualLights) and
 // REFLECT_HDR_EMISSIVE (a hit's PBR emissive is not clamped to 1).
 #ifndef REFLECT_HIT_HLSLI
 #define REFLECT_HIT_HLSLI
@@ -9,11 +9,12 @@
 #error "reflect_hit.hlsli: define REFLECT_LIGHTS (and REFLECT_LIGHT_T) before including"
 #endif
 #ifndef REFLECT_MAX_LIGHTS
-#define REFLECT_MAX_LIGHTS 64u
+#define REFLECT_MAX_LIGHTS 256u
 #endif
 
 // Punctual-light irradiance at a reflection hit (colour * shadow * attenuation * diffuse term), summed over the
-// frame's lights. The caller multiplies by the hit's linear albedo.
+// frame's lights (every light: a light out of range or outside its cone is skipped before any shadow ray). The
+// caller multiplies by the hit's linear albedo.
 float3 ReflectPunctualLights(const RtSurface s) {
     float3 sum = 0;
     const uint n = min((uint)gNumLights, REFLECT_MAX_LIGHTS);
@@ -40,7 +41,10 @@ float3 ReflectPunctualLights(const RtSurface s) {
 
         float diff = smoothstep(-0.05, 0.25, dot(s.normal, ld));
         float3 shadowFactor = 1.0;
-        if (l.shadowType > 0.5) {
+        // the direct path's shadow condition (mmd.hlsl SpotShadow / PointShadowRt): a light without a shadow slice
+        // lights its surfaces unshadowed there, so its reflection must not trace one either
+        const bool shadowed = l.shadowType > 0.5 && (l.cosOuter > -1.0 ? l.shadowSlice >= 0.0 : l.pointShadowSlice >= 0.0);
+        if (shadowed) {
             const float rawVis = Luminance(saturate(TraceShadowRayTinted(OffsetRayOrigin(s.pos, s.faceNormal), ld,
                                                                         max(dist - 0.05, 0.0), RT_MASK_CHARACTER)));
             shadowFactor = ShadowTransmission(rawVis, l.shadowDensity, l.shadowColor);

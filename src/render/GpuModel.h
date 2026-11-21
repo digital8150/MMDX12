@@ -40,6 +40,9 @@ struct PbrOverride {
     std::optional<float> roughness;
     std::optional<float> metallic;
     std::optional<DirectX::XMFLOAT3> emissive;
+    // #30: a stage rule / binding that sets only the strength (no `emissive`): the material's own emission
+    // (PbrMaterial::ext.emissiveOwn) times this. Ignored when `emissive` is set (that colour already carries it).
+    std::optional<float> emissiveStrength;
     std::optional<float> alpha;
     std::optional<float> transmission;
     std::optional<float> ior;
@@ -57,6 +60,10 @@ struct MirrorPlane {
     DirectX::XMFLOAT3 normal{0, 1, 0};    // unit, model space
     float area = 0.0f;                    // rest-pose triangle area (model space): ranks the frame's two slots
     bool valid = false;
+    // #31: a flat stage material with a PBR record, not a mirror: while it is transmissive (GpuModel::
+    // MirrorPlaneActive) raster draws its planar reflection weighted by the interface Fresnel (mmd.hlsl glass
+    // branch). Only planar materials get an entry; a mirror wins a slot over glass.
+    bool glass = false;
 };
 
 // S8b raster / RT screen lights: the rectangle an S5 screen material's rest-pose triangles fit into (model space),
@@ -285,6 +292,11 @@ public:
     // triangles (model space; the caller applies the model's root transform). A material whose triangles are not
     // coplanar within 1 % of the material's extent is listed with valid = false (it shows its tint only).
     const std::vector<MirrorPlane>& MirrorPlanes() const { return mirrorPlanes_; }
+    // #31: a mirror plane always takes part; a glass plane only while its material is transmissive (overrides
+    // included), so a binding that changes the transmission adds or removes its reflection render.
+    bool MirrorPlaneActive(const MirrorPlane& p) const {
+        return p.valid && (!p.glass || PbrTransmission(p.material) > 0.0f);
+    }
     // S8b: the fitted rectangles of the model's materials (stage parts only; model space - the caller applies the root
     // transform). A screen claims a material at frame time (StageScreens::SetMaterialScreen sets MatFlag_Screen), so the
     // renderer filters this list by the material's current flags (Renderer::UpdateScreenLights).
@@ -410,6 +422,7 @@ private:
     // Per material transmission factor (0 = opaque / no record): the base records, kept current by SetPbrOverrides
     // (a stage `transmission` target must move the ray paths' RtGeom_Transmissive too).
     std::vector<float> pbrTransmission_;
+    std::vector<DirectX::XMFLOAT4> pbrEmissiveOwn_;   // #30: per material, PbrMaterial::ext.emissiveOwn (w 0 = none)
     bool hasPbrRecords_ = false;
     // Base PBR records (the ones Create built) and the 3-entry UPLOAD-heap ring of SetPbrOverrides. Lazily created.
     std::vector<GpuPbrMaterial> pbrRecords_;

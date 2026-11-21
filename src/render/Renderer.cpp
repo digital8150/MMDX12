@@ -948,11 +948,15 @@ void Renderer::UpdateMirrors(ID3D12GraphicsCommandList* cmd, const FrameView& vi
     // Zero cost without mirror materials: no model has a fitted mirror plane, so the constants keep what
     // FillSceneConstants left (zero: no mirror, clip off) and the frame is byte for byte the one without the feature.
     bool anyMirror = false;
-    for (const GpuModel* model : view.models)
-        if (model && !model->MirrorPlanes().empty()) {
-            anyMirror = true;
-            break;
-        }
+    for (const GpuModel* model : view.models) {
+        if (!model) continue;
+        for (const MirrorPlane& p : model->MirrorPlanes())
+            if (model->MirrorPlaneActive(p)) {
+                anyMirror = true;
+                break;
+            }
+        if (anyMirror) break;
+    }
     if (!anyMirror) return;
     sc.mirrorParams = {0.0f, -1.0f, -1.0f, 0.0f};
     sc.clipPlane = {0.0f, 0.0f, 0.0f, 0.0f};
@@ -992,13 +996,18 @@ void Renderer::UpdateMirrors(ID3D12GraphicsCommandList* cmd, const FrameView& vi
         const XMMATRIX normalMat = XMMatrixTranspose(XMMatrixInverse(nullptr, root));
         const float scale = std::cbrt(std::fabs(det));
         for (const MirrorPlane& p : model->MirrorPlanes()) {
-            if (!p.valid || !(p.area > 0.0f)) continue;
+            if (!model->MirrorPlaneActive(p) || !(p.area > 0.0f)) continue;
             const XMVECTOR c = XMVector3TransformCoord(XMLoadFloat3(&p.centroid), root);
             // the ordinary normal transform (inverse transpose), which is also what the scene shaders use, so a
             // model root with a reflection in it keeps the side the surface is actually drawn from
-            const XMVECTOR n = XMVector3Normalize(XMVector3TransformNormal(XMLoadFloat3(&p.normal), normalMat));
-            // the reflection is visible from the side the eye is on
-            if (XMVectorGetX(XMVector3Dot(n, XMVectorSubtract(eye, c))) <= 0.0f) continue;
+            XMVECTOR n = XMVector3Normalize(XMVector3TransformNormal(XMLoadFloat3(&p.normal), normalMat));
+            // the reflection is visible from the side the eye is on. A mirror has one reflecting side; glass (#31)
+            // reflects on both, so its plane turns toward the eye (the scene PS matches the slot by the pixel's
+            // viewer-facing normal).
+            if (XMVectorGetX(XMVector3Dot(n, XMVectorSubtract(eye, c))) <= 0.0f) {
+                if (!p.glass) continue;
+                n = XMVectorNegate(n);
+            }
             // ... and the plane has to reach into the view frustum: test the sphere (centroid, sqrt(area)) against the
             // six frustum planes, so a wall whose centre is off screen but which fills the view is kept.
             const float radius = std::sqrt(p.area) * scale;
@@ -1018,7 +1027,8 @@ void Renderer::UpdateMirrors(ID3D12GraphicsCommandList* cmd, const FrameView& vi
             // projected size: world area x foreshortening / distance^2
             const float dist = std::max(XMVectorGetX(XMVector3Length(XMVectorSubtract(c, eye))), 1.0f);
             const float face = std::fabs(XMVectorGetX(XMVector3Dot(n, XMVector3Normalize(XMVectorSubtract(eye, c)))));
-            const float score = p.area * scale * scale * std::max(face, 0.05f) / (dist * dist);
+            // #31: a glass plane reflects only its Fresnel share, so a mirror of similar size wins the slot
+            const float score = p.area * scale * scale * std::max(face, 0.05f) / (dist * dist) * (p.glass ? 0.25f : 1.0f);
             if (candCount < kMaxMirrorPlanes) {
                 cand[candCount].plane = {XMVectorGetX(n), XMVectorGetY(n), XMVectorGetZ(n),
                                          -XMVectorGetX(XMVector3Dot(n, c))};
