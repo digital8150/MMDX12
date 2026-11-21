@@ -611,6 +611,7 @@ private:
     bool studioPropDragging_ = false;                        // a prop placement field gesture is in progress ...
     bool studioPropDragKey_ = false;                         // ... editing the accessory key at the playhead
     uint32_t studioPropDragModel_ = 0;                       // ... of this prop (uid)
+    int studioPropDragFrame_ = 0;                            // ... at this frame (key path: the key it writes)
     studio::PropAttach studioPropDragBefore_;                // ... that started from this attach
     studio::PropAttach studioPropDragValue_;                 // ... and holds this value so far (key path: written at the end)
     void DrawStudioFrameMask(float x0, float y0, float x1, float y1);  // dims outside the render frame + guides
@@ -691,6 +692,8 @@ private:
     // --- accessory (prop) key track (UiStudioAccessory.cpp)
     studio::AccessoryKf StudioNewAccessoryKey(const studio::StudioModel& m, int frame) const;  // current placement as a key
     void StudioSetAccessoryAtPlayhead(const studio::AccessoryKf& k, const char* undoName);      // upsert (undoable)
+    // a placement as the accessory key of prop `uid` at `frame` (undoable; any prop, not only the selected one)
+    void StudioCommitPropKey(uint32_t uid, int frame, const studio::PropAttach& a, const char* undoName);
     bool DrawStudioAccessoryKeyFields(float w, int frame);  // inspector fields of the accessory key at `frame`
     void DrawStudioAccessorySection(float w);               // prop inspector: accessory key summary + key button
     studio::AutoFocus studioAutoFocus_;
