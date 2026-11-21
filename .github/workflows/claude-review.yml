@@ -11,11 +11,18 @@ name: Claude review
 on:
   pull_request_target:
     types: [opened, reopened, ready_for_review, labeled]
+  # Manual run by someone with write access: reviews the given pull request with this branch's reviewer
+  # (also how a change to the reviewer is tested before it merges).
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: Pull request number
+        required: true
 
 permissions: {}
 
 concurrency:
-  group: claude-review-${{ github.event.pull_request.number }}
+  group: claude-review-${{ github.event.pull_request.number || inputs.pr_number }}
   cancel-in-progress: true
 
 jobs:
@@ -33,16 +40,28 @@ jobs:
       - name: Check out the reviewer (base branch)
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
-          ref: ${{ github.event.pull_request.base.sha }}
+          # The commit this workflow runs from (pull_request_target: the base branch head, not the pull request's
+          # possibly older base; workflow_dispatch: the chosen branch), so workflow and script always match.
+          ref: ${{ github.sha }}
           path: base
           persist-credentials: false
           sparse-checkout: .github/claude-review
 
+      - name: Resolve the pull request
+        id: pr
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number || inputs.pr_number }}
+        run: |
+          [[ "$PR_NUMBER" =~ ^[0-9]+$ ]] || { echo "bad pull request number"; exit 1; }
+          gh api "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER" \
+            --jq '"head_repo=\(.head.repo.full_name)", "head_sha=\(.head.sha)", "number=\(.number)"' >> "$GITHUB_OUTPUT"
+
       - name: Check out the pull request as data (never executed)
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
-          repository: ${{ github.event.pull_request.head.repo.full_name }}
-          ref: ${{ github.event.pull_request.head.sha }}
+          repository: ${{ steps.pr.outputs.head_repo }}
+          ref: ${{ steps.pr.outputs.head_sha }}
           path: head
           persist-credentials: false
           lfs: false
@@ -63,6 +82,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           BASE_DIR: ${{ github.workspace }}/base
           HEAD_DIR: ${{ github.workspace }}/head
+          PR_NUMBER: ${{ steps.pr.outputs.number }}
         run: |
           cd "$RUNNER_TEMP"
           "$RUNNER_TEMP/venv/bin/python" -I "$GITHUB_WORKSPACE/base/.github/claude-review/review.py"
