@@ -211,7 +211,8 @@ public:
     ComPtr<ID3D12Resource> CreateTextureCube(const std::array<ImageRGBA8, 6>& faces, const wchar_t* debugName = nullptr);
     ComPtr<ID3D12Resource> CreateTextureCube(const CompressedImage& cube, DXGI_FORMAT format,
                                              const wchar_t* debugName = nullptr);
-    // Closes, executes on ctx.Queue(), waits for completion, frees staging buffers.
+    // Closes, executes on ctx.Queue(), waits for completion, frees staging buffers and the batch's references to the
+    // resources it created.
     void Submit();
 
 private:
@@ -220,6 +221,11 @@ private:
     ComPtr<ID3D12GraphicsCommandList> list_;
     ComPtr<ID3D12Fence> fence_;
     std::vector<ComPtr<ID3D12Resource>> staging_;
+    // Every resource the batch created (the copies' destinations, the barriers' targets), held until Submit has waited
+    // for the GPU. A caller may drop one before Submit: GpuModel::Create failing half way (say on a texture D3D12
+    // cannot create) frees the buffers it already made, whose copies are recorded here. Without this reference the
+    // list then copies into freed memory: a GPU page fault and DEVICE_HUNG at Submit.
+    std::vector<ComPtr<ID3D12Resource>> created_;
     bool submitted_ = false;
 };
 

@@ -658,6 +658,7 @@ ComPtr<ID3D12Resource> UploadBatch::CreateBuffer(const void* data, size_t bytes,
                                                         D3D12_RESOURCE_STATE_COMMON, nullptr, IID_PPV_ARGS(&res)),
                  "CreateCommittedResource(buffer)"))
         return {};
+    created_.push_back(res);   // the list below writes it: alive until Submit, whatever the caller does
     if (debugName) res->SetName(debugName);
     if (data) {
         D3D12_HEAP_PROPERTIES upload{D3D12_HEAP_TYPE_UPLOAD};
@@ -711,6 +712,7 @@ ComPtr<ID3D12Resource> UploadBatch::CreateTextureTyped(const ImageRGBA8& image, 
                                                         IID_PPV_ARGS(&res)),
                  "CreateCommittedResource(texture)"))
         return {};
+    created_.push_back(res);
     if (debugName) res->SetName(debugName);
 
     std::vector<D3D12_PLACED_SUBRESOURCE_FOOTPRINT> footprints(mipCount);
@@ -771,6 +773,7 @@ ComPtr<ID3D12Resource> UploadBatch::CreateTextureChannel8(const ImageRGBA8& imag
                                                         D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(&res)),
                  "CreateCommittedResource(r8 texture)"))
         return {};
+    created_.push_back(res);
     if (debugName) res->SetName(debugName);
 
     std::vector<D3D12_PLACED_SUBRESOURCE_FOOTPRINT> footprints(mipCount);
@@ -829,6 +832,7 @@ ComPtr<ID3D12Resource> UploadBatch::CreateTextureRaw(const void* pixels, uint32_
                                                         IID_PPV_ARGS(&res)),
                  "CreateCommittedResource(texture)"))
         return {};
+    created_.push_back(res);
     if (debugName) res->SetName(debugName);
 
     D3D12_PLACED_SUBRESOURCE_FOOTPRINT footprint{};
@@ -884,6 +888,7 @@ ComPtr<ID3D12Resource> UploadBatch::CreateTextureCompressed(const CompressedImag
                                                         D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(&res)),
                  "CreateCommittedResource(bc texture)"))
         return {};
+    created_.push_back(res);
     if (debugName) res->SetName(debugName);
 
     const UINT subresources = mipCount * arraySize;
@@ -946,6 +951,7 @@ ComPtr<ID3D12Resource> UploadBatch::CreateTextureCube(const std::array<ImageRGBA
                                                         D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(&res)),
                  "CreateCommittedResource(cube texture)"))
         return {};
+    created_.push_back(res);
     if (debugName) res->SetName(debugName);
 
     std::vector<D3D12_PLACED_SUBRESOURCE_FOOTPRINT> footprints(6);
@@ -996,7 +1002,11 @@ ComPtr<ID3D12Resource> UploadBatch::CreateTextureCube(const CompressedImage& cub
 void UploadBatch::Submit() {
     if (submitted_) return;
     submitted_ = true;
-    if (!list_ || !fence_ || !ctx_.Queue()) return;
+    if (!list_ || !fence_ || !ctx_.Queue()) {
+        staging_.clear();
+        created_.clear();
+        return;
+    }
     list_->Close();
     ID3D12CommandList* lists[] = {list_.Get()};
     ctx_.Queue()->ExecuteCommandLists(1, lists);
@@ -1007,7 +1017,11 @@ void UploadBatch::Submit() {
         WaitForSingleObject(event, INFINITE);
         CloseHandle(event);
     }
+    // Without an event the copies may still be running: wait for them anyway, since the buffers they read and the
+    // resources they write are released below. A removed device reports UINT64_MAX, so this ends.
+    while (fence_->GetCompletedValue() < 1) Sleep(1);
     staging_.clear();
+    created_.clear();   // the copies are done: what the caller dropped meanwhile goes now
 }
 
 } // namespace mmdx
