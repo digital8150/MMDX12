@@ -53,6 +53,13 @@ void DecodeModelTextures(LoadedModelCpu& m, LoadProgress* progress, float fracBe
         img.hasAlpha = false;
         if ((size_t)index < m.compressedTextures.size()) m.compressedTextures[index] = CompressedImage{};
     };
+    // A file larger than a texture can be is uploaded at the size the decoder fitted it to (MMD's D3DX fits it too).
+    auto noteScaled = [&](int32_t index, const std::string& name) {
+        const ImageRGBA8& img = m.textures[index];
+        if (img.ScaledDown())
+            LOG_WARN("texture larger than %u px, scaled from %ux%u to %ux%u: %s (%s)", kMaxImageDimension,
+                     img.sourceWidth, img.sourceHeight, img.Width(), img.Height(), name.c_str(), label);
+    };
     std::for_each(std::execution::par, referenced.begin(), referenced.end(),
                   [&](int32_t index) {
                       if ((size_t)index < m.pmx->embeddedTextures.size() && !m.pmx->embeddedTextures[index].empty()) {
@@ -61,6 +68,7 @@ void DecodeModelTextures(LoadedModelCpu& m, LoadProgress* progress, float fracBe
                           if (!LoadImageWithCompressedFromMemory(bytes.data(), bytes.size(), m.textures[index],
                                                                  m.compressedTextures[index], &err))
                               LOG_WARN("embedded texture decode failed: %s (%s): %s", m.pmx->textures[index].c_str(), label, err.c_str());
+                          noteScaled(index, m.pmx->textures[index]);
                           forceOpaque(index);
                           int d = ++done;
                           if (progress && total > 0)
@@ -75,6 +83,7 @@ void DecodeModelTextures(LoadedModelCpu& m, LoadProgress* progress, float fracBe
                           std::string err;
                           if (!LoadImageWithCompressed(p, m.textures[index], m.compressedTextures[index], &err))
                               LOG_WARN("texture decode failed: %s: %s", PathToUtf8(p).c_str(), err.c_str());
+                          noteScaled(index, PathToUtf8(p));
                           forceOpaque(index);
                       }
                       int d = ++done;
